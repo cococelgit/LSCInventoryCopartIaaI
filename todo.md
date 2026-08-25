@@ -33,7 +33,7 @@
 - [x] Repetir una corrida controlada después de validar la nueva credencial antes de considerar estable el cron de 30 minutos.
 - [x] Corregir la API de lectura para no exigir Apibara al arrancar cuando la sincronización está desactivada.
 - [x] Verificar la revisión Azure corregida, el puente tRPC, las fotos dinámicas y los estados de frescura.
-- [ ] Guardar un nuevo checkpoint del UI conectado a Azure y registrar la versión publicada.
+- [x] Guardar un nuevo checkpoint del UI conectado a Azure y registrar la versión publicada: `84fa3973`.
 - [x] Activar y validar la revisión de API que lee snapshots persistidos en PostgreSQL.
 - [x] Verificar una respuesta de inventario con lotes y fotos reales tras la corrección de lectura.
 - [x] Confirmar el bridge tRPC y la ficha de detalle en el UI con datos vivos.
@@ -42,3 +42,5 @@
 - [ ] Mantener el alcance completo del feed y escalar el plan de Apibara cuando la cuota operativa lo requiera.
 - [x] Eliminar los fallbacks de catálogo local del UI y mostrar un estado explícito cuando Azure no responda.
 - [ ] Definir y validar una auditoría de uso del proveedor que no multiplique llamadas en cada ejecución del cron.
+- [x] Proteger los endpoints internos de validación, uso y sincronización con el token de servicio para impedir acceso o ejecuciones públicas.
+- [ ] Reintentar la publicación del UI tras el timeout de red del registro de imágenes y validar el despliegue resultante.
