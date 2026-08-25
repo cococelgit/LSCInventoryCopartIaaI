@@ -47,3 +47,8 @@
 - [x] Revisar la carpeta oficial de recursos de LSC y seleccionar logo, variantes y colores de marca aprobados.
 - [x] Sustituir la identidad visual provisional del Inventory UI por los activos oficiales de LSC.
 - [x] Validar y publicar la actualización visual de marca en el dominio del Inventory UI.
+- [x] Analizar la referencia de BidCars y definir una jerarquía de búsqueda adaptada a LSC sin copiar su identidad.
+- [x] Reemplazar el hero y la consola de evidencia por una barra de búsqueda compacta y filtros completos fijos a la izquierda.
+- [x] Rediseñar el listado derecho como resultados densos con foto real, datos clave, puja y enlace de ficha en nueva pestaña.
+- [x] Validar filtros, datos vivos y comportamiento responsive del buscador simplificado.
+- [ ] Publicar y verificar el rediseño del buscador en el dominio de LSC.
