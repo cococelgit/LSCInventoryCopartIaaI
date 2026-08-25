@@ -65,5 +65,5 @@
 - [x] Corregir el mapeo público del estado de título y conservar facility/estado en el contrato del UI.
 - [x] Agregar filtros activos de ubicación/facility y estado a la barra lateral.
 - [x] Ejecutar una sincronización controlada, validar los campos enriquecidos y publicar el buscador actualizado.
-- [ ] Guardar la versión verificable del UI con filtros de facility/estado y el contrato actualizado.
-- [ ] Validar el dominio publicado con facility/estado y al menos un campo enriquecido real.
+- [x] Guardar la versión verificable del UI con filtros de facility/estado y el contrato actualizado.
+- [x] Validar el dominio publicado con facility/estado y al menos un campo enriquecido real.
