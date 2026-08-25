@@ -77,10 +77,10 @@
 - [x] Registrar evidencia final de ambos filtros en producción y publicar el cierre de validación.
 - [x] Verificar mediante el endpoint protegido el plan, la cuota y los límites efectivos de Apibara tras el upgrade.
 - [x] Ajustar el alcance del job en función de la cuota confirmada y lanzar una sola sincronización controlada.
-- [ ] Validar lotes, frescura y campos persistidos en el buscador antes de declarar la ampliación operativa.
+- [x] Validar lotes, frescura y campos persistidos en el buscador: 487 elegibles; 483 con fotos, 474 con odómetro/daño, 487 con título y fecha.
 - [x] Adaptar el motor para procesar las 14 facilities Copart devueltas por Florida sin depender de una sola facility configurada.
 - [x] Desplegar el motor multi-facility con límites conservadores por corrida y ejecutar una única corrida controlada: 14 scopes, 280 lotes observados, 35 solicitudes y 0 fallos.
-- [ ] Verificar cobertura por facility, cuota restante y filtros de ubicación/estado con el corte ampliado.
+- [x] Verificar cobertura por facility, cuota restante y filtros de ubicación/estado: 14 facilities, estado FL, 29,782 solicitudes restantes y 23 pruebas aprobadas, incluidas pruebas vivas de facility y estado.
 - [x] Convertir el prompt D00A–D10 en una especificación determinística con precedencia, evidencia y salida auditable.
 - [x] Mapear cada campo autorizado del filtro contra los payloads reales de lista y detalle de Apibara.
 - [x] Resolver con LSC las ambigüedades y datos obligatorios antes de filtrar o insertar nuevos vehículos.

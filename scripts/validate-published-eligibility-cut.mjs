@@ -16,6 +16,7 @@ const pendingVisible = vehicles.filter((vehicle) => {
 
 console.log(JSON.stringify({
   vehicles: vehicles.length,
+  generatedAt: result.generatedAt ?? null,
   facilities: facilities.length,
   facilityIds: facilities,
   states: [...new Set(vehicles.map((vehicle) => vehicle.state).filter(Boolean))].sort(),
@@ -23,4 +24,14 @@ console.log(JSON.stringify({
   specialTitleExamples: specialTitles.slice(0, 5).map((vehicle) => ({ lot: vehicle.lot, titleType: vehicle.titleType })),
   forbiddenDamageVisible: forbiddenVisible.length,
   pendingTitleVisible: pendingVisible.length,
+  fieldCoverage: {
+    photos: vehicles.filter((vehicle) => Array.isArray(vehicle.photos) && vehicle.photos.length > 0).length,
+    odometer: vehicles.filter((vehicle) => typeof vehicle.odometer === "number").length,
+    damage: vehicles.filter((vehicle) => Boolean(vehicle.damage)).length,
+    titleType: vehicles.filter((vehicle) => Boolean(vehicle.titleType)).length,
+    transmission: vehicles.filter((vehicle) => Boolean(vehicle.transmission)).length,
+    driveType: vehicles.filter((vehicle) => Boolean(vehicle.driveType)).length,
+    fuelType: vehicles.filter((vehicle) => Boolean(vehicle.fuelType)).length,
+    auctionAt: vehicles.filter((vehicle) => Boolean(vehicle.auctionAt)).length,
+  },
 }, null, 2));
