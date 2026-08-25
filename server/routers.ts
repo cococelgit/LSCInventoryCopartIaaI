@@ -53,7 +53,7 @@ export const appRouter = router({
     }),
   }),
   inventory: router({
-    recent: publicProcedure.input(z.object({ take: z.number().int().min(1).max(100).default(100) }).optional()).query(({ input }) => getAzure<{ source: string; generatedAt: string; vehicles: AzureVehicle[] }>(`/api/v1/inventory/recent?take=${input?.take ?? 100}`)),
+    recent: publicProcedure.input(z.object({ take: z.number().int().min(1).max(1000).default(1000) }).optional()).query(({ input }) => getAzure<{ source: string; generatedAt: string; vehicles: AzureVehicle[] }>(`/api/v1/inventory/recent?take=${input?.take ?? 1000}`)),
     vehicle: publicProcedure.input(z.object({ lot: z.string().min(1).max(32) })).query(({ input }) => getAzure<AzureVehicle>(`/api/v1/inventory/vehicle/${encodeURIComponent(input.lot)}`)),
   }),
 });

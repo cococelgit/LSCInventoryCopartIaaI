@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { auctionDateInEastern, buildFacilityLabel, buildOptionCounts, doesEstimatedTotalOverlap, estimateBasePurchaseTotal, isAuctionDateInRange, parseOdometer } from "./Home";
+import { auctionDateInEastern, buildFacilityLabel, buildOptionCounts, doesEstimatedTotalOverlap, estimateBasePurchaseTotal, isAuctionDateInRange, isSpecialTitleType, parseOdometer } from "./Home";
 
 describe("buildOptionCounts", () => {
   it("groups and alphabetizes values supplied by the inventory feed", () => {
@@ -49,5 +49,15 @@ describe("range predicates", () => {
     expect(doesEstimatedTotalOverlap(estimate, "5500", "5600")).toBe(true);
     expect(doesEstimatedTotalOverlap(estimate, "5700", "6000")).toBe(false);
     expect(doesEstimatedTotalOverlap(null, "1", "10000")).toBe(false);
+  });
+});
+
+describe("isSpecialTitleType", () => {
+  it("hides only the approved special categories and keeps rebuilt visible", () => {
+    expect(isSpecialTitleType("CERTIFICATE OF DESTRUCTION")).toBe(true);
+    expect(isSpecialTitleType("NON-REPAIRABLE")).toBe(true);
+    expect(isSpecialTitleType("PARTS ONLY")).toBe(true);
+    expect(isSpecialTitleType("JUNK TITLE")).toBe(true);
+    expect(isSpecialTitleType("CERT OF TITLE SLVG REBUILT")).toBe(false);
   });
 });

@@ -75,3 +75,17 @@
 - [x] Probar funcionalmente en la interfaz el rango de fecha de subasta con un corte vivo.
 - [x] Probar funcionalmente en la interfaz el rango de presupuesto LSC base con un corte vivo.
 - [x] Registrar evidencia final de ambos filtros en producción y publicar el cierre de validación.
+- [x] Verificar mediante el endpoint protegido el plan, la cuota y los límites efectivos de Apibara tras el upgrade.
+- [x] Ajustar el alcance del job en función de la cuota confirmada y lanzar una sola sincronización controlada.
+- [ ] Validar lotes, frescura y campos persistidos en el buscador antes de declarar la ampliación operativa.
+- [x] Adaptar el motor para procesar las 14 facilities Copart devueltas por Florida sin depender de una sola facility configurada.
+- [x] Desplegar el motor multi-facility con límites conservadores por corrida y ejecutar una única corrida controlada: 14 scopes, 280 lotes observados, 35 solicitudes y 0 fallos.
+- [ ] Verificar cobertura por facility, cuota restante y filtros de ubicación/estado con el corte ampliado.
+- [x] Convertir el prompt D00A–D10 en una especificación determinística con precedencia, evidencia y salida auditable.
+- [x] Mapear cada campo autorizado del filtro contra los payloads reales de lista y detalle de Apibara.
+- [x] Resolver con LSC las ambigüedades y datos obligatorios antes de filtrar o insertar nuevos vehículos.
+- [x] Implementar 23 pruebas del motor por regla y bloquear la carga de lotes descartados antes de PostgreSQL.
+- [x] Mapear `auction.auction_at`, `facility.state`, `seller.name`, `condition.primary_damage`, `condition.secondary_damage` y `sale_document.name/is_pending` a la entrada autorizada del filtro.
+- [x] Aplicar únicamente D00A, D00B, D01–D08 y D10 como descartes; Rebuilt y cualquier otro tipo de título deben cargarse.
+- [x] Crear un filtro UI de tipo de título que oculte por defecto Certificate of Destruction, Junk, Non-Repairable y Parts Only sin eliminarlos de la base.
+- [x] Permitir mostrar títulos especiales seleccionándolos expresamente en el filtro y conservarlos disponibles por búsqueda de lote.

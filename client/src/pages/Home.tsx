@@ -59,6 +59,13 @@ export function doesEstimatedTotalOverlap(estimate: ReturnType<typeof estimateBa
   return estimate !== null && estimate.max >= Number(minimum || 0) && estimate.min <= Number(maximum || Number.MAX_SAFE_INTEGER);
 }
 
+const SPECIAL_TITLE_PHRASES = ["CERTIFICATE OF DESTRUCTION", "JUNK", "NON REPAIRABLE", "PARTS ONLY"];
+
+export function isSpecialTitleType(titleType: string) {
+  const normalized = titleType.toUpperCase().replace(/[-/_,.]+/g, " ").replace(/\s+/g, " ").trim();
+  return SPECIAL_TITLE_PHRASES.some((phrase) => ` ${normalized} `.includes(` ${phrase} `));
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [selectedMakes, setSelectedMakes] = useState<string[]>([]);
@@ -68,7 +75,7 @@ export default function Home() {
   const [onlyBid, setOnlyBid] = useState(false);
   const [onlyPhotos, setOnlyPhotos] = useState(false);
   const [selectedDamages, setSelectedDamages] = useState<string[]>([]);
-  const [selectedTitles, setSelectedTitles] = useState<string[]>([]);
+  const [selectedTitles, setSelectedTitles] = useState<string[] | null>(null);
   const [selectedTransmissions, setSelectedTransmissions] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [selectedVehicleTypes, setSelectedVehicleTypes] = useState<string[]>([]);
@@ -85,7 +92,7 @@ export default function Home() {
   const [maxOdometer, setMaxOdometer] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("auction");
-  const liveInventory = trpc.inventory.recent.useQuery({ take: 100 }, { refetchOnWindowFocus: true, staleTime: 60_000 });
+  const liveInventory = trpc.inventory.recent.useQuery({ take: 1000 }, { refetchOnWindowFocus: true, staleTime: 60_000 });
 
   const vehicles = useMemo(() => liveInventory.data?.vehicles?.map((vehicle) => {
     const location = vehicle.location ?? "No reportada";
@@ -123,6 +130,8 @@ export default function Home() {
   const vehicleTypes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.vehicleType)), [vehicles]);
   const damages = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.damage)), [vehicles]);
   const titleTypes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.titleType)), [vehicles]);
+  const defaultVisibleTitles = useMemo(() => titleTypes.map(([titleType]) => titleType).filter((titleType) => !isSpecialTitleType(titleType)), [titleTypes]);
+  const activeTitleTypes = selectedTitles ?? defaultVisibleTitles;
   const transmissions = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.transmission)), [vehicles]);
   const startCodes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.startCode)), [vehicles]);
   const drives = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.drive)), [vehicles]);
@@ -130,11 +139,13 @@ export default function Home() {
   const facilities = useMemo(() => buildOptionCounts(vehicles.flatMap((vehicle) => vehicle.facilityLabel ? [vehicle.facilityLabel] : [])), [vehicles]);
   const states = useMemo(() => buildOptionCounts(vehicles.flatMap((vehicle) => vehicle.state !== "No reportado" ? [vehicle.state] : [])), [vehicles]);
   const filteredVehicles = useMemo(() => vehicles.filter((vehicle) => {
-    const normalized = `${vehicle.title} ${vehicle.lot} ${vehicle.make} ${vehicle.model}`.toLowerCase();
+    const normalizedQuery = query.trim().toLowerCase();
+    const normalized = `${vehicle.title} ${vehicle.lot} ${vehicle.make} ${vehicle.model} ${vehicle.titleType}`.toLowerCase();
+    const directSpecialTitleSearch = normalizedQuery.length > 0 && (vehicle.lot.toLowerCase() === normalizedQuery || vehicle.titleType.toLowerCase().includes(normalizedQuery));
     const appliesOdometer = Boolean(minOdometer || maxOdometer);
     const appliesAuctionDate = Boolean(auctionFrom || auctionTo);
     const appliesEstimatedTotal = Boolean(minEstimatedTotal || maxEstimatedTotal);
-    return normalized.includes(query.toLowerCase())
+    return normalized.includes(normalizedQuery)
       && (selectedMakes.length === 0 || selectedMakes.includes(vehicle.make))
       && (selectedModels.length === 0 || selectedModels.includes(vehicle.model))
       && (selectedFacilities.length === 0 || (vehicle.facilityLabel !== null && selectedFacilities.includes(vehicle.facilityLabel)))
@@ -149,12 +160,12 @@ export default function Home() {
       && (!onlyPhotos || vehicle.photos.length > 0)
       && (selectedVehicleTypes.length === 0 || selectedVehicleTypes.includes(vehicle.vehicleType))
       && (selectedDamages.length === 0 || selectedDamages.includes(vehicle.damage))
-      && (selectedTitles.length === 0 || selectedTitles.includes(vehicle.titleType))
+      && (directSpecialTitleSearch || activeTitleTypes.includes(vehicle.titleType))
       && (selectedStartCodes.length === 0 || selectedStartCodes.includes(vehicle.startCode))
       && (selectedDrives.length === 0 || selectedDrives.includes(vehicle.drive))
       && (selectedTransmissions.length === 0 || selectedTransmissions.includes(vehicle.transmission))
       && (selectedFuels.length === 0 || selectedFuels.includes(vehicle.fuel));
-  }), [vehicles, query, selectedMakes, selectedModels, selectedFacilities, selectedStates, minYear, maxYear, auctionFrom, auctionTo, minOdometer, maxOdometer, minEstimatedTotal, maxEstimatedTotal, maxBid, onlyBid, onlyPhotos, selectedVehicleTypes, selectedDamages, selectedTitles, selectedStartCodes, selectedDrives, selectedTransmissions, selectedFuels]);
+  }), [vehicles, query, selectedMakes, selectedModels, selectedFacilities, selectedStates, minYear, maxYear, auctionFrom, auctionTo, minOdometer, maxOdometer, minEstimatedTotal, maxEstimatedTotal, maxBid, onlyBid, onlyPhotos, selectedVehicleTypes, selectedDamages, activeTitleTypes, selectedStartCodes, selectedDrives, selectedTransmissions, selectedFuels]);
   const results = useMemo(() => [...filteredVehicles].sort((left, right) => {
     if (sortMode === "bid-low") return (left.currentBid ?? Number.MAX_SAFE_INTEGER) - (right.currentBid ?? Number.MAX_SAFE_INTEGER);
     if (sortMode === "bid-high") return (right.currentBid ?? -1) - (left.currentBid ?? -1);
@@ -163,7 +174,7 @@ export default function Home() {
 
   const toggleMake = (make: string) => setSelectedMakes((active) => active.includes(make) ? active.filter((item) => item !== make) : [...active, make]);
   const toggleValue = (value: string, active: string[], update: (next: string[]) => void) => update(active.includes(value) ? active.filter((item) => item !== value) : [...active, value]);
-  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedModels([]); setSelectedVehicleTypes([]); setSelectedDamages([]); setSelectedTitles([]); setSelectedStartCodes([]); setSelectedDrives([]); setSelectedTransmissions([]); setSelectedFuels([]); setSelectedFacilities([]); setSelectedStates([]); setMinYear("2000"); setMaxYear("2026"); setAuctionFrom(""); setAuctionTo(""); setMinOdometer(""); setMaxOdometer(""); setMinEstimatedTotal(""); setMaxEstimatedTotal(""); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
+  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedModels([]); setSelectedVehicleTypes([]); setSelectedDamages([]); setSelectedTitles(null); setSelectedStartCodes([]); setSelectedDrives([]); setSelectedTransmissions([]); setSelectedFuels([]); setSelectedFacilities([]); setSelectedStates([]); setMinYear("2000"); setMaxYear("2026"); setAuctionFrom(""); setAuctionTo(""); setMinOdometer(""); setMaxOdometer(""); setMinEstimatedTotal(""); setMaxEstimatedTotal(""); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
   const sortLabel = sortMode === "auction" ? "Fecha de subasta" : sortMode === "bid-low" ? "Puja: menor a mayor" : "Puja: mayor a menor";
 
   return <main className="browse-page">
@@ -232,8 +243,9 @@ export default function Home() {
             <div className="make-list">{drives.map(([drive, count]) => <label key={drive}><input type="checkbox" checked={selectedDrives.includes(drive)} onChange={() => toggleValue(drive, selectedDrives, setSelectedDrives)} /><i><Check size={11} /></i><span>{drive}</span><small>{count}</small></label>)}</div>
           </section>
           <section className="filter-group">
-            <div className="filter-group-label"><b>Estado del título</b><button onClick={() => setSelectedTitles([])}>Limpiar</button></div>
-            <div className="make-list">{titleTypes.map(([titleType, count]) => <label key={titleType}><input type="checkbox" checked={selectedTitles.includes(titleType)} onChange={() => toggleValue(titleType, selectedTitles, setSelectedTitles)} /><i><Check size={11} /></i><span>{titleType}</span><small>{count}</small></label>)}</div>
+            <div className="filter-group-label"><b>Tipo de título</b><button onClick={() => setSelectedTitles(null)}>Predeterminado</button></div>
+            <p className="filter-hint">Los títulos especiales están guardados, pero permanecen desmarcados y ocultos por defecto.</p>
+            <div className="make-list">{titleTypes.map(([titleType, count]) => <label key={titleType}><input type="checkbox" checked={activeTitleTypes.includes(titleType)} onChange={() => toggleValue(titleType, activeTitleTypes, setSelectedTitles)} /><i><Check size={11} /></i><span>{titleType}</span><small>{count}</small></label>)}</div>
           </section>
           <section className="filter-group">
             <div className="filter-group-label"><b>Transmisión</b><button onClick={() => setSelectedTransmissions([])}>Limpiar</button></div>
