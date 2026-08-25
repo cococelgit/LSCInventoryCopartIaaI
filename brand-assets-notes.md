@@ -11,3 +11,11 @@ La variante `Recurso 3lineal color.png` tiene formato horizontal (1200×340) y u
 La extracción de color del archivo oficial identifica azul `#042CD7` y rojo `#FF0400` como colores dominantes. Los activos aprobados para esta actualización quedaron publicados en `/manus-storage/lsc-logo-lineal-color_454249f6.png` y `/manus-storage/lsc-logo-lineal-blanco_435d949d.png`.
 
 El logo blanco oficial se aplicó en los encabezados azul profundo del catálogo y la ficha. Los tokens del UI ahora usan azul `#042CD7`, azul profundo `#031B86` y rojo `#FF0400`. Las pruebas unitarias del bridge y la seguridad server-side aprobaron: 4 archivos y 5 pruebas.
+
+El preview del checkpoint `12dd515a` mostró el logo oficial blanco sobre azul profundo y el rojo de marca. La primera lectura del dominio público siguió mostrando la identidad anterior, por lo que la propagación del despliegue se mantiene pendiente de una segunda verificación antes del cierre.
+
+Una segunda lectura pública con parámetro de caché también mostró la identidad anterior; por tanto, el checkpoint está correcto en preview, pero la propagación del dominio continúa pendiente y no se marca como validada todavía.
+
+La propagación se confirmó posteriormente en `lsc-inv-revi-zyn4tlbw.manus.space`: el encabezado público muestra el logo lineal blanco oficial sobre azul profundo, conserva el acento rojo oficial y el catálogo continúa mostrando los datos y fotos reales de Azure.
+
+La validación final se hizo con el dominio público y su HTML renderizado guardado en `lsc-inv-revi-zyn4tlbw.manus.space__brand_12dd515a-final_1787677958655.html`. La captura muestra el logo lineal blanco oficial, el encabezado azul profundo, el acento rojo y 57 vehículos del corte cargados desde Azure.
