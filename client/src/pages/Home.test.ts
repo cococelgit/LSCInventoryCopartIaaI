@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { auctionDateInEastern, buildFacilityLabel, buildOptionCounts, doesEstimatedTotalOverlap, estimateBasePurchaseTotal, isAuctionDateInRange, isSpecialTitleType, parseOdometer } from "./Home";
+import { auctionDateInEastern, buildFacilityLabel, buildOptionCounts, buildPaginationPages, doesEstimatedTotalOverlap, estimateBasePurchaseTotal, isAuctionDateInRange, isSpecialTitleType, parseOdometer } from "./Home";
 
 describe("buildOptionCounts", () => {
   it("groups and alphabetizes values supplied by the inventory feed", () => {
     expect(buildOptionCounts(["Salvage", "No reportado", "Salvage", "Clean"]))
       .toEqual([["Clean", 1], ["No reportado", 1], ["Salvage", 2]]);
+  });
+});
+
+describe("buildPaginationPages", () => {
+  it("keeps first, last and neighboring pages visible", () => {
+    expect(buildPaginationPages(1, 21)).toEqual([1, 2, 21]);
+    expect(buildPaginationPages(10, 21)).toEqual([1, 9, 10, 11, 21]);
+    expect(buildPaginationPages(21, 21)).toEqual([1, 20, 21]);
   });
 });
 

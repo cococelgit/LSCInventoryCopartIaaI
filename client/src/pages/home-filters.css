@@ -35,3 +35,104 @@
     font-size: 9px !important;
   }
 }
+
+.inventory-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0 28px;
+  padding: 13px 15px;
+  border: 1px solid #dde3ef;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(3, 27, 134, 0.06);
+}
+
+.inventory-pagination > span {
+  color: #6f7c91;
+  font: 600 11px Space Grotesk, sans-serif;
+}
+
+.inventory-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inventory-pagination button {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #d8dfed;
+  border-radius: 7px;
+  background: #fff;
+  color: #1c2940;
+  font: 700 11px Space Grotesk, sans-serif;
+  cursor: pointer;
+  transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), border-color 160ms ease, color 160ms ease;
+}
+
+.inventory-pagination button:hover:not(:disabled) {
+  border-color: #042cd7;
+  color: #042cd7;
+}
+
+.inventory-pagination button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.inventory-pagination button.is-active {
+  border-color: #042cd7;
+  background: #042cd7;
+  color: #fff;
+}
+
+.inventory-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.browse-internal-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 8px;
+  background: rgba(255,255,255,.08);
+  color: #fff;
+  font: 700 10px Space Grotesk, sans-serif;
+  letter-spacing: .04em;
+  transition: background 160ms ease, transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.browse-internal-link:hover {
+  background: rgba(255,255,255,.16);
+}
+
+.browse-internal-link:active {
+  transform: scale(.97);
+}
+
+@media (max-width: 760px) {
+  .browse-internal-link {
+    display: none;
+  }
+
+  .inventory-pagination {
+    align-items: stretch;
+    flex-direction: column;
+    margin: 14px 0 22px;
+  }
+
+  .inventory-pagination > div {
+    flex-wrap: wrap;
+  }
+
+  .inventory-pagination button {
+    flex: 1 1 auto;
+  }
+}

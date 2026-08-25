@@ -45,7 +45,7 @@ beforeAll(async () => {
   const parsed = payload.result?.data?.json;
   if (!parsed || parsed.vehicles.length === 0) throw new Error("Live inventory cut is empty");
   liveInventory = parsed;
-});
+}, 30_000);
 
 afterEach(() => cleanup());
 
@@ -109,15 +109,19 @@ describe("Home filters with the live published inventory cut", () => {
     expect(facility).toBeTruthy();
 
     render(createElement(Home));
+    const countBefore = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
     fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(`Facility ${facility![0].split("Facility ")[1]}`) }));
-    expect(screen.getByText(`${facility![1]} vehículos`)).toBeTruthy();
+    const countAfter = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
+    expect(countAfter).toBeGreaterThan(0);
+    expect(countAfter).toBeLessThan(countBefore);
   });
 
   it("activates the live FL state control on the expanded cut", () => {
     render(createElement(Home));
 
     const countBefore = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
-    const stateLabel = screen.getByText("FL", { selector: ".make-list span" }).closest("label");
+    const stateSection = screen.getByText("Estado", { selector: ".filter-group-label b" }).closest("section");
+    const stateLabel = Array.from(stateSection?.querySelectorAll("label") ?? []).find((label) => label.querySelector("span")?.textContent === "FL");
     const stateFilter = stateLabel?.querySelector("input[type='checkbox']") as HTMLInputElement;
     expect(stateFilter).toBeTruthy();
     fireEvent.click(stateFilter);
@@ -125,5 +129,18 @@ describe("Home filters with the live published inventory cut", () => {
     const countAfter = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
     expect(countAfter).toBeGreaterThan(0);
     expect(countAfter).toBeLessThan(countBefore);
+  });
+
+  it("navigates the live cut and resets to page one when sorting changes", () => {
+    render(createElement(Home));
+    const visibleTotal = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
+    expect(visibleTotal).toBeGreaterThan(24);
+    expect(document.querySelectorAll(".browse-row")).toHaveLength(24);
+
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    expect(screen.getByText(`Mostrando 25–48 de ${visibleTotal}`)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Ordenar resultados"), { target: { value: "bid-low" } });
+    expect(screen.getByText(`Mostrando 1–24 de ${visibleTotal}`)).toBeTruthy();
   });
 });

@@ -1,12 +1,13 @@
 /** Inventario operativo: búsqueda y comparación rápidas, sin elementos decorativos que resten espacio a los lotes. */
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
-import { CalendarDays, Check, ChevronDown, ChevronUp, CircleAlert, Filter, Image, MapPin, Search, SlidersHorizontal, Tag, X } from "lucide-react";
+import { CalendarDays, Check, ChevronDown, ChevronUp, CircleAlert, Filter, Image, MapPin, Search, ShieldX, SlidersHorizontal, Tag, X } from "lucide-react";
 import { formatMoney } from "../data/inventory";
 import { LSC_BROKER_FEE_MAX_USD, LSC_BROKER_FEE_MIN_USD } from "../data/lscPricing";
 import "./home-filters.css";
 
 type SortMode = "auction" | "bid-low" | "bid-high";
+export const INVENTORY_PAGE_SIZE = 24;
 
 export { LSC_BROKER_FEE_MAX_USD, LSC_BROKER_FEE_MIN_USD } from "../data/lscPricing";
 
@@ -66,6 +67,11 @@ export function isSpecialTitleType(titleType: string) {
   return SPECIAL_TITLE_PHRASES.some((phrase) => ` ${normalized} `.includes(` ${phrase} `));
 }
 
+export function buildPaginationPages(currentPage: number, totalPages: number) {
+  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
+  return Array.from(pages).filter((page) => page >= 1 && page <= totalPages).sort((left, right) => left - right);
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [selectedMakes, setSelectedMakes] = useState<string[]>([]);
@@ -92,6 +98,7 @@ export default function Home() {
   const [maxOdometer, setMaxOdometer] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("auction");
+  const [currentPage, setCurrentPage] = useState(1);
   const liveInventory = trpc.inventory.recent.useQuery({ take: 1000 }, { refetchOnWindowFocus: true, staleTime: 60_000 });
 
   const vehicles = useMemo(() => liveInventory.data?.vehicles?.map((vehicle) => {
@@ -171,6 +178,13 @@ export default function Home() {
     if (sortMode === "bid-high") return (right.currentBid ?? -1) - (left.currentBid ?? -1);
     return (new Date(left.auctionAt ?? "2999-12-31").getTime()) - (new Date(right.auctionAt ?? "2999-12-31").getTime());
   }), [filteredVehicles, sortMode]);
+  const totalPages = Math.max(1, Math.ceil(results.length / INVENTORY_PAGE_SIZE));
+  const paginationPages = useMemo(() => buildPaginationPages(currentPage, totalPages), [currentPage, totalPages]);
+  const paginatedResults = useMemo(() => results.slice((currentPage - 1) * INVENTORY_PAGE_SIZE, currentPage * INVENTORY_PAGE_SIZE), [results, currentPage]);
+  const filterSignature = JSON.stringify({ query, selectedMakes, minYear, maxYear, maxBid, onlyBid, onlyPhotos, selectedDamages, activeTitleTypes, selectedTransmissions, selectedModels, selectedVehicleTypes, selectedStartCodes, selectedDrives, selectedFuels, selectedFacilities, selectedStates, auctionFrom, auctionTo, minEstimatedTotal, maxEstimatedTotal, minOdometer, maxOdometer, sortMode });
+
+  useEffect(() => setCurrentPage(1), [filterSignature]);
+  useEffect(() => setCurrentPage((page) => Math.min(page, totalPages)), [totalPages]);
 
   const toggleMake = (make: string) => setSelectedMakes((active) => active.includes(make) ? active.filter((item) => item !== make) : [...active, make]);
   const toggleValue = (value: string, active: string[], update: (next: string[]) => void) => update(active.includes(value) ? active.filter((item) => item !== value) : [...active, value]);
@@ -182,6 +196,7 @@ export default function Home() {
       <a className="browse-brand" href="/" aria-label="La Subasta Cubana"><img src="/manus-storage/lsc-logo-lineal-blanco_435d949d.png" alt="La Subasta Cubana" /></a>
       <div className="browse-search" role="search"><span className="browse-scope">Inventario <ChevronDown size={14} /></span><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Busca por marca, modelo o número de lote" aria-label="Buscar vehículos" /></div>
       <div className="browse-header-meta"><span><i /> COPART · FLORIDA</span><small>{vehicles.length} lotes</small></div>
+      <a className="browse-internal-link" href="/interno/descartes"><ShieldX size={15} /> Auditoría</a>
       <button className="browse-filter-button" onClick={() => setFiltersOpen(true)}><SlidersHorizontal size={18} /> Filtros</button>
     </header>
 
@@ -273,7 +288,7 @@ export default function Home() {
         <div className="browse-results-head"><div><p>INVENTARIO DISPONIBLE</p><h2>{results.length} vehículos</h2><span>{liveInventory.data?.generatedAt ? `Actualizado ${new Date(liveInventory.data.generatedAt).toLocaleString("es-US")}` : "Consultando corte Azure…"}</span></div><div className="browse-sort"><span>Ordenar</span><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} aria-label="Ordenar resultados"><option value="auction">Fecha de subasta</option><option value="bid-low">Puja: menor a mayor</option><option value="bid-high">Puja: mayor a menor</option></select></div></div>
         <div className="browse-results-subhead"><span><Filter size={14} /> {selectedFacilities.length ? selectedFacilities.join(", ") : selectedStates.length ? selectedStates.join(", ") : selectedMakes.length ? selectedMakes.join(", ") : "Todos los vehículos"}</span><span>{auctionFrom || auctionTo ? "Fecha filtrada" : onlyBid ? "Con puja actual" : "Con y sin puja"}{minEstimatedTotal || maxEstimatedTotal ? " · Presupuesto LSC aplicado" : ""}{onlyPhotos ? " · Con fotos" : ""}</span></div>
         <div className="browse-list">
-          {results.map((vehicle) => <article className="browse-row" key={vehicle.lot}>
+          {paginatedResults.map((vehicle) => <article className="browse-row" key={vehicle.lot}>
             <a href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer" className="browse-row-link" aria-label={`Abrir ficha de ${vehicle.title} en una nueva pestaña`}>
               <div className="browse-photo">{vehicle.photos[0] ? <img src={vehicle.photos[0]} alt={`${vehicle.title}, lote ${vehicle.lot}`} /> : <div className="browse-photo-empty"><Image size={28} /><span>Sin foto</span></div>}<span><Image size={12} /> {vehicle.photos.length} fotos</span></div>
               <div className="browse-vehicle-main"><div className="browse-lot"><b>{vehicle.title}</b><em>LOTE #{vehicle.lot}</em></div><div className="browse-specs"><span>{vehicle.year || "Año N/R"}</span><span>{vehicle.transmission}</span><span>{vehicle.fuel}</span><span>{vehicle.drive}</span></div><div className="browse-data"><span><small>Ubicación</small><b><MapPin size={13} /> {vehicle.location}</b></span><span><small>Daño</small><b>{vehicle.damage}</b></span><span><small>Título</small><b>{vehicle.titleType}</b></span></div></div>
@@ -282,6 +297,17 @@ export default function Home() {
           </article>)}
           {results.length === 0 && <div className="browse-empty"><Search size={30} /><h3>{liveInventory.isLoading ? "Cargando inventario…" : "No hay vehículos con esos filtros"}</h3><p>{liveInventory.isLoading ? "Consultando el corte persistido desde Azure." : "Prueba ampliando el año, la marca o el monto máximo."}</p>{!liveInventory.isLoading && <button onClick={clearFilters}>Restablecer búsqueda</button>}</div>}
         </div>
+        {results.length > 0 && <nav className="inventory-pagination" aria-label="Paginación de vehículos">
+          <span>Mostrando {(currentPage - 1) * INVENTORY_PAGE_SIZE + 1}–{Math.min(currentPage * INVENTORY_PAGE_SIZE, results.length)} de {results.length}</span>
+          <div>
+            <button disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>Anterior</button>
+            {paginationPages.map((page, index) => <React.Fragment key={page}>
+              {index > 0 && page - paginationPages[index - 1] > 1 && <span aria-hidden="true">…</span>}
+              <button className={page === currentPage ? "is-active" : ""} aria-current={page === currentPage ? "page" : undefined} onClick={() => setCurrentPage(page)}>{page}</button>
+            </React.Fragment>)}
+            <button disabled={currentPage === totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}>Siguiente</button>
+          </div>
+        </nav>}
       </section>
     </div>
     {filtersOpen && <button className="browse-backdrop" onClick={() => setFiltersOpen(false)} aria-label="Cerrar filtros" />}

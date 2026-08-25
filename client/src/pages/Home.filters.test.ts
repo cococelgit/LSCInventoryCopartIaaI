@@ -78,4 +78,18 @@ describe("Home live range filters", () => {
     fireEvent.change(screen.getByLabelText("Buscar vehículos"), { target: { value: "33333333" } });
     expect(screen.getByText("2019 SPECIAL PARTS CAR")).toBeTruthy();
   });
+
+  it("opens and closes the responsive filter drawer", () => {
+    render(createElement(Home));
+    const sidebar = document.querySelector(".browse-sidebar")!;
+    expect(sidebar.classList.contains("browse-sidebar--open")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtros" }));
+    expect(sidebar.classList.contains("browse-sidebar--open")).toBe(true);
+    const closeButtons = screen.getAllByRole("button", { name: "Cerrar filtros" });
+    expect(closeButtons.length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(closeButtons[0]);
+    expect(sidebar.classList.contains("browse-sidebar--open")).toBe(false);
+  });
 });

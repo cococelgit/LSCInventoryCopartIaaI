@@ -89,3 +89,13 @@
 - [x] Aplicar únicamente D00A, D00B, D01–D08 y D10 como descartes; Rebuilt y cualquier otro tipo de título deben cargarse.
 - [x] Crear un filtro UI de tipo de título que oculte por defecto Certificate of Destruction, Junk, Non-Repairable y Parts Only sin eliminarlos de la base.
 - [x] Permitir mostrar títulos especiales seleccionándolos expresamente en el filtro y conservarlos disponibles por búsqueda de lote.
+- [x] Diseñar paginación eficiente para la lista filtrada sin perder filtros, orden ni búsqueda activa.
+- [x] Persistir en PostgreSQL las decisiones DESCARTAR con regla, evidencia, versión y fecha, sin almacenar el VIN completo en el registro de auditoría.
+- [x] Exponer un endpoint Azure protegido y un bridge server-side para consultar descartes paginados.
+- [x] Crear un panel interno protegido con resumen por regla, listado de descartes y evidencia por vehículo.
+- [x] Añadir navegación entre buscador y panel interno sin exponer credenciales ni convertir el panel en una ruta pública anónima.
+- [x] Probar paginación, control de acceso, datos reales y responsive antes de publicar.
+- [x] Renderizar el panel interno con descartes reales del endpoint protegido y verificar resumen, fila y evidencia.
+- [x] Ejercitar la paginación con el corte real, incluida navegación, conteos y reinicio al cambiar el orden.
+- [ ] Publicar un checkpoint y repetir validaciones básicas sobre la versión servida.
+- [x] Verificar mediante pruebas DOM y CSS el drawer móvil, la paginación apilada y la tabla interna desplazable.
