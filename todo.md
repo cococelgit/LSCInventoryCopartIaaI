@@ -67,3 +67,8 @@
 - [x] Ejecutar una sincronización controlada, validar los campos enriquecidos y publicar el buscador actualizado.
 - [x] Guardar la versión verificable del UI con filtros de facility/estado y el contrato actualizado.
 - [x] Validar el dominio publicado con facility/estado y al menos un campo enriquecido real.
+- [x] Formalizar el concepto como presupuesto LSC base —no total out-the-door— usando exclusivamente puja actual y el broker fee confirmado.
+- [x] Alinear el filtro y las tarjetas al mismo concepto de presupuesto LSC base con exclusiones explícitas.
+- [x] Documentar dentro del proyecto la instrucción operativa proporcionada por LSC para el broker fee usado en el cálculo.
+- [ ] Probar los nuevos filtros con datos vivos y validar en el dominio publicado la fecha de subasta y el rango monetario final antes de marcarlos completos.
+- [ ] Probar los nuevos filtros con datos vivos, publicar y validar el dominio actualizado.

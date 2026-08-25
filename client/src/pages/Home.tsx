@@ -3,8 +3,12 @@ import { useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
 import { CalendarDays, Check, ChevronDown, ChevronUp, CircleAlert, Filter, Image, MapPin, Search, SlidersHorizontal, Tag, X } from "lucide-react";
 import { formatMoney } from "../data/inventory";
+import { LSC_BROKER_FEE_MAX_USD, LSC_BROKER_FEE_MIN_USD } from "../data/lscPricing";
+import "./home-filters.css";
 
 type SortMode = "auction" | "bid-low" | "bid-high";
+
+export { LSC_BROKER_FEE_MAX_USD, LSC_BROKER_FEE_MIN_USD } from "../data/lscPricing";
 
 export function buildOptionCounts(values: string[]) {
   return Array.from(values.reduce((counts, value) => {
@@ -22,6 +26,37 @@ export function parseOdometer(value: unknown) {
 
 export function buildFacilityLabel(location: string, facilityId: string | null) {
   return facilityId ? `${location} · Facility ${facilityId}` : null;
+}
+
+export function estimateBasePurchaseTotal(currentBid: number | null) {
+  if (currentBid === null || !Number.isFinite(currentBid) || currentBid < 0) return null;
+  return {
+    min: currentBid + LSC_BROKER_FEE_MIN_USD,
+    max: currentBid + LSC_BROKER_FEE_MAX_USD,
+  };
+}
+
+export function auctionDateInEastern(auctionAt: string | null) {
+  if (!auctionAt) return null;
+  const instant = new Date(auctionAt);
+  if (Number.isNaN(instant.getTime())) return null;
+  const values = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(instant).reduce<Record<string, string>>((parts, part) => ({ ...parts, [part.type]: part.value }), {});
+  return values.year && values.month && values.day ? `${values.year}-${values.month}-${values.day}` : null;
+}
+
+export function isAuctionDateInRange(auctionDate: string | null, from: string, to: string) {
+  if (!from && !to) return true;
+  return auctionDate !== null && auctionDate >= (from || "0000-01-01") && auctionDate <= (to || "9999-12-31");
+}
+
+export function doesEstimatedTotalOverlap(estimate: ReturnType<typeof estimateBasePurchaseTotal>, minimum: string, maximum: string) {
+  if (!minimum && !maximum) return true;
+  return estimate !== null && estimate.max >= Number(minimum || 0) && estimate.min <= Number(maximum || Number.MAX_SAFE_INTEGER);
 }
 
 export default function Home() {
@@ -42,6 +77,10 @@ export default function Home() {
   const [selectedFuels, setSelectedFuels] = useState<string[]>([]);
   const [selectedFacilities, setSelectedFacilities] = useState<string[]>([]);
   const [selectedStates, setSelectedStates] = useState<string[]>([]);
+  const [auctionFrom, setAuctionFrom] = useState("");
+  const [auctionTo, setAuctionTo] = useState("");
+  const [minEstimatedTotal, setMinEstimatedTotal] = useState("");
+  const [maxEstimatedTotal, setMaxEstimatedTotal] = useState("");
   const [minOdometer, setMinOdometer] = useState("");
   const [maxOdometer, setMaxOdometer] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -58,8 +97,10 @@ export default function Home() {
       make: vehicle.make ?? "Sin marca",
       model: vehicle.model ?? "Sin modelo",
       currentBid: vehicle.currentBidUsd,
+      estimatedTotal: estimateBasePurchaseTotal(vehicle.currentBidUsd),
       photos: vehicle.photos,
       auctionAt: vehicle.auctionAt,
+      auctionDateKey: auctionDateInEastern(vehicle.auctionAt),
       auctionDate: vehicle.auctionAt ? new Date(vehicle.auctionAt).toLocaleDateString("es-US", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase() : "No reportada",
       location,
       facilityId,
@@ -91,6 +132,8 @@ export default function Home() {
   const filteredVehicles = useMemo(() => vehicles.filter((vehicle) => {
     const normalized = `${vehicle.title} ${vehicle.lot} ${vehicle.make} ${vehicle.model}`.toLowerCase();
     const appliesOdometer = Boolean(minOdometer || maxOdometer);
+    const appliesAuctionDate = Boolean(auctionFrom || auctionTo);
+    const appliesEstimatedTotal = Boolean(minEstimatedTotal || maxEstimatedTotal);
     return normalized.includes(query.toLowerCase())
       && (selectedMakes.length === 0 || selectedMakes.includes(vehicle.make))
       && (selectedModels.length === 0 || selectedModels.includes(vehicle.model))
@@ -98,7 +141,9 @@ export default function Home() {
       && (selectedStates.length === 0 || selectedStates.includes(vehicle.state))
       && vehicle.year >= Number(minYear || 0)
       && vehicle.year <= Number(maxYear || 9999)
+      && (!appliesAuctionDate || isAuctionDateInRange(vehicle.auctionDateKey, auctionFrom, auctionTo))
       && (!appliesOdometer || (vehicle.odometer !== null && vehicle.odometer >= Number(minOdometer || 0) && vehicle.odometer <= Number(maxOdometer || Number.MAX_SAFE_INTEGER)))
+      && (!appliesEstimatedTotal || doesEstimatedTotalOverlap(vehicle.estimatedTotal, minEstimatedTotal, maxEstimatedTotal))
       && (vehicle.currentBid === null || vehicle.currentBid <= Number(maxBid || Infinity))
       && (!onlyBid || vehicle.currentBid !== null)
       && (!onlyPhotos || vehicle.photos.length > 0)
@@ -109,7 +154,7 @@ export default function Home() {
       && (selectedDrives.length === 0 || selectedDrives.includes(vehicle.drive))
       && (selectedTransmissions.length === 0 || selectedTransmissions.includes(vehicle.transmission))
       && (selectedFuels.length === 0 || selectedFuels.includes(vehicle.fuel));
-  }), [vehicles, query, selectedMakes, selectedModels, selectedFacilities, selectedStates, minYear, maxYear, minOdometer, maxOdometer, maxBid, onlyBid, onlyPhotos, selectedVehicleTypes, selectedDamages, selectedTitles, selectedStartCodes, selectedDrives, selectedTransmissions, selectedFuels]);
+  }), [vehicles, query, selectedMakes, selectedModels, selectedFacilities, selectedStates, minYear, maxYear, auctionFrom, auctionTo, minOdometer, maxOdometer, minEstimatedTotal, maxEstimatedTotal, maxBid, onlyBid, onlyPhotos, selectedVehicleTypes, selectedDamages, selectedTitles, selectedStartCodes, selectedDrives, selectedTransmissions, selectedFuels]);
   const results = useMemo(() => [...filteredVehicles].sort((left, right) => {
     if (sortMode === "bid-low") return (left.currentBid ?? Number.MAX_SAFE_INTEGER) - (right.currentBid ?? Number.MAX_SAFE_INTEGER);
     if (sortMode === "bid-high") return (right.currentBid ?? -1) - (left.currentBid ?? -1);
@@ -118,7 +163,7 @@ export default function Home() {
 
   const toggleMake = (make: string) => setSelectedMakes((active) => active.includes(make) ? active.filter((item) => item !== make) : [...active, make]);
   const toggleValue = (value: string, active: string[], update: (next: string[]) => void) => update(active.includes(value) ? active.filter((item) => item !== value) : [...active, value]);
-  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedModels([]); setSelectedVehicleTypes([]); setSelectedDamages([]); setSelectedTitles([]); setSelectedStartCodes([]); setSelectedDrives([]); setSelectedTransmissions([]); setSelectedFuels([]); setSelectedFacilities([]); setSelectedStates([]); setMinYear("2000"); setMaxYear("2026"); setMinOdometer(""); setMaxOdometer(""); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
+  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedModels([]); setSelectedVehicleTypes([]); setSelectedDamages([]); setSelectedTitles([]); setSelectedStartCodes([]); setSelectedDrives([]); setSelectedTransmissions([]); setSelectedFuels([]); setSelectedFacilities([]); setSelectedStates([]); setMinYear("2000"); setMaxYear("2026"); setAuctionFrom(""); setAuctionTo(""); setMinOdometer(""); setMaxOdometer(""); setMinEstimatedTotal(""); setMaxEstimatedTotal(""); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
   const sortLabel = sortMode === "auction" ? "Fecha de subasta" : sortMode === "bid-low" ? "Puja: menor a mayor" : "Puja: mayor a menor";
 
   return <main className="browse-page">
@@ -150,8 +195,17 @@ export default function Home() {
             <div className="browse-range"><input value={minYear} onChange={(event) => setMinYear(event.target.value)} inputMode="numeric" aria-label="Año mínimo" /><span>—</span><input value={maxYear} onChange={(event) => setMaxYear(event.target.value)} inputMode="numeric" aria-label="Año máximo" /></div>
           </section>
           <section className="filter-group">
+            <div className="filter-group-label"><b>Fecha de subasta</b><span>Hora de Miami</span></div>
+            <div className="browse-range"><input type="date" value={auctionFrom} onChange={(event) => setAuctionFrom(event.target.value)} aria-label="Fecha de subasta desde" /><span>—</span><input type="date" value={auctionTo} onChange={(event) => setAuctionTo(event.target.value)} aria-label="Fecha de subasta hasta" /></div>
+          </section>
+          <section className="filter-group">
             <div className="filter-group-label"><b>Odómetro</b><span>Millas</span></div>
             <div className="browse-range"><input value={minOdometer} onChange={(event) => setMinOdometer(event.target.value)} inputMode="numeric" aria-label="Odómetro mínimo" placeholder="Desde" /><span>—</span><input value={maxOdometer} onChange={(event) => setMaxOdometer(event.target.value)} inputMode="numeric" aria-label="Odómetro máximo" placeholder="Hasta" /></div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Presupuesto LSC base</b><span>USD</span></div>
+            <div className="browse-range"><input value={minEstimatedTotal} onChange={(event) => setMinEstimatedTotal(event.target.value)} inputMode="numeric" aria-label="Costo estimado mínimo" placeholder="Desde" /><span>—</span><input value={maxEstimatedTotal} onChange={(event) => setMaxEstimatedTotal(event.target.value)} inputMode="numeric" aria-label="Costo estimado máximo" placeholder="Hasta" /></div>
+            <p className="filter-hint">Puja actual + broker fee LSC de $399–$699. El rango muestra resultados que se crucen con tu presupuesto.</p>
           </section>
           <section className="filter-group filter-group--makes">
             <div className="filter-group-label"><b>Marca</b><button onClick={() => setSelectedMakes([])}>Limpiar</button></div>
@@ -198,20 +252,20 @@ export default function Home() {
             <label className="browse-check"><input type="checkbox" checked={onlyBid} onChange={() => setOnlyBid(!onlyBid)} /><i><Check size={11} /></i><span>Solo con puja actual</span></label>
             <label className="browse-check"><input type="checkbox" checked={onlyPhotos} onChange={() => setOnlyPhotos(!onlyPhotos)} /><i><Check size={11} /></i><span>Solo con fotos reales</span></label>
           </section>
-          <section className="filter-group filter-group--information"><div className="filter-group-label"><b>Campos del feed</b></div><p><CircleAlert size={14} /> Los campos no recibidos se muestran como “No reportado”.</p></section>
+          <section className="filter-group filter-group--information"><div className="filter-group-label"><b>Campos del feed</b></div><p><CircleAlert size={14} /> Los campos no recibidos se muestran como “No reportado”.</p><p><CircleAlert size={14} /> El presupuesto LSC base no incluye fees de subasta, impuestos, transporte, asesoría ni reacondicionamiento/garantía.</p></section>
         </div>
         <div className="sidebar-footer"><button onClick={clearFilters}>Limpiar todos los filtros</button><span>{results.length} resultados</span></div>
       </aside>
 
       <section className="browse-results">
         <div className="browse-results-head"><div><p>INVENTARIO DISPONIBLE</p><h2>{results.length} vehículos</h2><span>{liveInventory.data?.generatedAt ? `Actualizado ${new Date(liveInventory.data.generatedAt).toLocaleString("es-US")}` : "Consultando corte Azure…"}</span></div><div className="browse-sort"><span>Ordenar</span><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} aria-label="Ordenar resultados"><option value="auction">Fecha de subasta</option><option value="bid-low">Puja: menor a mayor</option><option value="bid-high">Puja: mayor a menor</option></select></div></div>
-        <div className="browse-results-subhead"><span><Filter size={14} /> {selectedFacilities.length ? selectedFacilities.join(", ") : selectedStates.length ? selectedStates.join(", ") : selectedMakes.length ? selectedMakes.join(", ") : "Todos los vehículos"}</span><span>{onlyBid ? "Con puja actual" : "Con y sin puja"}{onlyPhotos ? " · Con fotos" : ""}</span></div>
+        <div className="browse-results-subhead"><span><Filter size={14} /> {selectedFacilities.length ? selectedFacilities.join(", ") : selectedStates.length ? selectedStates.join(", ") : selectedMakes.length ? selectedMakes.join(", ") : "Todos los vehículos"}</span><span>{auctionFrom || auctionTo ? "Fecha filtrada" : onlyBid ? "Con puja actual" : "Con y sin puja"}{minEstimatedTotal || maxEstimatedTotal ? " · Presupuesto LSC aplicado" : ""}{onlyPhotos ? " · Con fotos" : ""}</span></div>
         <div className="browse-list">
           {results.map((vehicle) => <article className="browse-row" key={vehicle.lot}>
             <a href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer" className="browse-row-link" aria-label={`Abrir ficha de ${vehicle.title} en una nueva pestaña`}>
               <div className="browse-photo">{vehicle.photos[0] ? <img src={vehicle.photos[0]} alt={`${vehicle.title}, lote ${vehicle.lot}`} /> : <div className="browse-photo-empty"><Image size={28} /><span>Sin foto</span></div>}<span><Image size={12} /> {vehicle.photos.length} fotos</span></div>
               <div className="browse-vehicle-main"><div className="browse-lot"><b>{vehicle.title}</b><em>LOTE #{vehicle.lot}</em></div><div className="browse-specs"><span>{vehicle.year || "Año N/R"}</span><span>{vehicle.transmission}</span><span>{vehicle.fuel}</span><span>{vehicle.drive}</span></div><div className="browse-data"><span><small>Ubicación</small><b><MapPin size={13} /> {vehicle.location}</b></span><span><small>Daño</small><b>{vehicle.damage}</b></span><span><small>Título</small><b>{vehicle.titleType}</b></span></div></div>
-              <div className="browse-auction"><span className="auction-source">COPART</span><div><small><CalendarDays size={13} /> Subasta</small><b>{vehicle.auctionDate}</b></div><div className="browse-bid"><small>PUJA ACTUAL</small><b>{formatMoney(vehicle.currentBid)}</b></div><strong>Ver ficha <ChevronUp size={15} /></strong></div>
+              <div className="browse-auction"><span className="auction-source">COPART</span><div><small><CalendarDays size={13} /> Subasta</small><b>{vehicle.auctionDate}</b></div><div className="browse-bid"><small>PUJA ACTUAL</small><b>{formatMoney(vehicle.currentBid)}</b></div><div className="browse-estimate"><small>PRESUPUESTO LSC*</small><b>{vehicle.estimatedTotal ? `${formatMoney(vehicle.estimatedTotal.min)} – ${formatMoney(vehicle.estimatedTotal.max)}` : "Sin puja"}</b></div><strong>Ver ficha <ChevronUp size={15} /></strong></div>
             </a>
           </article>)}
           {results.length === 0 && <div className="browse-empty"><Search size={30} /><h3>{liveInventory.isLoading ? "Cargando inventario…" : "No hay vehículos con esos filtros"}</h3><p>{liveInventory.isLoading ? "Consultando el corte persistido desde Azure." : "Prueba ampliando el año, la marca o el monto máximo."}</p>{!liveInventory.isLoading && <button onClick={clearFilters}>Restablecer búsqueda</button>}</div>}

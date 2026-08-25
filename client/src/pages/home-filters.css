@@ -1,0 +1,37 @@
+.filter-hint {
+  margin: 9px 0 0;
+  color: #7b879b;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.browse-estimate {
+  padding: 7px 10px;
+  border: 1px solid #dbe5fb;
+  background: #f7f9ff;
+}
+
+.browse-estimate small {
+  font: 800 8px Space Grotesk, sans-serif;
+  letter-spacing: 0.08em;
+}
+
+.browse-estimate b {
+  color: #042cd7 !important;
+  font: 700 11px Space Grotesk, sans-serif !important;
+  letter-spacing: -0.025em;
+}
+
+@media (max-width: 760px) {
+  .browse-estimate {
+    display: grid !important;
+    gap: 2px;
+    min-width: 104px;
+    padding: 5px 7px;
+  }
+
+  .browse-estimate b {
+    white-space: nowrap;
+    font-size: 9px !important;
+  }
+}
