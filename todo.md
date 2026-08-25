@@ -59,4 +59,4 @@
 - [x] Añadir filtros funcionales de odómetro, tipo de tracción y tipo de combustible.
 - [x] Añadir los filtros adicionales soportados por el feed y estados honestos para los no disponibles.
 - [x] Validar la barra lateral ampliada, filtros combinados y comportamiento responsive con el corte Azure.
-- [ ] Publicar y verificar la barra lateral ampliada en el dominio de LSC.
+- [x] Publicar y verificar la barra lateral ampliada en el dominio de LSC, incluidos filtros inferiores y una prueba directa de modelo en producción.
