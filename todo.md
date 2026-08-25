@@ -54,4 +54,4 @@
 - [x] Publicar y verificar el rediseño del buscador en el dominio de LSC.
 - [x] Revisar y normalizar los valores disponibles de daño, título y transmisión desde el corte Azure: el corte actual reporta “No reportado” en los 57 lotes.
 - [x] Añadir filtros laterales funcionales de tipo de daño, estado de título y transmisión, con opciones dinámicas basadas en el corte Azure.
-- [ ] Validar los nuevos filtros con datos vivos y publicar la mejora.
+- [x] Validar los nuevos filtros con datos vivos y publicar la mejora.
