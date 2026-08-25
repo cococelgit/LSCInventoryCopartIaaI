@@ -44,3 +44,6 @@
 - [x] Definir y validar una auditoría de uso bajo demanda protegida que no multiplique llamadas en cada ejecución del cron.
 - [x] Proteger los endpoints internos de validación, uso y sincronización con el token de servicio para impedir acceso o ejecuciones públicas.
 - [x] Reintentar la publicación del UI tras el timeout de red del registro de imágenes y validar el despliegue resultante.
+- [x] Revisar la carpeta oficial de recursos de LSC y seleccionar logo, variantes y colores de marca aprobados.
+- [x] Sustituir la identidad visual provisional del Inventory UI por los activos oficiales de LSC.
+- [ ] Validar y publicar la actualización visual de marca en el dominio del Inventory UI.

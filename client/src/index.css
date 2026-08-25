@@ -28,3 +28,14 @@
 
 /* Command-center pass — status first, dense evidence cues, and red limited to Cuban geometry or blocked data. */
 .inventory-app{background:linear-gradient(180deg,#082d62 0 333px,#eef3f9 333px)}.inventory-hero{background:linear-gradient(110deg,#082d62 0 64%,#0a3b83 64%);color:#fff}.inventory-hero::before{right:173px;opacity:.16}.inventory-hero::after{width:185px;right:-34px;top:-20px;background:var(--red);opacity:.95}.hero-grid{background-image:linear-gradient(rgba(163,212,255,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(163,212,255,.12) 1px,transparent 1px);mask-image:linear-gradient(90deg,black 0 80%,transparent 98%)}.hero-copy p{color:#75e6c0}.hero-copy p span{background:#32d6a0}.hero-copy h1{color:#fff}.hero-copy h1 em{color:#75e6c0}.hero-copy>span{color:#c5d9f5}.hero-stats{color:#fff}.hero-stats span{color:#d1e4ff}.hero-stats small{position:absolute;right:0;bottom:-26px;display:flex;align-items:center;gap:6px;color:#98c8ba;font:800 8px Space Grotesk;letter-spacing:.08em;white-space:nowrap}.hero-stats small .seal-dot{width:5px;height:5px;box-shadow:none}.details-link{color:#16795b}.details-link svg{color:#32d6a0}.photo-badge{background:rgba(4,30,70,.92)!important;border-left:2px solid #32d6a0;letter-spacing:.07em!important}.vehicle-card{border-color:#d4dfec}.vehicle-card:hover{border-color:#7ccdb5;box-shadow:0 16px 34px rgba(6,41,99,.13)}.audit-strip{box-shadow:inset 3px 0 #32d6a0}.active-filters{background:rgba(255,255,255,.4)}.catalog-footer{font-family:Space Grotesk,monospace;letter-spacing:.04em}.detail-source{font-family:Space Grotesk,monospace;letter-spacing:.07em}.detail-heading p{color:#177d5c}.detail-heading p i{background:#32d6a0}.detail-hero::after{border-color:#32d6a0;opacity:.08}.caution-card{border-top:3px solid var(--red)}
+
+/* LSC brand update — official logo assets and palette sampled from the approved source files. */
+:root{--lsc-blue:#042cd7;--lsc-blue-deep:#031b86;--lsc-red:#ff0400;--blue:var(--lsc-blue);--blue-dark:var(--lsc-blue-deep);--blue-pale:#edf1ff;--red:var(--lsc-red);--red-pale:#fff0ef;}
+.inventory-app{background:linear-gradient(180deg,var(--lsc-blue-deep) 0 333px,#eef3f9 333px)}
+.inventory-header,.detail-header{background:linear-gradient(100deg,#02176f,var(--lsc-blue-deep) 58%,#0423ad)}
+.inventory-hero{background:linear-gradient(110deg,#02176f 0 64%,var(--lsc-blue) 64%)}
+.inventory-brand,.detail-brand{gap:0}.inventory-brand img,.detail-brand img{width:174px;height:auto;filter:none;object-fit:contain}
+.inventory-brand span,.detail-brand span{display:none}
+.inventory-hero::after{background:var(--lsc-red)}
+.hero-copy h1 em{color:#c9f3e3}.hero-copy p{color:#c9f3e3}
+@media (max-width:760px){.inventory-brand img,.detail-brand img{width:140px}.inventory-header{padding:0 16px}.detail-header{padding:0 19px}}

@@ -46,8 +46,7 @@ export default function Home() {
     <main className="inventory-app">
       <header className="inventory-header">
         <a className="inventory-brand" href="/" aria-label="La Subasta Cubana Inventory">
-          <img src="/manus-storage/lsc-inventory-control-logo_1205ca6b.png" alt="Símbolo de La Subasta Cubana" />
-          <span><b>LA SUBASTA CUBANA</b><em>INVENTORY</em></span>
+          <img src="/manus-storage/lsc-logo-lineal-blanco_435d949d.png" alt="La Subasta Cubana" />
         </a>
         <div className="header-context"><span className="header-dot" /> CATÁLOGO INTERNO <i /> COPART · FLORIDA</div>
         <div className="header-right"><span><ShieldCheck size={16} /> Vista de solo lectura</span><button onClick={() => setFiltersOpen(true)}><SlidersHorizontal size={18} /> Filtros</button></div>
