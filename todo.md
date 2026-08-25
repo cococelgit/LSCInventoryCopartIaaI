@@ -55,3 +55,8 @@
 - [x] Revisar y normalizar los valores disponibles de daño, título y transmisión desde el corte Azure: el corte actual reporta “No reportado” en los 57 lotes.
 - [x] Añadir filtros laterales funcionales de tipo de daño, estado de título y transmisión, con opciones dinámicas basadas en el corte Azure.
 - [x] Validar los nuevos filtros con datos vivos y publicar la mejora.
+- [x] Inventariar los filtros relevantes de BidCars y contrastarlos con los campos reales de Azure.
+- [x] Añadir filtros funcionales de odómetro, tipo de tracción y tipo de combustible.
+- [x] Añadir los filtros adicionales soportados por el feed y estados honestos para los no disponibles.
+- [x] Validar la barra lateral ampliada, filtros combinados y comportamiento responsive con el corte Azure.
+- [ ] Publicar y verificar la barra lateral ampliada en el dominio de LSC.

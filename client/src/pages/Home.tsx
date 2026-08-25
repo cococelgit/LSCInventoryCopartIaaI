@@ -13,6 +13,13 @@ export function buildOptionCounts(values: string[]) {
   }, new Map<string, number>()).entries()).sort(([left], [right]) => left.localeCompare(right));
 }
 
+export function parseOdometer(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const digits = value.replace(/[^0-9]/g, "");
+  return digits ? Number(digits) : null;
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [selectedMakes, setSelectedMakes] = useState<string[]>([]);
@@ -24,6 +31,13 @@ export default function Home() {
   const [selectedDamages, setSelectedDamages] = useState<string[]>([]);
   const [selectedTitles, setSelectedTitles] = useState<string[]>([]);
   const [selectedTransmissions, setSelectedTransmissions] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [selectedVehicleTypes, setSelectedVehicleTypes] = useState<string[]>([]);
+  const [selectedStartCodes, setSelectedStartCodes] = useState<string[]>([]);
+  const [selectedDrives, setSelectedDrives] = useState<string[]>([]);
+  const [selectedFuels, setSelectedFuels] = useState<string[]>([]);
+  const [minOdometer, setMinOdometer] = useState("");
+  const [maxOdometer, setMaxOdometer] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("auction");
   const liveInventory = trpc.inventory.recent.useQuery({ take: 100 }, { refetchOnWindowFocus: true, staleTime: 60_000 });
@@ -44,26 +58,41 @@ export default function Home() {
     fuel: vehicle.fuelType ?? "No reportado",
     drive: vehicle.driveType ?? "No reportada",
     titleType: vehicle.titleType ?? "No reportado",
+    vehicleType: vehicle.vehicleType ?? "No reportado",
+    startCode: "No reportado",
+    odometer: parseOdometer(vehicle.odometer),
     status: vehicle.lotStatus || "En seguimiento",
   })) ?? [], [liveInventory.data]);
 
   const makes = useMemo(() => Array.from(new Set(vehicles.map((vehicle) => vehicle.make))).sort(), [vehicles]);
+  const models = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.model)), [vehicles]);
+  const vehicleTypes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.vehicleType)), [vehicles]);
   const damages = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.damage)), [vehicles]);
   const titleTypes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.titleType)), [vehicles]);
   const transmissions = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.transmission)), [vehicles]);
+  const startCodes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.startCode)), [vehicles]);
+  const drives = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.drive)), [vehicles]);
+  const fuels = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.fuel)), [vehicles]);
   const filteredVehicles = useMemo(() => vehicles.filter((vehicle) => {
     const normalized = `${vehicle.title} ${vehicle.lot} ${vehicle.make} ${vehicle.model}`.toLowerCase();
+    const appliesOdometer = Boolean(minOdometer || maxOdometer);
     return normalized.includes(query.toLowerCase())
       && (selectedMakes.length === 0 || selectedMakes.includes(vehicle.make))
+      && (selectedModels.length === 0 || selectedModels.includes(vehicle.model))
       && vehicle.year >= Number(minYear || 0)
       && vehicle.year <= Number(maxYear || 9999)
+      && (!appliesOdometer || (vehicle.odometer !== null && vehicle.odometer >= Number(minOdometer || 0) && vehicle.odometer <= Number(maxOdometer || Number.MAX_SAFE_INTEGER)))
       && (vehicle.currentBid === null || vehicle.currentBid <= Number(maxBid || Infinity))
       && (!onlyBid || vehicle.currentBid !== null)
       && (!onlyPhotos || vehicle.photos.length > 0)
+      && (selectedVehicleTypes.length === 0 || selectedVehicleTypes.includes(vehicle.vehicleType))
       && (selectedDamages.length === 0 || selectedDamages.includes(vehicle.damage))
       && (selectedTitles.length === 0 || selectedTitles.includes(vehicle.titleType))
-      && (selectedTransmissions.length === 0 || selectedTransmissions.includes(vehicle.transmission));
-  }), [vehicles, query, selectedMakes, minYear, maxYear, maxBid, onlyBid, onlyPhotos, selectedDamages, selectedTitles, selectedTransmissions]);
+      && (selectedStartCodes.length === 0 || selectedStartCodes.includes(vehicle.startCode))
+      && (selectedDrives.length === 0 || selectedDrives.includes(vehicle.drive))
+      && (selectedTransmissions.length === 0 || selectedTransmissions.includes(vehicle.transmission))
+      && (selectedFuels.length === 0 || selectedFuels.includes(vehicle.fuel));
+  }), [vehicles, query, selectedMakes, selectedModels, minYear, maxYear, minOdometer, maxOdometer, maxBid, onlyBid, onlyPhotos, selectedVehicleTypes, selectedDamages, selectedTitles, selectedStartCodes, selectedDrives, selectedTransmissions, selectedFuels]);
   const results = useMemo(() => [...filteredVehicles].sort((left, right) => {
     if (sortMode === "bid-low") return (left.currentBid ?? Number.MAX_SAFE_INTEGER) - (right.currentBid ?? Number.MAX_SAFE_INTEGER);
     if (sortMode === "bid-high") return (right.currentBid ?? -1) - (left.currentBid ?? -1);
@@ -72,7 +101,7 @@ export default function Home() {
 
   const toggleMake = (make: string) => setSelectedMakes((active) => active.includes(make) ? active.filter((item) => item !== make) : [...active, make]);
   const toggleValue = (value: string, active: string[], update: (next: string[]) => void) => update(active.includes(value) ? active.filter((item) => item !== value) : [...active, value]);
-  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedDamages([]); setSelectedTitles([]); setSelectedTransmissions([]); setMinYear("2000"); setMaxYear("2026"); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
+  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedModels([]); setSelectedVehicleTypes([]); setSelectedDamages([]); setSelectedTitles([]); setSelectedStartCodes([]); setSelectedDrives([]); setSelectedTransmissions([]); setSelectedFuels([]); setMinYear("2000"); setMaxYear("2026"); setMinOdometer(""); setMaxOdometer(""); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
   const sortLabel = sortMode === "auction" ? "Fecha de subasta" : sortMode === "bid-low" ? "Puja: menor a mayor" : "Puja: mayor a menor";
 
   return <main className="browse-page">
@@ -95,13 +124,33 @@ export default function Home() {
             <div className="filter-group-label"><b>Año</b><span>Rango</span></div>
             <div className="browse-range"><input value={minYear} onChange={(event) => setMinYear(event.target.value)} inputMode="numeric" aria-label="Año mínimo" /><span>—</span><input value={maxYear} onChange={(event) => setMaxYear(event.target.value)} inputMode="numeric" aria-label="Año máximo" /></div>
           </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Odómetro</b><span>Millas</span></div>
+            <div className="browse-range"><input value={minOdometer} onChange={(event) => setMinOdometer(event.target.value)} inputMode="numeric" aria-label="Odómetro mínimo" placeholder="Desde" /><span>—</span><input value={maxOdometer} onChange={(event) => setMaxOdometer(event.target.value)} inputMode="numeric" aria-label="Odómetro máximo" placeholder="Hasta" /></div>
+          </section>
           <section className="filter-group filter-group--makes">
             <div className="filter-group-label"><b>Marca</b><button onClick={() => setSelectedMakes([])}>Limpiar</button></div>
             <div className="make-list">{makes.map((make) => <label key={make}><input type="checkbox" checked={selectedMakes.includes(make)} onChange={() => toggleMake(make)} /><i><Check size={11} /></i><span>{make}</span><small>{vehicles.filter((vehicle) => vehicle.make === make).length}</small></label>)}</div>
           </section>
           <section className="filter-group">
+            <div className="filter-group-label"><b>Modelo</b><button onClick={() => setSelectedModels([])}>Limpiar</button></div>
+            <div className="make-list">{models.map(([model, count]) => <label key={model}><input type="checkbox" checked={selectedModels.includes(model)} onChange={() => toggleValue(model, selectedModels, setSelectedModels)} /><i><Check size={11} /></i><span>{model}</span><small>{count}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Tipo de vehículo</b><button onClick={() => setSelectedVehicleTypes([])}>Limpiar</button></div>
+            <div className="make-list">{vehicleTypes.map(([vehicleType, count]) => <label key={vehicleType}><input type="checkbox" checked={selectedVehicleTypes.includes(vehicleType)} onChange={() => toggleValue(vehicleType, selectedVehicleTypes, setSelectedVehicleTypes)} /><i><Check size={11} /></i><span>{vehicleType}</span><small>{count}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
             <div className="filter-group-label"><b>Tipo de daño</b><button onClick={() => setSelectedDamages([])}>Limpiar</button></div>
             <div className="make-list">{damages.map(([damage, count]) => <label key={damage}><input type="checkbox" checked={selectedDamages.includes(damage)} onChange={() => toggleValue(damage, selectedDamages, setSelectedDamages)} /><i><Check size={11} /></i><span>{damage}</span><small>{count}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Código de arranque</b><button onClick={() => setSelectedStartCodes([])}>Limpiar</button></div>
+            <div className="make-list">{startCodes.map(([startCode, count]) => <label key={startCode}><input type="checkbox" checked={selectedStartCodes.includes(startCode)} onChange={() => toggleValue(startCode, selectedStartCodes, setSelectedStartCodes)} /><i><Check size={11} /></i><span>{startCode}</span><small>{count}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Tipo de tracción</b><button onClick={() => setSelectedDrives([])}>Limpiar</button></div>
+            <div className="make-list">{drives.map(([drive, count]) => <label key={drive}><input type="checkbox" checked={selectedDrives.includes(drive)} onChange={() => toggleValue(drive, selectedDrives, setSelectedDrives)} /><i><Check size={11} /></i><span>{drive}</span><small>{count}</small></label>)}</div>
           </section>
           <section className="filter-group">
             <div className="filter-group-label"><b>Estado del título</b><button onClick={() => setSelectedTitles([])}>Limpiar</button></div>
@@ -110,6 +159,10 @@ export default function Home() {
           <section className="filter-group">
             <div className="filter-group-label"><b>Transmisión</b><button onClick={() => setSelectedTransmissions([])}>Limpiar</button></div>
             <div className="make-list">{transmissions.map(([transmission, count]) => <label key={transmission}><input type="checkbox" checked={selectedTransmissions.includes(transmission)} onChange={() => toggleValue(transmission, selectedTransmissions, setSelectedTransmissions)} /><i><Check size={11} /></i><span>{transmission}</span><small>{count}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Tipo de combustible</b><button onClick={() => setSelectedFuels([])}>Limpiar</button></div>
+            <div className="make-list">{fuels.map(([fuel, count]) => <label key={fuel}><input type="checkbox" checked={selectedFuels.includes(fuel)} onChange={() => toggleValue(fuel, selectedFuels, setSelectedFuels)} /><i><Check size={11} /></i><span>{fuel}</span><small>{count}</small></label>)}</div>
           </section>
           <section className="filter-group">
             <div className="filter-group-label"><b>Puja máxima</b><span>USD</span></div>
