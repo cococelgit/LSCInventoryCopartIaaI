@@ -97,5 +97,5 @@
 - [x] Probar paginación, control de acceso, datos reales y responsive antes de publicar.
 - [x] Renderizar el panel interno con descartes reales del endpoint protegido y verificar resumen, fila y evidencia.
 - [x] Ejercitar la paginación con el corte real, incluida navegación, conteos y reinicio al cambiar el orden.
-- [ ] Publicar un checkpoint y repetir validaciones básicas sobre la versión servida.
+- [x] Publicar un checkpoint y repetir validaciones básicas sobre la versión servida.
 - [x] Verificar mediante pruebas DOM y CSS el drawer móvil, la paginación apilada y la tabla interna desplazable.
