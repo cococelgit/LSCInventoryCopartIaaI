@@ -41,8 +41,8 @@ export default function Home() {
 
       <section className="inventory-hero">
         <div className="hero-grid" />
-        <div className="hero-copy"><p><span /> ESTADO DEL CORTE · VALIDADO</p><h1>Corte validado para<br /><em>revisión interna.</em></h1><span>Copart Florida · 25 AGO 2026, 05:59 UTC · Los campos ausentes se muestran como ausencia, sin inferencias.</span></div>
-        <div className="hero-stats"><b>24</b><span>lotes únicos<br />auditables</span></div>
+        <div className="hero-copy"><p><span /> ESTADO DEL CORTE · VALIDADO</p><h1>Corte de evidencia<br /><em>para revisión interna.</em></h1><span>Copart Florida · 25 AGO 2026, 05:59 UTC · Los campos ausentes se muestran como ausencia, sin inferencias.</span></div>
+        <div className="hero-stats"><b>24</b><span>lotes únicos<br />auditables</span><small><i className="seal-dot" /> feed manual · privado</small></div>
       </section>
 
       <div className="inventory-layout">
@@ -65,10 +65,10 @@ export default function Home() {
           <div className="active-filters"><span><Filter size={14} /> Filtros activos</span>{selectedMakes.map((make) => <button key={make} onClick={() => toggleMake(make)}>{make}<X size={13} /></button>)}{onlyBid && <button onClick={() => setOnlyBid(false)}>Con puja<X size={13} /></button>}{!selectedMakes.length && !onlyBid && <em>Todos los vehículos del corte</em>}</div>
           <div className="vehicle-list">
             {results.map((vehicle, index) => <article className="vehicle-card" key={vehicle.lot}>
-              <div className={`vehicle-visual vehicle-visual--${index % 3}`}><CarFront size={47} strokeWidth={1.25} /><span>MEDIA · EVIDENCIA NO DESCARGADA</span><i /><b><span className="seal-dot" /> SOLO METADATOS</b></div>
+              <div className={`vehicle-visual vehicle-visual--${index % 3}`}><img className="vehicle-photo" src={vehicle.gallery[0]} alt={`${vehicle.title}, lote ${vehicle.lot}`} /><span className="photo-badge"><Image size={12} /> FOTO REAL · EVIDENCIA 01/04</span><i /></div>
               <div className="vehicle-info"><div className="lot-line"><span>LOTE #{vehicle.lot}</span><i /> <b>{vehicle.availability}</b></div><h3>{vehicle.title}</h3><div className="vehicle-facts"><span><CalendarDays size={14} /> {vehicle.auctionDate}</span><span><Image size={14} /> {vehicle.photos} foto{vehicle.photos !== 1 ? "s" : ""}</span><span><MapPin size={14} /> Florida</span></div></div>
               <div className="bid-block"><span>PUJA ACTUAL</span><b className={vehicle.currentBid === null ? "bid-block__empty" : ""}>{formatMoney(vehicle.currentBid)}</b><small>{vehicle.currentBid === null ? "El feed no reportó monto" : "Dato reportado por el feed"}</small></div>
-              <a className="details-link" href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer">Ver detalle <ArrowUpRight size={18} /></a>
+              <a className="details-link" href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer">Inspeccionar<br />ficha <ArrowUpRight size={18} /></a>
             </article>)}
             {results.length === 0 && <div className="empty-state"><Search size={27} /><h3>No encontramos carros con esos filtros.</h3><p>Ajusta el año, la marca o la puja máxima para ver el corte completo.</p><button onClick={clear}>Restablecer filtros</button></div>}
           </div>

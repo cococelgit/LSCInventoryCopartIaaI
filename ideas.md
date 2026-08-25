@@ -70,3 +70,4 @@ Un monograma abstracto de tres trazos que sugiere una “L” formada por carril
 - La exploración de inventario adopta una composición limpia de **filtros laterales + resultados a la derecha**, con fondo blanco, azul profundo y rojo de señal inspirados en la bandera cubana.
 - Cada resultado abre una ficha de detalle en una pestaña nueva; los datos no entregados por el feed se muestran como ausentes y no se sustituyen con contenido inventado.
 - La consola conserva una jerarquía de control: rail lateral persistente, estado del corte y sellos de auditoría antes de la lista. El jade `#32D6A0` comunica validación; el rojo queda reservado para geometría de marca y campos críticos ausentes.
+- Las fotos reales se presentan como **evidencia de lote**: cada superficie de media incorpora señal de validación, numeración de foto o contexto de feed; no se usa lenguaje de catálogo comercial.

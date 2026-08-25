@@ -1,4 +1,6 @@
-- [x] Definir la estructura segura de filtros y fichas de inventario.
-- [x] Construir el panel lateral de filtros y la lista de vehículos.
-- [x] Crear rutas de detalle que se abran en una pestaña nueva.
-- [x] Verificar escritorio y móvil, guardar un checkpoint y compartir la versión actualizada.
+- [x] Inspeccionar los payloads auditados para confirmar URLs y campos reales de media.
+- [x] Renovar el acceso de lectura a registros de Azure con un código de dispositivo vigente.
+- [x] Verificar que la cuenta desbloqueada ya permite consultar los registros de diagnóstico.
+- [x] Definir el acceso temporal privado a imágenes y datos completos sin exponer la llave del proveedor.
+- [x] Integrar galería real y ficha ampliada por lote en una nueva pestaña.
+- [x] Verificar la interfaz, guardar versión y compartir la URL temporal actualizada.
