@@ -6,6 +6,13 @@ import { formatMoney } from "../data/inventory";
 
 type SortMode = "auction" | "bid-low" | "bid-high";
 
+export function buildOptionCounts(values: string[]) {
+  return Array.from(values.reduce((counts, value) => {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>()).entries()).sort(([left], [right]) => left.localeCompare(right));
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [selectedMakes, setSelectedMakes] = useState<string[]>([]);
@@ -14,6 +21,9 @@ export default function Home() {
   const [maxBid, setMaxBid] = useState("25000");
   const [onlyBid, setOnlyBid] = useState(false);
   const [onlyPhotos, setOnlyPhotos] = useState(false);
+  const [selectedDamages, setSelectedDamages] = useState<string[]>([]);
+  const [selectedTitles, setSelectedTitles] = useState<string[]>([]);
+  const [selectedTransmissions, setSelectedTransmissions] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("auction");
   const liveInventory = trpc.inventory.recent.useQuery({ take: 100 }, { refetchOnWindowFocus: true, staleTime: 60_000 });
@@ -38,6 +48,9 @@ export default function Home() {
   })) ?? [], [liveInventory.data]);
 
   const makes = useMemo(() => Array.from(new Set(vehicles.map((vehicle) => vehicle.make))).sort(), [vehicles]);
+  const damages = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.damage)), [vehicles]);
+  const titleTypes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.titleType)), [vehicles]);
+  const transmissions = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.transmission)), [vehicles]);
   const filteredVehicles = useMemo(() => vehicles.filter((vehicle) => {
     const normalized = `${vehicle.title} ${vehicle.lot} ${vehicle.make} ${vehicle.model}`.toLowerCase();
     return normalized.includes(query.toLowerCase())
@@ -46,8 +59,11 @@ export default function Home() {
       && vehicle.year <= Number(maxYear || 9999)
       && (vehicle.currentBid === null || vehicle.currentBid <= Number(maxBid || Infinity))
       && (!onlyBid || vehicle.currentBid !== null)
-      && (!onlyPhotos || vehicle.photos.length > 0);
-  }), [vehicles, query, selectedMakes, minYear, maxYear, maxBid, onlyBid, onlyPhotos]);
+      && (!onlyPhotos || vehicle.photos.length > 0)
+      && (selectedDamages.length === 0 || selectedDamages.includes(vehicle.damage))
+      && (selectedTitles.length === 0 || selectedTitles.includes(vehicle.titleType))
+      && (selectedTransmissions.length === 0 || selectedTransmissions.includes(vehicle.transmission));
+  }), [vehicles, query, selectedMakes, minYear, maxYear, maxBid, onlyBid, onlyPhotos, selectedDamages, selectedTitles, selectedTransmissions]);
   const results = useMemo(() => [...filteredVehicles].sort((left, right) => {
     if (sortMode === "bid-low") return (left.currentBid ?? Number.MAX_SAFE_INTEGER) - (right.currentBid ?? Number.MAX_SAFE_INTEGER);
     if (sortMode === "bid-high") return (right.currentBid ?? -1) - (left.currentBid ?? -1);
@@ -55,7 +71,8 @@ export default function Home() {
   }), [filteredVehicles, sortMode]);
 
   const toggleMake = (make: string) => setSelectedMakes((active) => active.includes(make) ? active.filter((item) => item !== make) : [...active, make]);
-  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setMinYear("2000"); setMaxYear("2026"); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
+  const toggleValue = (value: string, active: string[], update: (next: string[]) => void) => update(active.includes(value) ? active.filter((item) => item !== value) : [...active, value]);
+  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedDamages([]); setSelectedTitles([]); setSelectedTransmissions([]); setMinYear("2000"); setMaxYear("2026"); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
   const sortLabel = sortMode === "auction" ? "Fecha de subasta" : sortMode === "bid-low" ? "Puja: menor a mayor" : "Puja: mayor a menor";
 
   return <main className="browse-page">
@@ -81,6 +98,18 @@ export default function Home() {
           <section className="filter-group filter-group--makes">
             <div className="filter-group-label"><b>Marca</b><button onClick={() => setSelectedMakes([])}>Limpiar</button></div>
             <div className="make-list">{makes.map((make) => <label key={make}><input type="checkbox" checked={selectedMakes.includes(make)} onChange={() => toggleMake(make)} /><i><Check size={11} /></i><span>{make}</span><small>{vehicles.filter((vehicle) => vehicle.make === make).length}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Tipo de daño</b><button onClick={() => setSelectedDamages([])}>Limpiar</button></div>
+            <div className="make-list">{damages.map(([damage, count]) => <label key={damage}><input type="checkbox" checked={selectedDamages.includes(damage)} onChange={() => toggleValue(damage, selectedDamages, setSelectedDamages)} /><i><Check size={11} /></i><span>{damage}</span><small>{count}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Estado del título</b><button onClick={() => setSelectedTitles([])}>Limpiar</button></div>
+            <div className="make-list">{titleTypes.map(([titleType, count]) => <label key={titleType}><input type="checkbox" checked={selectedTitles.includes(titleType)} onChange={() => toggleValue(titleType, selectedTitles, setSelectedTitles)} /><i><Check size={11} /></i><span>{titleType}</span><small>{count}</small></label>)}</div>
+          </section>
+          <section className="filter-group">
+            <div className="filter-group-label"><b>Transmisión</b><button onClick={() => setSelectedTransmissions([])}>Limpiar</button></div>
+            <div className="make-list">{transmissions.map(([transmission, count]) => <label key={transmission}><input type="checkbox" checked={selectedTransmissions.includes(transmission)} onChange={() => toggleValue(transmission, selectedTransmissions, setSelectedTransmissions)} /><i><Check size={11} /></i><span>{transmission}</span><small>{count}</small></label>)}</div>
           </section>
           <section className="filter-group">
             <div className="filter-group-label"><b>Puja máxima</b><span>USD</span></div>
