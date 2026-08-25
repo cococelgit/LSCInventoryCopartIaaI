@@ -1,225 +1,81 @@
 /**
- * Style reminder — Tablero de torre de control: precisión sobria, evidencia visible,
- * azul petróleo profundo, jade para controles validados y ámbar para datos incompletos.
+ * Style reminder — Explorador limpio de bandera cubana: blanco predominante, azul profundo de confianza,
+ * rojo como señal de acción y acentos geométricos sobrios inspirados en la bandera, no en un marketplace.
  */
 import { useMemo, useState } from "react";
-import {
-  Activity,
-  ArrowUpRight,
-  BadgeCheck,
-  BarChart3,
-  CarFront,
-  Check,
-  ChevronRight,
-  CircleAlert,
-  ClipboardCheck,
-  Database,
-  Eye,
-  FileLock2,
-  Gauge,
-  Layers3,
-  LockKeyhole,
-  Menu,
-  Radar,
-  ShieldCheck,
-  Sparkles,
-  X,
-} from "lucide-react";
+import { ArrowUpRight, CalendarDays, CarFront, Check, ChevronDown, CircleAlert, Filter, Image, MapPin, Search, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { formatMoney, vehicles } from "../data/inventory";
 
-type View = "resumen" | "calidad" | "lotes";
-
-const lots = [
-  { lot: "48841576", vehicle: "2012 Chevrolet Malibu 2LT", bid: "—", photos: 1, status: "Sin puja actual" },
-  { lot: "50566696", vehicle: "2004 Workhorse P42 Delivery Truck", bid: "$450", photos: 13, status: "En seguimiento" },
-  { lot: "52483876", vehicle: "2019 Ford Fiesta SE", bid: "$450", photos: 1, status: "En seguimiento" },
-  { lot: "53629776", vehicle: "2025 Chevrolet Silverado C1500 RST", bid: "$14,600", photos: 12, status: "En seguimiento" },
-  { lot: "54292856", vehicle: "2025 Dodge Charger Daytona R", bid: "$5,900", photos: 12, status: "En seguimiento" },
-];
-
-const quality = [
-  { label: "VIN", value: "100%", note: "24 de 24", tone: "good" },
-  { label: "Título", value: "100%", note: "24 de 24", tone: "good" },
-  { label: "Fecha de subasta", value: "100%", note: "24 de 24", tone: "good" },
-  { label: "Fotos declaradas", value: "100%", note: "24 de 24", tone: "good" },
-  { label: "Puja actual", value: "62.5%", note: "15 de 24", tone: "warn" },
-  { label: "Daño", value: "0%", note: "No disponible", tone: "mute" },
-  { label: "Odómetro", value: "0%", note: "No disponible", tone: "mute" },
-];
-
-function Signal({ label, tone = "verified" }: { label: string; tone?: "verified" | "caution" | "neutral" }) {
-  return (
-    <span className={`signal signal--${tone}`}>
-      <i />
-      {label}
-    </span>
-  );
-}
-
-function Metric({ icon: Icon, value, label, detail, tone = "jade" }: { icon: typeof Database; value: string; label: string; detail: string; tone?: "jade" | "amber" | "blue" | "slate" }) {
-  return (
-    <article className="metric-card">
-      <div className={`metric-icon metric-icon--${tone}`}><Icon size={19} strokeWidth={1.8} /></div>
-      <p className="metric-label">{label}</p>
-      <strong>{value}</strong>
-      <span>{detail}</span>
-    </article>
-  );
-}
-
-function SectionHeader({ eyebrow, title, copy }: { eyebrow: string; title: string; copy: string }) {
-  return (
-    <div className="section-heading">
-      <p>{eyebrow}</p>
-      <h2>{title}</h2>
-      <span>{copy}</span>
-    </div>
-  );
-}
+const makes = Array.from(new Set(vehicles.map((vehicle) => vehicle.make)));
 
 export default function Home() {
-  const [view, setView] = useState<View>("resumen");
-  const [navOpen, setNavOpen] = useState(false);
-  const nav = useMemo(() => [
-    { id: "resumen" as const, label: "Resumen operativo", icon: Radar },
-    { id: "calidad" as const, label: "Calidad del feed", icon: BarChart3 },
-    { id: "lotes" as const, label: "Lotes verificados", icon: Layers3 },
-  ], []);
+  const [query, setQuery] = useState("");
+  const [selectedMakes, setSelectedMakes] = useState<string[]>([]);
+  const [minYear, setMinYear] = useState("2000");
+  const [maxYear, setMaxYear] = useState("2026");
+  const [maxBid, setMaxBid] = useState("25000");
+  const [onlyBid, setOnlyBid] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const switchView = (next: View) => {
-    setView(next);
-    setNavOpen(false);
-  };
+  const results = useMemo(() => vehicles.filter((vehicle) => {
+    const matchesQuery = `${vehicle.title} ${vehicle.lot}`.toLowerCase().includes(query.toLowerCase());
+    const matchesMake = selectedMakes.length === 0 || selectedMakes.includes(vehicle.make);
+    const matchesYear = vehicle.year >= Number(minYear || 0) && vehicle.year <= Number(maxYear || 9999);
+    const matchesBid = vehicle.currentBid === null || vehicle.currentBid <= Number(maxBid || Infinity);
+    return matchesQuery && matchesMake && matchesYear && matchesBid && (!onlyBid || vehicle.currentBid !== null);
+  }), [query, selectedMakes, minYear, maxYear, maxBid, onlyBid]);
+
+  const toggleMake = (make: string) => setSelectedMakes((active) => active.includes(make) ? active.filter((item) => item !== make) : [...active, make]);
+  const clear = () => { setQuery(""); setSelectedMakes([]); setMinYear("2000"); setMaxYear("2026"); setMaxBid("25000"); setOnlyBid(false); };
 
   return (
-    <main className="app-shell">
-      <aside className={`control-rail ${navOpen ? "control-rail--open" : ""}`}>
-        <div className="rail-top">
-          <div className="brand-lockup">
-            <img src="/manus-storage/lsc-inventory-control-logo_1205ca6b.png" alt="Símbolo de La Subasta Cubana" />
-            <span><b>LA SUBASTA CUBANA</b><em>INVENTORY REVIEW</em></span>
-          </div>
-          <button className="mobile-close" onClick={() => setNavOpen(false)} aria-label="Cerrar menú"><X size={18} /></button>
-        </div>
+    <main className="inventory-app">
+      <header className="inventory-header">
+        <a className="inventory-brand" href="/" aria-label="La Subasta Cubana Inventory">
+          <img src="/manus-storage/lsc-inventory-control-logo_1205ca6b.png" alt="Símbolo de La Subasta Cubana" />
+          <span><b>LA SUBASTA CUBANA</b><em>INVENTORY</em></span>
+        </a>
+        <div className="header-context"><span className="header-dot" /> CATÁLOGO INTERNO <i /> COPART · FLORIDA</div>
+        <div className="header-right"><span><ShieldCheck size={16} /> Vista de solo lectura</span><button onClick={() => setFiltersOpen(true)}><SlidersHorizontal size={18} /> Filtros</button></div>
+      </header>
 
-        <div className="rail-label">PANEL DE REVISIÓN</div>
-        <nav>
-          {nav.map(({ id, label, icon: Icon }) => (
-            <button key={id} onClick={() => switchView(id)} className={view === id ? "nav-item nav-item--active" : "nav-item"}>
-              <Icon size={17} strokeWidth={1.8} />
-              <span>{label}</span>
-              {view === id && <ChevronRight size={15} />}
-            </button>
-          ))}
-        </nav>
-
-        <div className="rail-bottom">
-          <div className="security-mini">
-            <LockKeyhole size={16} />
-            <div><b>Vista privada</b><span>Solo lectura</span></div>
-          </div>
-          <p>Snapshot validado<br />25 AGO 2026 · 05:59 UTC</p>
-        </div>
-      </aside>
-
-      <section className="workspace">
-        <header className="topbar">
-          <button className="mobile-menu" onClick={() => setNavOpen(true)} aria-label="Abrir menú"><Menu size={20} /></button>
-          <div className="breadcrumb"><span>CONTROL ROOM</span><ChevronRight size={14} /><b>INVENTORY ENGINE</b></div>
-          <div className="topbar-right"><span className="build-stamp">IR · MV-0.1</span><span className="divider" /><Signal label="ENTORNO PRIVADO" /><span className="divider" /><span className="readonly"><Eye size={14} /> SOLO LECTURA</span></div>
-        </header>
-
-        <section className="situation-strip">
-          <div className="situation-copy">
-            <div className="eyebrow"><Activity size={14} /> ESTADO DEL PILOTO</div>
-            <h1>Inventario validado,<br /><i>no prometido.</i></h1>
-            <p>Copart Florida · corte operativo limitado · evidencia guardada de forma privada.</p>
-            <div className="situation-signals"><Signal label="SINCRONIZACIÓN MANUAL" /><Signal label="0 FALLOS" tone="verified" /></div>
-          </div>
-          <div className="situation-orb" aria-hidden="true">
-            <span className="orb-ring orb-ring--one" /><span className="orb-ring orb-ring--two" /><span className="orb-core"><ShieldCheck size={34} /></span>
-          </div>
-          <div className="situation-foot"><span>ÚLTIMA EJECUCIÓN</span><b>20 vehículos</b><small>4 solicitudes lógicas</small></div>
-        </section>
-
-        <div className="content-wrap">
-          <div className="pulse-band" aria-label="Trazabilidad operativa activa">
-            <div className="pulse-band__tag"><i /> CANAL DE EVIDENCIA ACTIVO</div>
-            <div className="pulse-band__track"><span /><span /><span /><b /></div>
-            <div className="pulse-band__scope">COPART <em>/</em> FLORIDA <em>/</em> PRIVADO</div>
-          </div>
-          {view === "resumen" && (
-            <>
-              <div className="metrics-grid stagger">
-                <Metric icon={CarFront} value="24" label="Lotes únicos" detail="Inventario consolidado" tone="jade" />
-                <Metric icon={Database} value="26" label="Versiones auditables" detail="Cambios preservados" tone="blue" />
-                <Metric icon={ClipboardCheck} value="100%" label="VIN y título" detail="Cobertura de la muestra" tone="jade" />
-                <Metric icon={Gauge} value="62.5%" label="Puja actual" detail="Campo disponible" tone="amber" />
-              </div>
-
-              <div className="overview-grid">
-                <article className="panel feed-panel">
-                  <SectionHeader eyebrow="SALUD DEL FEED" title="Cobertura que sí llegó" copy="La ausencia se declara. No se rellena ni se infiere." />
-                  <div className="signal-lines">
-                    {quality.slice(0, 5).map((item) => (
-                      <div className="quality-line" key={item.label}>
-                        <div><span>{item.label}</span><b>{item.note}</b></div>
-                        <div className="bar"><i className={`bar-fill bar-fill--${item.tone}`} style={{ width: item.value }} /></div>
-                        <strong>{item.value}</strong>
-                      </div>
-                    ))}
-                  </div>
-                  <button className="inspect-link" onClick={() => switchView("calidad")}>Inspeccionar calidad completa <ArrowUpRight size={15} /></button>
-                </article>
-
-                <article className="panel protocol-panel">
-                  <div className="protocol-img" />
-                  <div className="protocol-content">
-                    <div className="mini-heading"><FileLock2 size={14} /> PROTOCOLO ACTIVO</div>
-                    <h3>El sistema registra la evidencia; la decisión sigue siendo humana.</h3>
-                    <ul>
-                      <li><Check size={15} /> PostgreSQL y Blob privados</li>
-                      <li><Check size={15} /> Identidad de mínimo privilegio</li>
-                      <li><Check size={15} /> Sin polling ni pujas automáticas</li>
-                    </ul>
-                  </div>
-                </article>
-              </div>
-            </>
-          )}
-
-          {view === "calidad" && (
-            <section className="panel quality-panel stagger">
-              <SectionHeader eyebrow="COBERTURA DE CAMPOS" title="Calidad del feed actual" copy="Resultados sobre 24 lotes únicos persistidos en el corte validado." />
-              <div className="quality-grid">
-                {quality.map((item) => (
-                  <article className={`quality-tile quality-tile--${item.tone}`} key={item.label}>
-                    <span>{item.label}</span><b>{item.value}</b><small>{item.note}</small>
-                    <div><i style={{ width: item.value }} /></div>
-                  </article>
-                ))}
-              </div>
-              <div className="caveat"><CircleAlert size={18} /><p><b>Límite actual:</b> daño y odómetro no llegaron en esta muestra. Esta vista los marca como ausentes; no genera una evaluación mecánica ni una recomendación de compra.</p></div>
-            </section>
-          )}
-
-          {view === "lotes" && (
-            <section className="panel lots-panel stagger">
-              <SectionHeader eyebrow="MUESTRA SANITIZADA" title="Lotes verificados" copy="Se muestran identificadores de lote y datos operativos. Los VIN completos y payloads permanecen privados." />
-              <div className="lots-table-wrap">
-                <table>
-                  <thead><tr><th>Lote</th><th>Vehículo</th><th>Puja actual</th><th>Fotos</th><th>Estado</th></tr></thead>
-                  <tbody>{lots.map((lot) => <tr key={lot.lot}><td><code>#{lot.lot}</code></td><td>{lot.vehicle}</td><td className={lot.bid === "—" ? "missing" : "bid"}>{lot.bid}</td><td>{lot.photos}</td><td><span className={lot.bid === "—" ? "lot-status lot-status--neutral" : "lot-status"}>{lot.status}</span></td></tr>)}</tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          <footer className="data-footer">
-            <span><Sparkles size={15} /> Corte operacional, no catálogo comercial</span>
-            <span>La Subasta Cubana · Inventory Engine MVP</span>
-          </footer>
-        </div>
+      <section className="inventory-hero">
+        <div className="hero-grid" />
+        <div className="hero-copy"><p><span /> ESTADO DEL CORTE · VALIDADO</p><h1>Corte validado para<br /><em>revisión interna.</em></h1><span>Copart Florida · 25 AGO 2026, 05:59 UTC · Los campos ausentes se muestran como ausencia, sin inferencias.</span></div>
+        <div className="hero-stats"><b>24</b><span>lotes únicos<br />auditables</span></div>
       </section>
+
+      <div className="inventory-layout">
+        <aside className={`filter-drawer ${filtersOpen ? "filter-drawer--open" : ""}`}>
+          <div className="rail-audit-status"><div><span className="seal-dot" /> EVIDENCIA VERIFICADA</div><b>24 <small>lotes únicos</small></b><p><i /> 26 versiones auditables</p><p><i /> Lectura manual · sin polling</p></div>
+          <div className="filter-head"><div><p>BUSCADOR</p><h2>Filtra resultados</h2></div><button className="close-filter" onClick={() => setFiltersOpen(false)} aria-label="Cerrar filtros"><X size={18} /></button></div>
+          <div className="filter-scroll">
+            <label className="search-field"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Marca, modelo o lote" /></label>
+            <section className="filter-section"><div className="filter-label"><span>Marca</span><small>{selectedMakes.length ? `${selectedMakes.length} seleccionada${selectedMakes.length > 1 ? "s" : ""}` : "Todas"}</small></div>{makes.map((make) => <label className="check-row" key={make}><input type="checkbox" checked={selectedMakes.includes(make)} onChange={() => toggleMake(make)} /><i><Check size={12} /></i><span>{make}</span><b>{vehicles.filter((vehicle) => vehicle.make === make).length}</b></label>)}</section>
+            <section className="filter-section"><div className="filter-label"><span>Año</span><small>rango</small></div><div className="range-fields"><label><span>Desde</span><input inputMode="numeric" value={minYear} onChange={(event) => setMinYear(event.target.value)} /></label><span className="range-line" /><label><span>Hasta</span><input inputMode="numeric" value={maxYear} onChange={(event) => setMaxYear(event.target.value)} /></label></div></section>
+            <section className="filter-section"><div className="filter-label"><span>Puja actual máxima</span><small>USD</small></div><label className="bid-field"><span>$</span><input inputMode="numeric" value={maxBid} onChange={(event) => setMaxBid(event.target.value)} /></label></section>
+            <label className="switch-row"><span><b>Solo con puja actual</b><small>Ocultar lotes sin monto</small></span><input type="checkbox" checked={onlyBid} onChange={() => setOnlyBid(!onlyBid)} /><i /></label>
+          </div>
+          <div className="filter-footer"><button onClick={clear}>Limpiar filtros</button><span><CircleAlert size={14} /> No completamos campos ausentes.</span></div>
+        </aside>
+
+        <section className="results-panel">
+          <div className="results-toolbar"><div><p>RESULTADOS DEL CORTE</p><h2><b>{results.length}</b> vehículos encontrados</h2></div><div className="sort-box"><span>Ordenar por</span><button>Puja actual <ChevronDown size={15} /></button></div></div>
+          <div className="audit-strip"><div><span className="seal-dot" /> CONTROLES ACTIVOS</div><span>VIN <b>100%</b></span><span>TÍTULO <b>100%</b></span><span>PUJA <b>62.5%</b></span><span>DAÑO / ODÓMETRO <em>NO RECIBIDOS</em></span></div>
+          <div className="active-filters"><span><Filter size={14} /> Filtros activos</span>{selectedMakes.map((make) => <button key={make} onClick={() => toggleMake(make)}>{make}<X size={13} /></button>)}{onlyBid && <button onClick={() => setOnlyBid(false)}>Con puja<X size={13} /></button>}{!selectedMakes.length && !onlyBid && <em>Todos los vehículos del corte</em>}</div>
+          <div className="vehicle-list">
+            {results.map((vehicle, index) => <article className="vehicle-card" key={vehicle.lot}>
+              <div className={`vehicle-visual vehicle-visual--${index % 3}`}><CarFront size={47} strokeWidth={1.25} /><span>MEDIA · EVIDENCIA NO DESCARGADA</span><i /><b><span className="seal-dot" /> SOLO METADATOS</b></div>
+              <div className="vehicle-info"><div className="lot-line"><span>LOTE #{vehicle.lot}</span><i /> <b>{vehicle.availability}</b></div><h3>{vehicle.title}</h3><div className="vehicle-facts"><span><CalendarDays size={14} /> {vehicle.auctionDate}</span><span><Image size={14} /> {vehicle.photos} foto{vehicle.photos !== 1 ? "s" : ""}</span><span><MapPin size={14} /> Florida</span></div></div>
+              <div className="bid-block"><span>PUJA ACTUAL</span><b className={vehicle.currentBid === null ? "bid-block__empty" : ""}>{formatMoney(vehicle.currentBid)}</b><small>{vehicle.currentBid === null ? "El feed no reportó monto" : "Dato reportado por el feed"}</small></div>
+              <a className="details-link" href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer">Ver detalle <ArrowUpRight size={18} /></a>
+            </article>)}
+            {results.length === 0 && <div className="empty-state"><Search size={27} /><h3>No encontramos carros con esos filtros.</h3><p>Ajusta el año, la marca o la puja máxima para ver el corte completo.</p><button onClick={clear}>Restablecer filtros</button></div>}
+          </div>
+          <footer className="catalog-footer"><span>Snapshot de auditoría · 25 AGO 2026, 05:59 UTC</span><span>La Subasta Cubana · No es un catálogo comercial</span></footer>
+        </section>
+      </div>
+      {filtersOpen && <button className="filter-backdrop" onClick={() => setFiltersOpen(false)} aria-label="Cerrar filtros" />}
     </main>
   );
 }

@@ -67,3 +67,6 @@ Un monograma abstracto de tres trazos que sugiere una “L” formada por carril
 - El monograma y el wordmark **La Subasta Cubana · Inventory Review** se muestran como firma del producto en la consola.
 - La línea de pulso y los sellos monospace se repiten como lenguaje de trazabilidad entre estado, métricas y alcance del feed.
 - La imagen secundaria se mantiene abstracta y basada en señales de datos, no en fotos que puedan leerse como catálogo o venta de vehículos.
+- La exploración de inventario adopta una composición limpia de **filtros laterales + resultados a la derecha**, con fondo blanco, azul profundo y rojo de señal inspirados en la bandera cubana.
+- Cada resultado abre una ficha de detalle en una pestaña nueva; los datos no entregados por el feed se muestran como ausentes y no se sustituyen con contenido inventado.
+- La consola conserva una jerarquía de control: rail lateral persistente, estado del corte y sellos de auditoría antes de la lista. El jade `#32D6A0` comunica validación; el rojo queda reservado para geometría de marca y campos críticos ausentes.

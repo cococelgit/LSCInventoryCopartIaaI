@@ -1,0 +1,4 @@
+- [x] Definir la estructura segura de filtros y fichas de inventario.
+- [x] Construir el panel lateral de filtros y la lista de vehículos.
+- [x] Crear rutas de detalle que se abran en una pestaña nueva.
+- [x] Verificar escritorio y móvil, guardar un checkpoint y compartir la versión actualizada.
