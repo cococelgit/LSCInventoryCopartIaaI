@@ -74,4 +74,4 @@
 - [x] Probar los nuevos filtros con datos vivos, publicar y validar el dominio actualizado.
 - [x] Probar funcionalmente en la interfaz el rango de fecha de subasta con un corte vivo.
 - [x] Probar funcionalmente en la interfaz el rango de presupuesto LSC base con un corte vivo.
-- [ ] Registrar evidencia final de ambos filtros en producción y publicar el cierre de validación.
+- [x] Registrar evidencia final de ambos filtros en producción y publicar el cierre de validación.
