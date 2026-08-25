@@ -51,4 +51,4 @@
 - [x] Reemplazar el hero y la consola de evidencia por una barra de búsqueda compacta y filtros completos fijos a la izquierda.
 - [x] Rediseñar el listado derecho como resultados densos con foto real, datos clave, puja y enlace de ficha en nueva pestaña.
 - [x] Validar filtros, datos vivos y comportamiento responsive del buscador simplificado.
-- [ ] Publicar y verificar el rediseño del buscador en el dominio de LSC.
+- [x] Publicar y verificar el rediseño del buscador en el dominio de LSC.

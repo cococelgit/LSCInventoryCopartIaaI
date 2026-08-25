@@ -9,3 +9,5 @@ El filtro `Solo con fotos reales` redujo los resultados de 55 a 34 y excluyó lo
 El control de restablecimiento devolvió el buscador a 55 resultados y reactivó el rango de años predeterminado. La ficha de cada resultado permanece como un enlace que abre una pestaña nueva.
 
 El interruptor `Solo con puja actual` redujo el listado de 55 a 46 vehículos y cambió el resumen operativo a “Con puja actual”. Con ello quedaron probados los filtros de marca, año, fotos y puja directamente sobre el corte vivo de Azure.
+
+La validación final del dominio publicado `lsc-inv-revi-zyn4tlbw.manus.space` confirmó que el hero anterior fue retirado. La página muestra búsqueda compacta, filtros verticales completos en la izquierda y resultados densos con fotos, puja y ficha en nueva pestaña a la derecha; el corte vivo mostró 57 lotes y 55 resultados iniciales.
