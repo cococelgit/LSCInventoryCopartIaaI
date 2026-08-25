@@ -1,5 +1,5 @@
 /** Inventario operativo: búsqueda y comparación rápidas, sin elementos decorativos que resten espacio a los lotes. */
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { trpc } from "../lib/trpc";
 import { CalendarDays, Check, ChevronDown, ChevronUp, CircleAlert, Filter, Image, MapPin, Search, SlidersHorizontal, Tag, X } from "lucide-react";
 import { formatMoney } from "../data/inventory";
@@ -204,7 +204,7 @@ export default function Home() {
           </section>
           <section className="filter-group">
             <div className="filter-group-label"><b>Presupuesto LSC base</b><span>USD</span></div>
-            <div className="browse-range"><input value={minEstimatedTotal} onChange={(event) => setMinEstimatedTotal(event.target.value)} inputMode="numeric" aria-label="Costo estimado mínimo" placeholder="Desde" /><span>—</span><input value={maxEstimatedTotal} onChange={(event) => setMaxEstimatedTotal(event.target.value)} inputMode="numeric" aria-label="Costo estimado máximo" placeholder="Hasta" /></div>
+            <div className="browse-range"><input value={minEstimatedTotal} onChange={(event) => setMinEstimatedTotal(event.target.value)} inputMode="numeric" aria-label="Presupuesto LSC mínimo" placeholder="Desde" /><span>—</span><input value={maxEstimatedTotal} onChange={(event) => setMaxEstimatedTotal(event.target.value)} inputMode="numeric" aria-label="Presupuesto LSC máximo" placeholder="Hasta" /></div>
             <p className="filter-hint">Puja actual + broker fee LSC de $399–$699. El rango muestra resultados que se crucen con tu presupuesto.</p>
           </section>
           <section className="filter-group filter-group--makes">
