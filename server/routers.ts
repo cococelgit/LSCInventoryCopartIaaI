@@ -27,6 +27,7 @@ type AzureVehicle = {
   location: string | null;
   state: string | null;
   titleType: string | null;
+  facilityId: string | null;
   photos: string[];
 };
 

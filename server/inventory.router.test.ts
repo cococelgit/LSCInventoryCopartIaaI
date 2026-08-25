@@ -30,8 +30,9 @@ const responsePayload = {
     currentBidUsd: 3800,
     buyNowUsd: null,
     location: "Clewiston (FL)",
-    state: null,
-    titleType: null,
+    state: "FL",
+    titleType: "CT",
+    facilityId: "366",
     photos: ["https://cs.copart.com/v1/sample-photo.jpg"],
   }],
 };
@@ -54,6 +55,7 @@ describe("inventory router", () => {
 
     expect(result.vehicles).toHaveLength(1);
     expect(result.vehicles[0]?.lot).toBe("41623946");
+    expect(result.vehicles[0]?.facilityId).toBe("366");
     expect(result.vehicles[0]?.photos).toEqual(["https://cs.copart.com/v1/sample-photo.jpg"]);
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/inventory/recent?take=3"),

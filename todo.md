@@ -60,3 +60,10 @@
 - [x] Añadir los filtros adicionales soportados por el feed y estados honestos para los no disponibles.
 - [x] Validar la barra lateral ampliada, filtros combinados y comportamiento responsive con el corte Azure.
 - [x] Publicar y verificar la barra lateral ampliada en el dominio de LSC, incluidos filtros inferiores y una prueba directa de modelo en producción.
+- [x] Auditar los campos de facility, estado, odómetro, daño, título, tracción y combustible en el contrato y payload del proveedor: facility/estado ya existen; el título se estaba descartando en la salida pública; los demás campos requieren lectura de detalle cuando no vengan en la lista.
+- [x] Enriquecer la sincronización para persistir datos reales por lote sin aumentar llamadas innecesarias.
+- [x] Corregir el mapeo público del estado de título y conservar facility/estado en el contrato del UI.
+- [x] Agregar filtros activos de ubicación/facility y estado a la barra lateral.
+- [x] Ejecutar una sincronización controlada, validar los campos enriquecidos y publicar el buscador actualizado.
+- [ ] Guardar la versión verificable del UI con filtros de facility/estado y el contrato actualizado.
+- [ ] Validar el dominio publicado con facility/estado y al menos un campo enriquecido real.
