@@ -39,18 +39,23 @@ jobs:
         run: |
           set -euo pipefail
           execution="${{ inputs.execution }}"
-          replicas="$(az containerapp job replica list --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json)"
-          echo "$replicas" | jq .
-          replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
-          if [ -z "$replica" ]; then
-            echo "No replica was returned for execution ${execution}." >&2
-            exit 1
-          fi
+          echo "Attempting Job logs without pinning a cleaned-up replica."
           az containerapp job logs show \
             --name "$COPART_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --execution "$execution" \
-            --replica "$replica" \
             --container "$COPART_JOB_NAME" \
             --tail 300 \
-            --format text
+            --format text || true
+
+          environment_id="$(az containerapp job show --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.environmentId' -o tsv)"
+          environment_name="${environment_id##*/}"
+          workspace_id="$(az containerapp env show --name "$environment_name" --resource-group "$RESOURCE_GROUP" --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' -o tsv)"
+          if [ -n "$workspace_id" ] && [ "$workspace_id" != "None" ]; then
+            az monitor log-analytics query \
+              --workspace "$workspace_id" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$COPART_JOB_NAME' | order by TimeGenerated desc | take 300" \
+              -o json
+          else
+            echo "No Log Analytics workspace identifier was available."
+          fi
