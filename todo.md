@@ -134,7 +134,7 @@
 - [x] Documentar el contrato y punto de integración para que otra tarea conecte Copart Excel al Inventory Engine.
 - [x] Crear y subir un único commit inicial con motor, UI, pruebas, infraestructura y documentación.
 - [x] Verificar en GitHub la rama, commit y archivos principales después del push.
-- [ ] Auditar BidCars en escritorio y móvil: todos los filtros, orden, resultados, paginación y estados vacíos.
+- [x] Auditar BidCars en escritorio y móvil: todos los filtros, orden, resultados, paginación y estados vacíos.
 - [x] Auditar una ficha real de BidCars: secciones, campos, jerarquía, galería y acciones, sin copiar marca ni contenido propietario.
 - [x] Documentar la matriz BidCars → LSC con disponibilidad real de cada campo en IAAI.
 - [x] Inspeccionar lista y detalle IAAI para inventariar campos, objetos anidados, fotos y valores disponibles mediante documentación oficial y catálogo sanitizado representativo.
@@ -144,12 +144,12 @@
 - [x] Rediseñar la ficha de vehículo con galería, especificaciones, condición, venta, ubicación, vendedor y documentos disponibles.
 - [x] Añadir pruebas de contratos IAAI, filtros, tarjetas, ficha, responsive, accesibilidad y protección de secretos: 57 Engine y 51 UI aprobadas.
 - [x] Desplegar motor y UI, validar producción con inventario IAAI real y documentar diferencias remanentes.
-- [ ] Reautorizar una identidad Azure con permisos de ACR build y actualización de Container Apps; el tenant bloqueó Azure CLI por security defaults.
+- [x] Resolver el bloqueo de Azure CLI por security defaults usando una identidad federada de mínimo privilegio para ACR build y actualización de Container Apps; la CLI local permanece sin sesión por decisión de seguridad.
 - [x] Programar un reintento único del despliegue Azure al cierre de la ventana de ocho horas.
-- [ ] Ejecutar el reintento programado y reportar si la identidad Azure ya puede autenticarse.
+- [x] Ejecutar el reintento programado y confirmar que el despliegue federado terminó correctamente; la autenticación local de Azure CLI no fue reactivada.
 - [x] Auditar el commit remoto del adaptador Copart Excel y sus cambios de contrato, persistencia, pruebas e infraestructura.
 - [x] Integrar los cambios remotos sin sobrescribir el rediseño IAAI/BidCars ni el motor ampliado local.
-- [ ] Ejecutar las suites combinadas y publicar el monorepo integrado en GitHub.
+- [x] Ejecutar las suites combinadas y publicar el cierre integrado en GitHub mediante la rama de liberación, sin sobrescribir el `main` remoto recuperado.
 - [x] Contrastar el catálogo muestral contra la documentación oficial de endpoints/filtros y metadata completa de Apibara para detectar capacidades no observadas.
 - [x] Ampliar el catálogo sanitizado con 36 muestras de categorías IAAI y 551 rutas, sin almacenar identificadores ni respuestas crudas.
 - [x] Cerrar la matriz BidCars → LSC clasificando cada filtro y campo como disponible, parcial o no observado.
@@ -157,15 +157,15 @@
 - [x] Verificar por render que cada tarjeta muestra estado, estimado proveedor, puja, Buy Now y especificaciones densas cuando existen.
 - [x] Añadir pruebas explícitas de teclado, labels, roles, focus y navegación sin mouse para tabs, filtros, carrusel, paginación y ficha.
 - [x] Preparar y revisar un único comando de Cloud Shell, sin secretos, para construir la imagen integrada y actualizar solo la API y el job IAAI manual.
-- [x] Ejecutar el comando autorizado desde Cloud Shell y conservar evidencia de la revisión e imagen realmente desplegadas.
+- [x] Intentar el comando autorizado desde Cloud Shell, documentar su desconexión y conservar la evidencia de la revisión e imagen desplegadas mediante el Deployment Script federado.
 - [x] Sustituir la descarga Git de Cloud Shell por una variante pública que no active solicitudes de credenciales locales.
-- [x] Diagnosticar la desconexión de Cloud Shell que ocurre al iniciar el comando de despliegue y recuperar una sesión estable.
+- [x] Diagnosticar la desconexión de Cloud Shell y concluir que no se recuperó una sesión estable; sustituirla por la ruta federada ARM/Deployment Scripts.
 - [x] Desplegar mediante una ruta del portal Azure que no requiera ejecutar comandos dentro de Cloud Shell.
-- [x] Configurar una integración GitHub-Azure de mínimo privilegio para construir la imagen y actualizar la API sin usar Cloud Shell.
+- [x] Evaluar la integración GitHub-Azure de mínimo privilegio, mantener ACR admin deshabilitado y sustituir el asistente no operativo por identidad federada ARM/Deployment Scripts.
 - [x] Reemplazar el asistente que exige credenciales administrativas de ACR por una publicación federada con permisos mínimos, manteniendo el usuario administrador de ACR deshabilitado.
 - [x] Ejecutar la plantilla federada revisada en Azure y comprobar el build, la nueva revisión API y la imagen del job IAAI sin iniciar una ejecución IAAI.
 - [x] Corregir la ruta federada para el entorno Azure Deployment Scripts, donde el runtime Azure CLI no incluye `tar`, y repetir el despliegue sin ampliar permisos ni habilitar ACR admin.
-- [x] Corregir el formato de contexto Git que ACR rechazó antes de iniciar el build, conservando el commit de liberación y el aislamiento del subdirectorio `inventory-engine`.
+- [x] Diagnosticar que ACR no podía acceder anónimamente al contexto Git privado y sustituirlo por el paquete HTTPS inmutable del commit de liberación.
 - [x] Cambiar el build federado al paquete fuente HTTPS inmutable, porque el repositorio GitHub consolidado no es accesible anónimamente por ACR.
 - [x] Comprobar `az account show` local antes de cualquier reintento y comparar su resultado con el estado del despliegue federado ya activo para evitar una actualización duplicada.
 - [x] Tras un despliegue verificado, ejecutar una sola sincronización IAAI manual de validación y medir la cobertura de campos ampliados mediante el bridge seguro.
@@ -173,5 +173,8 @@
 - [x] Actualizar el estado de despliegue con la evidencia posterior al éxito: imagen/digest, revisión API, imagen del job, sincronización IAAI única, cobertura de campos y diferencias remanentes.
 - [x] Mantener documentada como no recuperada la sesión Cloud Shell; la vía operativa validada es ARM/Deployment Scripts, no Cloud Shell.
 - [x] Registrar que la integración GitHub-Azure visual no quedó operativa por ACR admin deshabilitado; el despliegue exitoso usó identidad federada ARM con paquete HTTPS inmutable.
-- [ ] Publicar el cierre de despliegue y validación en la rama de liberación sin sobrescribir el `main` remoto, actualmente reemplazado por la recuperación del adaptador Copart Excel.
+- [x] Publicar el cierre de despliegue y validación en la rama de liberación sin sobrescribir el `main` remoto, actualmente reemplazado por la recuperación del adaptador Copart Excel.
+- [x] Documentar de forma explícita que el despliegue exitoso usó ARM/Deployment Scripts, identidad federada y paquete HTTPS inmutable; Cloud Shell no ejecutó el despliegue.
+- [x] Documentar que Cloud Shell sigue no recuperado y que la integración visual GitHub-Azure se descartó por requerir ACR admin, sin convertir ninguna de esas rutas en requisito operativo.
+- [x] Documentar que el contexto Git quedó descartado por acceso anónimo insuficiente al repositorio y que el artefacto HTTPS verificado por SHA fue la solución productiva.
 - [x] Documentar el bloqueo actual: `az account show` local exige login y el portal Azure controlable reporta falta de conexión; no iniciar otra mutación hasta recuperar una sesión autenticada y observable.

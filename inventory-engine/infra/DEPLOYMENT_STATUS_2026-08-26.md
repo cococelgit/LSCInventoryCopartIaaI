@@ -42,3 +42,12 @@ Se preparó y autorizó una ruta federada de mínimo privilegio con identidad as
 ## Controles operativos pendientes
 
 Cloud Shell no se recuperó como una sesión estable y observable; no debe ser requisito para la operación. La siguiente sincronización deberá ser una nueva decisión operativa, con límite de enriquecimiento explícito y verificación posterior del bridge; no se ejecuta automáticamente desde este cierre. Copart debe permanecer exclusivamente en el adaptador Excel.
+
+## Disposición final de rutas de despliegue
+
+| Ruta | Estado | Decisión operativa |
+|---|---|---|
+| Cloud Shell | Descartada para este despliegue | Se desconectó incluso en preflight; no ejecutó el despliegue exitoso y continúa sin una sesión estable observable. |
+| Asistente visual GitHub-Azure | Descartada | Requiere operaciones de credenciales administrativas de ACR; el usuario administrador del registro permanece deshabilitado. |
+| Contexto Git directo de ACR | Descartado | El repositorio consolidado no era accesible para el clonador anónimo de ACR. No se añadieron tokens ni credenciales al contexto. |
+| ARM + Deployment Scripts + identidad federada + paquete HTTPS SHA verificado | **Validada** | Fue la ruta que construyó, publicó y aplicó la imagen IAAI ampliada. |
