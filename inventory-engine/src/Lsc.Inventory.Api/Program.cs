@@ -275,6 +275,27 @@ if (copartFileIndex >= 0)
     return;
 }
 
+if (args.Contains("--copart-excel-diagnostics", StringComparer.OrdinalIgnoreCase))
+{
+    try
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var processor = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotProcessor>();
+        var result = await processor.RunLatestAsync(CancellationToken.None);
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+        Environment.ExitCode = (!result.Processed || !result.IsComplete || result.Errors > 0) ? 1 : 0;
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine(exception);
+        Environment.ExitCode = 1;
+    }
+
+    var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 300, 30, 600);
+    await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
+    return;
+}
+
 if (args.Contains("--copart-excel-run", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

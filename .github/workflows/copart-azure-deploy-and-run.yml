@@ -2,6 +2,15 @@ name: Copart Azure Deploy and Run
 
 on:
   workflow_dispatch:
+    inputs:
+      run_mode:
+        description: Execution mode
+        required: true
+        default: normal
+        type: choice
+        options:
+          - normal
+          - diagnostics
 
 permissions:
   contents: read
@@ -60,6 +69,11 @@ jobs:
         run: |
           set -euo pipefail
           image="${ACR_SERVER}/${IMAGE_NAME}:copart-${GITHUB_SHA}"
+          case "${{ inputs.run_mode }}" in
+            normal) job_arg="--copart-excel-run" ;;
+            diagnostics) job_arg="--copart-excel-diagnostics" ;;
+            *) echo "Unsupported run mode." >&2; exit 2 ;;
+          esac
           source_job="$(az containerapp job show --name "$SOURCE_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
 
           mapfile -t inherited_env < <(
@@ -79,6 +93,7 @@ jobs:
             "CopartExcel__MinimumRowCountRatioToRecentMedian=0.70"
             "CopartExcel__RecentSnapshotCountForBaseline=6"
             "CopartExcel__ProcessingBatchSize=1000"
+            "CopartExcel__DiagnosticHoldSeconds=300"
           )
           env_args+=("${inherited_env[@]}")
 
@@ -88,7 +103,7 @@ jobs:
               --resource-group "$RESOURCE_GROUP" \
               --image "$image" \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args=--copart-excel-run \
+              --args="$job_arg" \
               --replace-env-vars "${env_args[@]}" \
               --replica-timeout 3600 \
               --replica-retry-limit 0 \
@@ -105,7 +120,7 @@ jobs:
               --cpu 1.0 \
               --memory 2Gi \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args=--copart-excel-run \
+              --args="$job_arg" \
               --env-vars "${env_args[@]}" \
               --replica-timeout 3600 \
               --replica-retry-limit 0 \
@@ -129,6 +144,20 @@ jobs:
             exit 1
           fi
           echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
+
+      - name: Capture live Copart diagnostic output
+        if: ${{ inputs.run_mode == 'diagnostics' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job logs show \
+            --name "$COPART_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --execution "$COPART_EXECUTION_NAME" \
+            --container "$COPART_JOB_NAME" \
+            --follow \
+            --tail 300 \
+            --format text || true
 
       - name: Wait for the Copart execution result
         shell: bash
