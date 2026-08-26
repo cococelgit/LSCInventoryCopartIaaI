@@ -95,6 +95,7 @@ jobs:
             "CopartExcel__MinimumRowCountRatioToRecentMedian=0.70"
             "CopartExcel__RecentSnapshotCountForBaseline=6"
             "CopartExcel__ProcessingBatchSize=1000"
+            "CopartExcel__PersistenceConcurrency=12"
             "CopartExcel__DiagnosticHoldSeconds=300"
             "CopartExcel__AllowInterruptedSnapshotRetry=${allow_interrupted_retry}"
           )

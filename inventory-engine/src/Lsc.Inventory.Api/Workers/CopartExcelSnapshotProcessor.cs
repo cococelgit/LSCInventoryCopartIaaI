@@ -112,43 +112,70 @@ public sealed class CopartExcelSnapshotProcessor(
 
     private async Task ProcessBatchAsync(IReadOnlyList<AuctionVehicle> batch, ISet<string> observedLotKeys, ProcessingState state, CancellationToken cancellationToken)
     {
-        foreach (var row in batch)
+        var concurrency = Math.Clamp(_options.PersistenceConcurrency, 1, 64);
+        for (var offset = 0; offset < batch.Count; offset += concurrency)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            state.Observed++;
-            try
+            var window = batch.Skip(offset).Take(concurrency).ToArray();
+            var firstRowNumber = state.Observed + 1;
+            var outcomes = await Task.WhenAll(window.Select((row, index) => ProcessRowAsync(row, firstRowNumber + index, cancellationToken)));
+
+            foreach (var outcome in outcomes)
             {
-                var vehicle = CanonicalVehicleCleaner.Clean(row);
-                var evaluation = AuctionEligibilityEvaluator.Evaluate(vehicle);
-                await snapshotStore.PersistEligibilityDecisionAsync(evaluation, DateTimeOffset.UtcNow, cancellationToken);
-
-                foreach (var reason in evaluation.DiscardReasons) state.IncrementDiscardRule(reason.Code);
-                foreach (var flag in evaluation.Flags) state.IncrementFlagRule(flag.Code);
-
-                if (!evaluation.LoadToSystem)
+                state.Observed++;
+                if (outcome.Evaluation is not null)
                 {
-                    if (evaluation.Decision == "CUARENTENA") state.Quarantined++;
+                    foreach (var reason in outcome.Evaluation.DiscardReasons) state.IncrementDiscardRule(reason.Code);
+                    foreach (var flag in outcome.Evaluation.Flags) state.IncrementFlagRule(flag.Code);
+                }
+
+                if (outcome.Exception is not null)
+                {
+                    state.Errors++;
+                    state.Failures.Add($"row {outcome.RowNumber}: {outcome.Exception.Message}");
+                    logger.LogError(outcome.Exception, "Copart row {RowNumber} could not be persisted; snapshot reconciliation will be blocked.", outcome.RowNumber);
+                    continue;
+                }
+
+                if (outcome.Evaluation is null) continue;
+                if (!outcome.Evaluation.LoadToSystem)
+                {
+                    if (outcome.Evaluation.Decision == "CUARENTENA") state.Quarantined++;
                     else state.Discarded++;
                     continue;
                 }
 
-                await snapshotStore.PersistAsync(vehicle, DateTimeOffset.UtcNow, cancellationToken);
                 state.Accepted++;
-                if (evaluation.Decision == "MARCAR") state.Marked++;
-                if (!string.IsNullOrWhiteSpace(vehicle.LotNumber))
-                    observedLotKeys.Add($"{InventorySourcePolicy.CopartExcelSource}:{vehicle.LotNumber}");
+                if (outcome.Evaluation.Decision == "MARCAR") state.Marked++;
+                if (!string.IsNullOrWhiteSpace(outcome.Vehicle!.LotNumber))
+                    observedLotKeys.Add($"{InventorySourcePolicy.CopartExcelSource}:{outcome.Vehicle.LotNumber}");
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                state.Errors++;
-                state.Failures.Add($"row {state.Observed}: {exception.Message}");
-                logger.LogError(exception, "Copart row {RowNumber} could not be persisted; snapshot reconciliation will be blocked.", state.Observed);
-            }
+        }
+    }
+
+    private async Task<RowProcessingOutcome> ProcessRowAsync(AuctionVehicle row, int rowNumber, CancellationToken cancellationToken)
+    {
+        AuctionVehicle? vehicle = null;
+        EligibilityEvaluation? evaluation = null;
+        try
+        {
+            vehicle = CanonicalVehicleCleaner.Clean(row);
+            evaluation = AuctionEligibilityEvaluator.Evaluate(vehicle);
+            await snapshotStore.PersistEligibilityDecisionAsync(evaluation, DateTimeOffset.UtcNow, cancellationToken);
+            if (evaluation.LoadToSystem)
+                await snapshotStore.PersistAsync(vehicle, DateTimeOffset.UtcNow, cancellationToken);
+            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, exception);
         }
     }
 
     private static CopartExcelProcessingResult Failed(IReadOnlyList<string> failures, int rows, DateTimeOffset startedAt, string reason) =>
         new(false, false, false, reason, rows, 0, 0, 0, 0, 0, DateTimeOffset.UtcNow - startedAt, null, new Dictionary<string, int>(), new Dictionary<string, int>(), failures.Append(reason).ToArray());
+
+    private sealed record RowProcessingOutcome(int RowNumber, AuctionVehicle? Vehicle, EligibilityEvaluation? Evaluation, Exception? Exception);
 
     private sealed class ProcessingState
     {
