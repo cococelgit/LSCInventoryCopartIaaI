@@ -54,7 +54,7 @@ jobs:
           if [ -n "$workspace_id" ] && [ "$workspace_id" != "None" ]; then
             az monitor log-analytics query \
               --workspace "$workspace_id" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$COPART_JOB_NAME' | order by TimeGenerated desc | take 300" \
+              --analytics-query "union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL | where ContainerAppName_s == '$COPART_JOB_NAME' | order by TimeGenerated desc | take 500" \
               -o json
           else
             echo "No Log Analytics workspace identifier was available."
