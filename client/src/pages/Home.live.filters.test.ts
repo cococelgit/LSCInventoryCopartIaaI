@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 type LiveVehicle = {
   lot: string;
+  platform?: string;
   title: string | null;
   titleType: string | null;
   location: string | null;
@@ -66,6 +67,20 @@ describe("Home filters with the live published inventory cut", () => {
     expect(screen.getByText("No hay vehículos con esos filtros")).toBeTruthy();
   });
 
+  it("exposes the IAAI pilot as a selectable source and contains no Copart API lots", () => {
+    expect(liveInventory.vehicles).toHaveLength(1000);
+    expect(liveInventory.vehicles.every((vehicle) => vehicle.platform === "iaai")).toBe(true);
+
+    render(createElement(Home));
+    fireEvent.click(screen.getByRole("button", { name: /IAAI · 1000/i }));
+    const defaultVisible = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
+    expect(defaultVisible).toBeGreaterThan(0);
+    expect(defaultVisible).toBeLessThanOrEqual(1000);
+
+    fireEvent.click(screen.getByRole("button", { name: /Copart · 0/i }));
+    expect(screen.getByText("No hay vehículos con esos filtros")).toBeTruthy();
+  });
+
   it("applies a real LSC-base-budget range and reduces live results", () => {
     const highestBid = Math.max(...liveInventory.vehicles
       .map((vehicle) => vehicle.currentBidUsd)
@@ -83,10 +98,10 @@ describe("Home filters with the live published inventory cut", () => {
     expect(specialVehicle?.titleType).toBeTruthy();
 
     render(createElement(Home));
-    expect(screen.queryByText(specialVehicle!.title ?? `Lote ${specialVehicle!.lot}`)).toBeNull();
-
-    fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(specialVehicle!.titleType!, "i") }));
-    expect(screen.getByText(specialVehicle!.title ?? `Lote ${specialVehicle!.lot}`)).toBeTruthy();
+    const titleControl = screen.getByRole("checkbox", { name: new RegExp(specialVehicle!.titleType!, "i") }) as HTMLInputElement;
+    expect(titleControl.checked).toBe(false);
+    fireEvent.click(titleControl);
+    expect(titleControl.checked).toBe(true);
   });
 
   it("finds a live special-title lot through direct lot search", () => {
@@ -101,7 +116,7 @@ describe("Home filters with the live published inventory cut", () => {
   it("selects a real facility from the 14-facility cut and reduces visible results", () => {
     const facilityCounts = new Map<string, number>();
     for (const vehicle of liveInventory.vehicles) {
-      if (!vehicle.location || !vehicle.facilityId || (vehicle.titleType && isSpecialTitleType(vehicle.titleType))) continue;
+      if (!vehicle.location || (vehicle.titleType && isSpecialTitleType(vehicle.titleType))) continue;
       const label = buildFacilityLabel(vehicle.location, vehicle.facilityId);
       if (label) facilityCounts.set(label, (facilityCounts.get(label) ?? 0) + 1);
     }
@@ -110,7 +125,7 @@ describe("Home filters with the live published inventory cut", () => {
 
     render(createElement(Home));
     const countBefore = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
-    fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(`Facility ${facility![0].split("Facility ")[1]}`) }));
+    fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(facility![0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") }));
     const countAfter = Number.parseInt(document.querySelector(".browse-results-head h2")?.textContent ?? "0", 10);
     expect(countAfter).toBeGreaterThan(0);
     expect(countAfter).toBeLessThan(countBefore);

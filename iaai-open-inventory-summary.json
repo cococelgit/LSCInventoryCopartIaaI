@@ -1,0 +1,164 @@
+{
+  "uniqueOpenLots": 61793,
+  "rawRecords": 62300,
+  "duplicateOccurrences": 507,
+  "vehiclePageRequests": 3230,
+  "distinctFacilitiesObserved": 270,
+  "distinctStateCodesObserved": 50,
+  "stateCodes": [
+    "AK",
+    "AL",
+    "AR",
+    "AZ",
+    "CA",
+    "CO",
+    "CT",
+    "DE",
+    "FL",
+    "GA",
+    "HI",
+    "IA",
+    "ID",
+    "IL",
+    "IN",
+    "KS",
+    "KY",
+    "LA",
+    "MA",
+    "MD",
+    "ME",
+    "MI",
+    "MN",
+    "MO",
+    "MS",
+    "MT",
+    "NC",
+    "ND",
+    "NE",
+    "NH",
+    "NJ",
+    "NM",
+    "NV",
+    "NY",
+    "OH",
+    "OK",
+    "OR",
+    "PA",
+    "RI",
+    "SC",
+    "SD",
+    "TN",
+    "TX",
+    "UT",
+    "VA",
+    "VT",
+    "WA",
+    "WI",
+    "WV",
+    "WY"
+  ],
+  "topFacilities": [
+    {
+      "name": "REC RIDES - Online-Exclusive",
+      "count": 1484
+    },
+    {
+      "name": "Phoenix (AZ)",
+      "count": 1335
+    },
+    {
+      "name": "Seattle (WA)",
+      "count": 1254
+    },
+    {
+      "name": "Houston (TX)",
+      "count": 1153
+    },
+    {
+      "name": "North Hollywood (CA)",
+      "count": 1093
+    },
+    {
+      "name": "Columbus (OH)",
+      "count": 1049
+    },
+    {
+      "name": "Gov Auctions Zone 3",
+      "count": 987
+    },
+    {
+      "name": "Kansas City (KS)",
+      "count": 922
+    },
+    {
+      "name": "Indianapolis (IN)",
+      "count": 921
+    },
+    {
+      "name": "Los Angeles (CA)",
+      "count": 875
+    },
+    {
+      "name": "Miami-North (FL)",
+      "count": 854
+    },
+    {
+      "name": "Raleigh (NC)",
+      "count": 847
+    },
+    {
+      "name": "Dallas (TX)",
+      "count": 796
+    },
+    {
+      "name": "Metro DC (MD)",
+      "count": 750
+    },
+    {
+      "name": "Nashville (TN)",
+      "count": 741
+    },
+    {
+      "name": "Oklahoma City (OK)",
+      "count": 712
+    },
+    {
+      "name": "Fort Worth North (TX)",
+      "count": 693
+    },
+    {
+      "name": "Fremont (CA)",
+      "count": 677
+    },
+    {
+      "name": "East Bay (CA)",
+      "count": 662
+    },
+    {
+      "name": "Lexington (SC)",
+      "count": 642
+    },
+    {
+      "name": "Atlanta South (GA)",
+      "count": 636
+    },
+    {
+      "name": "Sacramento (CA)",
+      "count": 635
+    },
+    {
+      "name": "Cleveland (OH)",
+      "count": 621
+    },
+    {
+      "name": "San Antonio-South (TX)",
+      "count": 609
+    },
+    {
+      "name": "Long Island (NY)",
+      "count": 606
+    }
+  ],
+  "yearsWithInventory": 75,
+  "finishedAt": "2026-08-25T23:06:14.121Z"
+}

@@ -7,6 +7,7 @@ import { LSC_BROKER_FEE_MAX_USD, LSC_BROKER_FEE_MIN_USD } from "../data/lscPrici
 import "./home-filters.css";
 
 type SortMode = "auction" | "bid-low" | "bid-high";
+type SourceMode = "all" | "copart" | "iaai";
 export const INVENTORY_PAGE_SIZE = 24;
 
 export { LSC_BROKER_FEE_MAX_USD, LSC_BROKER_FEE_MIN_USD } from "../data/lscPricing";
@@ -26,7 +27,8 @@ export function parseOdometer(value: unknown) {
 }
 
 export function buildFacilityLabel(location: string, facilityId: string | null) {
-  return facilityId ? `${location} · Facility ${facilityId}` : null;
+  if (!location || location === "No reportada") return null;
+  return facilityId ? `${location} · Facility ${facilityId}` : location;
 }
 
 export function estimateBasePurchaseTotal(currentBid: number | null) {
@@ -74,6 +76,7 @@ export function buildPaginationPages(currentPage: number, totalPages: number) {
 
 export default function Home() {
   const [query, setQuery] = useState("");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("all");
   const [selectedMakes, setSelectedMakes] = useState<string[]>([]);
   const [minYear, setMinYear] = useState("2000");
   const [maxYear, setMaxYear] = useState("2026");
@@ -106,6 +109,7 @@ export default function Home() {
     const facilityId = vehicle.facilityId ?? null;
     return {
       lot: vehicle.lot,
+      platform: (vehicle.platform ?? "unknown").toLowerCase(),
       title: vehicle.title ?? `Lote ${vehicle.lot}`,
       year: vehicle.year ?? 0,
       make: vehicle.make ?? "Sin marca",
@@ -133,6 +137,7 @@ export default function Home() {
   }) ?? [], [liveInventory.data]);
 
   const makes = useMemo(() => Array.from(new Set(vehicles.map((vehicle) => vehicle.make))).sort(), [vehicles]);
+  const sourceCounts = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.platform)), [vehicles]);
   const models = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.model)), [vehicles]);
   const vehicleTypes = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.vehicleType)), [vehicles]);
   const damages = useMemo(() => buildOptionCounts(vehicles.map((vehicle) => vehicle.damage)), [vehicles]);
@@ -153,6 +158,7 @@ export default function Home() {
     const appliesAuctionDate = Boolean(auctionFrom || auctionTo);
     const appliesEstimatedTotal = Boolean(minEstimatedTotal || maxEstimatedTotal);
     return normalized.includes(normalizedQuery)
+      && (sourceMode === "all" || vehicle.platform === sourceMode)
       && (selectedMakes.length === 0 || selectedMakes.includes(vehicle.make))
       && (selectedModels.length === 0 || selectedModels.includes(vehicle.model))
       && (selectedFacilities.length === 0 || (vehicle.facilityLabel !== null && selectedFacilities.includes(vehicle.facilityLabel)))
@@ -172,7 +178,7 @@ export default function Home() {
       && (selectedDrives.length === 0 || selectedDrives.includes(vehicle.drive))
       && (selectedTransmissions.length === 0 || selectedTransmissions.includes(vehicle.transmission))
       && (selectedFuels.length === 0 || selectedFuels.includes(vehicle.fuel));
-  }), [vehicles, query, selectedMakes, selectedModels, selectedFacilities, selectedStates, minYear, maxYear, auctionFrom, auctionTo, minOdometer, maxOdometer, minEstimatedTotal, maxEstimatedTotal, maxBid, onlyBid, onlyPhotos, selectedVehicleTypes, selectedDamages, activeTitleTypes, selectedStartCodes, selectedDrives, selectedTransmissions, selectedFuels]);
+  }), [vehicles, sourceMode, query, selectedMakes, selectedModels, selectedFacilities, selectedStates, minYear, maxYear, auctionFrom, auctionTo, minOdometer, maxOdometer, minEstimatedTotal, maxEstimatedTotal, maxBid, onlyBid, onlyPhotos, selectedVehicleTypes, selectedDamages, activeTitleTypes, selectedStartCodes, selectedDrives, selectedTransmissions, selectedFuels]);
   const results = useMemo(() => [...filteredVehicles].sort((left, right) => {
     if (sortMode === "bid-low") return (left.currentBid ?? Number.MAX_SAFE_INTEGER) - (right.currentBid ?? Number.MAX_SAFE_INTEGER);
     if (sortMode === "bid-high") return (right.currentBid ?? -1) - (left.currentBid ?? -1);
@@ -181,21 +187,21 @@ export default function Home() {
   const totalPages = Math.max(1, Math.ceil(results.length / INVENTORY_PAGE_SIZE));
   const paginationPages = useMemo(() => buildPaginationPages(currentPage, totalPages), [currentPage, totalPages]);
   const paginatedResults = useMemo(() => results.slice((currentPage - 1) * INVENTORY_PAGE_SIZE, currentPage * INVENTORY_PAGE_SIZE), [results, currentPage]);
-  const filterSignature = JSON.stringify({ query, selectedMakes, minYear, maxYear, maxBid, onlyBid, onlyPhotos, selectedDamages, activeTitleTypes, selectedTransmissions, selectedModels, selectedVehicleTypes, selectedStartCodes, selectedDrives, selectedFuels, selectedFacilities, selectedStates, auctionFrom, auctionTo, minEstimatedTotal, maxEstimatedTotal, minOdometer, maxOdometer, sortMode });
+  const filterSignature = JSON.stringify({ sourceMode, query, selectedMakes, minYear, maxYear, maxBid, onlyBid, onlyPhotos, selectedDamages, activeTitleTypes, selectedTransmissions, selectedModels, selectedVehicleTypes, selectedStartCodes, selectedDrives, selectedFuels, selectedFacilities, selectedStates, auctionFrom, auctionTo, minEstimatedTotal, maxEstimatedTotal, minOdometer, maxOdometer, sortMode });
 
   useEffect(() => setCurrentPage(1), [filterSignature]);
   useEffect(() => setCurrentPage((page) => Math.min(page, totalPages)), [totalPages]);
 
   const toggleMake = (make: string) => setSelectedMakes((active) => active.includes(make) ? active.filter((item) => item !== make) : [...active, make]);
   const toggleValue = (value: string, active: string[], update: (next: string[]) => void) => update(active.includes(value) ? active.filter((item) => item !== value) : [...active, value]);
-  const clearFilters = () => { setQuery(""); setSelectedMakes([]); setSelectedModels([]); setSelectedVehicleTypes([]); setSelectedDamages([]); setSelectedTitles(null); setSelectedStartCodes([]); setSelectedDrives([]); setSelectedTransmissions([]); setSelectedFuels([]); setSelectedFacilities([]); setSelectedStates([]); setMinYear("2000"); setMaxYear("2026"); setAuctionFrom(""); setAuctionTo(""); setMinOdometer(""); setMaxOdometer(""); setMinEstimatedTotal(""); setMaxEstimatedTotal(""); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
+  const clearFilters = () => { setSourceMode("all"); setQuery(""); setSelectedMakes([]); setSelectedModels([]); setSelectedVehicleTypes([]); setSelectedDamages([]); setSelectedTitles(null); setSelectedStartCodes([]); setSelectedDrives([]); setSelectedTransmissions([]); setSelectedFuels([]); setSelectedFacilities([]); setSelectedStates([]); setMinYear("2000"); setMaxYear("2026"); setAuctionFrom(""); setAuctionTo(""); setMinOdometer(""); setMaxOdometer(""); setMinEstimatedTotal(""); setMaxEstimatedTotal(""); setMaxBid("25000"); setOnlyBid(false); setOnlyPhotos(false); };
   const sortLabel = sortMode === "auction" ? "Fecha de subasta" : sortMode === "bid-low" ? "Puja: menor a mayor" : "Puja: mayor a menor";
 
   return <main className="browse-page">
     <header className="browse-header">
       <a className="browse-brand" href="/" aria-label="La Subasta Cubana"><img src="/manus-storage/lsc-logo-lineal-blanco_435d949d.png" alt="La Subasta Cubana" /></a>
       <div className="browse-search" role="search"><span className="browse-scope">Inventario <ChevronDown size={14} /></span><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Busca por marca, modelo o número de lote" aria-label="Buscar vehículos" /></div>
-      <div className="browse-header-meta"><span><i /> COPART · FLORIDA</span><small>{vehicles.length} lotes</small></div>
+      <div className="browse-header-meta"><span><i /> {sourceMode === "all" ? "COPART + IAAI" : sourceMode.toUpperCase()}</span><small>{vehicles.length} lotes</small></div>
       <a className="browse-internal-link" href="/interno/descartes"><ShieldX size={15} /> Auditoría</a>
       <button className="browse-filter-button" onClick={() => setFiltersOpen(true)}><SlidersHorizontal size={18} /> Filtros</button>
     </header>
@@ -206,7 +212,7 @@ export default function Home() {
         <div className="sidebar-scroll">
           <section className="filter-group">
             <div className="filter-group-label"><b>Fuente</b><span>Disponible</span></div>
-            <div className="source-pills"><button className="source-pill source-pill--active">Copart</button><button className="source-pill" disabled>IAAI · pronto</button></div>
+            <div className="source-pills"><button className={sourceMode === "all" ? "source-pill source-pill--active" : "source-pill"} onClick={() => setSourceMode("all")}>Todos</button><button className={sourceMode === "copart" ? "source-pill source-pill--active" : "source-pill"} onClick={() => setSourceMode("copart")}>Copart · {sourceCounts.find(([source]) => source === "copart")?.[1] ?? 0}</button><button className={sourceMode === "iaai" ? "source-pill source-pill--active" : "source-pill"} onClick={() => setSourceMode("iaai")}>IAAI · {sourceCounts.find(([source]) => source === "iaai")?.[1] ?? 0}</button></div>
           </section>
           <section className="filter-group">
             <div className="filter-group-label"><b>Ubicación / facility</b><button onClick={() => setSelectedFacilities([])}>Limpiar</button></div>
@@ -292,7 +298,7 @@ export default function Home() {
             <a href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer" className="browse-row-link" aria-label={`Abrir ficha de ${vehicle.title} en una nueva pestaña`}>
               <div className="browse-photo">{vehicle.photos[0] ? <img src={vehicle.photos[0]} alt={`${vehicle.title}, lote ${vehicle.lot}`} /> : <div className="browse-photo-empty"><Image size={28} /><span>Sin foto</span></div>}<span><Image size={12} /> {vehicle.photos.length} fotos</span></div>
               <div className="browse-vehicle-main"><div className="browse-lot"><b>{vehicle.title}</b><em>LOTE #{vehicle.lot}</em></div><div className="browse-specs"><span>{vehicle.year || "Año N/R"}</span><span>{vehicle.transmission}</span><span>{vehicle.fuel}</span><span>{vehicle.drive}</span></div><div className="browse-data"><span><small>Ubicación</small><b><MapPin size={13} /> {vehicle.location}</b></span><span><small>Daño</small><b>{vehicle.damage}</b></span><span><small>Título</small><b>{vehicle.titleType}</b></span></div></div>
-              <div className="browse-auction"><span className="auction-source">COPART</span><div><small><CalendarDays size={13} /> Subasta</small><b>{vehicle.auctionDate}</b></div><div className="browse-bid"><small>PUJA ACTUAL</small><b>{formatMoney(vehicle.currentBid)}</b></div><div className="browse-estimate"><small>PRESUPUESTO LSC*</small><b>{vehicle.estimatedTotal ? `${formatMoney(vehicle.estimatedTotal.min)} – ${formatMoney(vehicle.estimatedTotal.max)}` : "Sin puja"}</b></div><strong>Ver ficha <ChevronUp size={15} /></strong></div>
+              <div className="browse-auction"><span className="auction-source">{vehicle.platform.toUpperCase()}</span><div><small><CalendarDays size={13} /> Subasta</small><b>{vehicle.auctionDate}</b></div><div className="browse-bid"><small>PUJA ACTUAL</small><b>{formatMoney(vehicle.currentBid)}</b></div><div className="browse-estimate"><small>PRESUPUESTO LSC*</small><b>{vehicle.estimatedTotal ? `${formatMoney(vehicle.estimatedTotal.min)} – ${formatMoney(vehicle.estimatedTotal.max)}` : "Sin puja"}</b></div><strong>Ver ficha <ChevronUp size={15} /></strong></div>
             </a>
           </article>)}
           {results.length === 0 && <div className="browse-empty"><Search size={30} /><h3>{liveInventory.isLoading ? "Cargando inventario…" : "No hay vehículos con esos filtros"}</h3><p>{liveInventory.isLoading ? "Consultando el corte persistido desde Azure." : "Prueba ampliando el año, la marca o el monto máximo."}</p>{!liveInventory.isLoading && <button onClick={clearFilters}>Restablecer búsqueda</button>}</div>}

@@ -99,3 +99,22 @@
 - [x] Ejercitar la paginación con el corte real, incluida navegación, conteos y reinicio al cambiar el orden.
 - [x] Publicar un checkpoint y repetir validaciones básicas sobre la versión servida.
 - [x] Verificar mediante pruebas DOM y CSS el drawer móvil, la paginación apilada y la tabla interna desplazable.
+- [x] Confirmar los endpoints IAAI de Apibara, 270 facilities observadas en 50 estados y 61,793 lotes abiertos únicos con año 1900–2027, sin descargar detalles individuales.
+- [x] Calcular páginas, solicitudes, duración y margen de cuota para una carga inicial completa de IAAI: 3,230 páginas, piso paralelo de 3.76 minutos, ventana productiva estimada de 45–90 minutos y 26,091 solicitudes restantes.
+- [x] Definir el proceso de backfill completo, reglas previas a PostgreSQL y sincronización incremental de IAAI.
+- [x] Entregar la recomendación operativa con alcance, riesgos y secuencia exacta de implementación.
+- [x] Documentar el alcance de facilities como ubicaciones observadas en lotes abiertos, no como catálogo administrativo completo de IAAI.
+- [x] Pausar inmediatamente el job actual para detener nuevas llamadas Copart a Apibara sin borrar el inventario existente.
+- [x] Separar permanentemente las fuentes en código y configuración: IAAI=Apibara; Copart=adaptador Excel entregado por la otra tarea.
+- [x] Actualizar manifests y jobs para impedir que cualquier ejecución Apibara incluya la plataforma Copart.
+- [x] Dejar preparado el contrato del adaptador Excel, sin duplicar la implementación que se está construyendo en la otra tarea.
+- [x] Resolver el conflicto entre el adjunto D09 y la política vigente: ningún tipo de título, incluido Rebuilt, debe descartarse solo por su categoría.
+- [x] Añadir D00C, M00, D00D, Q01, Q04 y marcas M01–M08 al motor determinístico compartido.
+- [x] Implementar normalización técnica, comercial y evidencia raw/normalized antes de persistir vehículos aceptados.
+- [x] Incorporar estados de reconciliación y reglas de reactivación/despublicación sin borrar historial.
+- [x] Ejecutar pruebas unitarias por regla, precedencia, títulos permitidos y limpieza canónica: 55 pruebas aprobadas.
+- [x] Ejecutar un piloto controlado de 1,000 vehículos IAAI list-only y medir aceptados, descartados, marcados, errores y consumo.
+- [x] Validar en PostgreSQL/Blob y en el UI los vehículos elegibles del piloto antes de ampliar a todo IAAI.
+- [x] Exponer la plataforma por vehículo en el contrato público y el bridge para distinguir Copart de IAAI.
+- [x] Activar IAAI como fuente seleccionable en el UI y eliminar la etiqueta provisional “pronto”.
+- [x] Validar fotos IAAI, conteo y paginación con los 1,000 vehículos elegibles del piloto.

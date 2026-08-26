@@ -27,7 +27,8 @@ describe("parseOdometer", () => {
 describe("buildFacilityLabel", () => {
   it("keeps the reported location together with its facility identifier", () => {
     expect(buildFacilityLabel("Clewiston (FL)", "366")).toBe("Clewiston (FL) · Facility 366");
-    expect(buildFacilityLabel("Clewiston (FL)", null)).toBeNull();
+    expect(buildFacilityLabel("Miami-North (FL)", null)).toBe("Miami-North (FL)");
+    expect(buildFacilityLabel("No reportada", null)).toBeNull();
   });
 });
 

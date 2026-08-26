@@ -2,6 +2,7 @@ const INVENTORY_API_BASE_URL = "https://ca-lsc-inventory-api-prod.lemoncliff-62e
 
 export type AzureVehicle = {
   lot: string;
+  platform: string;
   observedAt: string;
   title: string | null;
   year: number | null;
