@@ -120,6 +120,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     private readonly ConcurrentDictionary<string, EligibilityAuditItem> _eligibility = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (string Platform, bool Active, int MissingCount)> _lifecycle = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CopartSnapshotReceipt> _copartSnapshots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _copartSnapshotStatuses = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _copartRuns = new();
 
     public Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
@@ -137,10 +138,17 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     public Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_copartSnapshots.ContainsKey(receipt.Sha256))
+        if (_copartSnapshots.ContainsKey(receipt.Sha256) &&
+            (!_copartSnapshotStatuses.TryGetValue(receipt.Sha256, out var status) ||
+             !string.Equals(status, "completed_with_errors", StringComparison.OrdinalIgnoreCase)))
+        {
             return Task.FromResult(new CopartSnapshotRegistration(false, true, null, null, "F02: Copart snapshot hash was already processed."));
+        }
 
-        var historicalRows = _copartSnapshots.Values
+        var historicalRows = _copartSnapshots
+            .Where(snapshot => _copartSnapshotStatuses.TryGetValue(snapshot.Key, out var snapshotStatus) &&
+                string.Equals(snapshotStatus, "succeeded", StringComparison.OrdinalIgnoreCase))
+            .Select(snapshot => snapshot.Value)
             .OrderByDescending(snapshot => snapshot.DownloadedAt)
             .Take(Math.Max(1, baselineSnapshotCount))
             .Select(snapshot => snapshot.RowCount)
@@ -151,6 +159,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             return Task.FromResult(new CopartSnapshotRegistration(false, false, null, median, "F05: Copart snapshot row count is below the accepted baseline."));
 
         _copartSnapshots[receipt.Sha256] = receipt;
+        _copartSnapshotStatuses[receipt.Sha256] = "running";
         var runId = Guid.NewGuid();
         _copartRuns[runId] = receipt.Sha256;
         return Task.FromResult(new CopartSnapshotRegistration(true, false, runId, median, null));
@@ -159,6 +168,12 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     public Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (_copartRuns.TryGetValue(runId, out var sha256))
+        {
+            _copartSnapshotStatuses[sha256] = completion.Errors == 0 && completion.IsComplete
+                ? "succeeded"
+                : "completed_with_errors";
+        }
         return Task.CompletedTask;
     }
 

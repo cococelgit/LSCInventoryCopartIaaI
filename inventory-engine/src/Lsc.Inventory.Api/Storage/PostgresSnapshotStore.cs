@@ -306,7 +306,25 @@ public sealed class PostgresSnapshotStore(
             values (
                 @sha256, @file_name, @downloaded_at, @file_size_bytes, @row_count, @processing_batch_size,
                 true, 'running', @run_id)
-            on conflict (sha256) do nothing
+            on conflict (sha256) do update set
+                file_name = excluded.file_name,
+                downloaded_at = excluded.downloaded_at,
+                file_size_bytes = excluded.file_size_bytes,
+                row_count = excluded.row_count,
+                processing_batch_size = excluded.processing_batch_size,
+                is_complete = true,
+                status = 'running',
+                run_id = excluded.run_id,
+                finished_at = null,
+                observed_count = 0,
+                accepted_count = 0,
+                discarded_count = 0,
+                quarantined_count = 0,
+                marked_count = 0,
+                error_count = 0,
+                failures = '[]'::jsonb,
+                updated_at = now()
+            where copart_snapshot_manifests.status = 'completed_with_errors'
             returning run_id;
             """;
         AddParameter(insert, "sha256", receipt.Sha256);
