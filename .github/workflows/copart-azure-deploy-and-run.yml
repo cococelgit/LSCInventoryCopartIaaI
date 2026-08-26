@@ -94,9 +94,9 @@ jobs:
             "CopartExcel__RecentSnapshotCountForBaseline=6"
             "CopartExcel__ProcessingBatchSize=1000"
             "CopartExcel__DiagnosticHoldSeconds=300"
-            "Persistence__RunMigrations=true"
           )
           env_args+=("${inherited_env[@]}")
+          env_args+=("Persistence__RunMigrations=false")
 
           if az containerapp job show --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
             az containerapp job update \

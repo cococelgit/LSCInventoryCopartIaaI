@@ -19,9 +19,11 @@ public sealed class PostgresSnapshotStore(
     ILogger<PostgresSnapshotStore> logger) : IInventorySnapshotStore
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
+    private static readonly SemaphoreSlim CopartSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim EligibilitySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
     private static bool _schemaInitialized;
+    private static bool _copartSchemaInitialized;
     private static bool _eligibilitySchemaInitialized;
     private static bool _lifecycleSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
@@ -268,7 +270,7 @@ public sealed class PostgresSnapshotStore(
 
     public async Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken)
     {
-        await EnsureSchemaAsync(cancellationToken);
+        await EnsureCopartSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
 
         var historicalRows = new List<int>();
@@ -320,7 +322,7 @@ public sealed class PostgresSnapshotStore(
 
     public async Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken)
     {
-        await EnsureSchemaAsync(cancellationToken);
+        await EnsureCopartSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
@@ -972,6 +974,50 @@ public sealed class PostgresSnapshotStore(
         finally
         {
             SchemaLock.Release();
+        }
+    }
+
+    private async Task EnsureCopartSchemaAsync(CancellationToken cancellationToken)
+    {
+        if (_copartSchemaInitialized) return;
+        await CopartSchemaLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_copartSchemaInitialized) return;
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+                create table if not exists copart_snapshot_manifests (
+                    sha256 text primary key,
+                    file_name text not null,
+                    downloaded_at timestamptz not null,
+                    file_size_bytes bigint not null,
+                    row_count integer not null,
+                    processing_batch_size integer not null,
+                    is_complete boolean not null,
+                    status text not null,
+                    run_id uuid not null unique,
+                    finished_at timestamptz,
+                    observed_count integer not null default 0,
+                    accepted_count integer not null default 0,
+                    discarded_count integer not null default 0,
+                    quarantined_count integer not null default 0,
+                    marked_count integer not null default 0,
+                    error_count integer not null default 0,
+                    failures jsonb not null default '[]'::jsonb,
+                    created_at timestamptz not null default now(),
+                    updated_at timestamptz not null default now()
+                );
+                create index if not exists ix_copart_snapshot_manifests_status_downloaded
+                    on copart_snapshot_manifests (status, downloaded_at desc);
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            _copartSchemaInitialized = true;
+        }
+        finally
+        {
+            CopartSchemaLock.Release();
         }
     }
 
