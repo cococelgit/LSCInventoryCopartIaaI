@@ -1,0 +1,6 @@
+release_id=iaai-extended-20260826r1
+source_commit=4b1d7d8c5824b78167c4ebe28d58a3a751e177d7
+source_branch=release/azure-iaai-extended-20260826
+copart_excel_history=75c5feceb034287bb6183f730a0f4cdb23f02fe2
+integrated_engine_history=62b723d224aaeb7d934eeb88e1e6c785a663accf
+scope=build_image_update_read_api_update_manual_iaai_job_only

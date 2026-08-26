@@ -10,9 +10,9 @@ La cuenta Azure debe tener acceso al tenant `ccfdc482-7c38-458c-b7b7-b7967a122f1
 
 ## Flujo Cloud Shell de un solo comando
 
-La rama de liberación `release/azure-iaai-extended-20260826` une de forma no destructiva el historial público del adaptador Copart Excel con el monorepo integrado. El script `cloud-shell-deploy-iaai-extended.sh` valida ambas procedencias antes de cambiar Azure, calcula una etiqueta de imagen a partir del commit y solo actualiza la imagen de la API de lectura y del job IAAI manual. No ejecuta el job, no cambia secretos, redes, identidades administradas ni programación.
+La rama de liberación `release/azure-iaai-extended-20260826` une de forma no destructiva el historial público del adaptador Copart Excel con el monorepo integrado. Para evitar solicitudes de credenciales Git en Cloud Shell, se distribuye un paquete público inmutable con un manifiesto de liberación. El script `cloud-shell-deploy-iaai-extended.sh` valida ese manifiesto antes de cambiar Azure, usa la etiqueta fija `iaai-extended-20260826r1` y solo actualiza la imagen de la API de lectura y del job IAAI manual. No ejecuta el job, no cambia secretos, redes, identidades administradas ni programación.
 
-Ejecutar el script desde esa rama en una Cloud Shell ya autenticada. Si cualquiera de las comprobaciones de tenant, suscripción, historial o recursos no coincide, el script termina antes de construir o actualizar recursos.
+Ejecutar el script desde el paquete en una Cloud Shell ya autenticada. Si cualquiera de las comprobaciones de tenant, suscripción, manifiesto o recursos no coincide, el script termina antes de construir o actualizar recursos.
 
 ## Secuencia de despliegue
 

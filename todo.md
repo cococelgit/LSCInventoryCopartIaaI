@@ -158,3 +158,4 @@
 - [x] Añadir pruebas explícitas de teclado, labels, roles, focus y navegación sin mouse para tabs, filtros, carrusel, paginación y ficha.
 - [ ] Preparar y revisar un único comando de Cloud Shell, sin secretos, para construir la imagen integrada y actualizar solo la API y el job IAAI manual.
 - [ ] Ejecutar el comando autorizado desde Cloud Shell y conservar evidencia de la revisión e imagen realmente desplegadas.
+- [ ] Sustituir la descarga Git de Cloud Shell por una variante pública que no active solicitudes de credenciales locales.
