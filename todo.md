@@ -118,3 +118,10 @@
 - [x] Exponer la plataforma por vehículo en el contrato público y el bridge para distinguir Copart de IAAI.
 - [x] Activar IAAI como fuente seleccionable en el UI y eliminar la etiqueta provisional “pronto”.
 - [x] Validar fotos IAAI, conteo y paginación con los 1,000 vehículos elegibles del piloto.
+- [x] Crear un carrusel reutilizable en cada tarjeta con foto actual, contador y controles anterior/siguiente.
+- [x] Implementar swipe horizontal táctil sin activar accidentalmente el enlace de la ficha.
+- [x] Mantener lazy loading, fallback de imagen y navegación por teclado accesible.
+- [x] Probar varias fotos, una sola foto, swipe, controles, apertura de ficha, paginación y responsive: 36 pruebas aprobadas.
+- [ ] Publicar y validar el carrusel con fotos reales IAAI en producción.
+- [ ] Guardar un checkpoint que incluya el carrusel dentro de las tarjetas del listado.
+- [ ] Verificar en el dominio servido el bundle del carrusel y repetir sus pruebas de interacción contra datos vivos.

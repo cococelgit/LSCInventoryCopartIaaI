@@ -4,6 +4,7 @@ import { trpc } from "../lib/trpc";
 import { CalendarDays, Check, ChevronDown, ChevronUp, CircleAlert, Filter, Image, MapPin, Search, ShieldX, SlidersHorizontal, Tag, X } from "lucide-react";
 import { formatMoney } from "../data/inventory";
 import { LSC_BROKER_FEE_MAX_USD, LSC_BROKER_FEE_MIN_USD } from "../data/lscPricing";
+import VehiclePhotoCarousel from "../components/VehiclePhotoCarousel";
 import "./home-filters.css";
 
 type SortMode = "auction" | "bid-low" | "bid-high";
@@ -295,11 +296,13 @@ export default function Home() {
         <div className="browse-results-subhead"><span><Filter size={14} /> {selectedFacilities.length ? selectedFacilities.join(", ") : selectedStates.length ? selectedStates.join(", ") : selectedMakes.length ? selectedMakes.join(", ") : "Todos los vehículos"}</span><span>{auctionFrom || auctionTo ? "Fecha filtrada" : onlyBid ? "Con puja actual" : "Con y sin puja"}{minEstimatedTotal || maxEstimatedTotal ? " · Presupuesto LSC aplicado" : ""}{onlyPhotos ? " · Con fotos" : ""}</span></div>
         <div className="browse-list">
           {paginatedResults.map((vehicle) => <article className="browse-row" key={vehicle.lot}>
-            <a href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer" className="browse-row-link" aria-label={`Abrir ficha de ${vehicle.title} en una nueva pestaña`}>
-              <div className="browse-photo">{vehicle.photos[0] ? <img src={vehicle.photos[0]} alt={`${vehicle.title}, lote ${vehicle.lot}`} /> : <div className="browse-photo-empty"><Image size={28} /><span>Sin foto</span></div>}<span><Image size={12} /> {vehicle.photos.length} fotos</span></div>
+            <div className="browse-row-link">
+              <VehiclePhotoCarousel photos={vehicle.photos} title={vehicle.title} lot={vehicle.lot} href={`/vehiculo/${vehicle.lot}`} />
+              <a href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer" className="browse-row-details-link" aria-label={`Abrir ficha de ${vehicle.title} en una nueva pestaña`}>
               <div className="browse-vehicle-main"><div className="browse-lot"><b>{vehicle.title}</b><em>LOTE #{vehicle.lot}</em></div><div className="browse-specs"><span>{vehicle.year || "Año N/R"}</span><span>{vehicle.transmission}</span><span>{vehicle.fuel}</span><span>{vehicle.drive}</span></div><div className="browse-data"><span><small>Ubicación</small><b><MapPin size={13} /> {vehicle.location}</b></span><span><small>Daño</small><b>{vehicle.damage}</b></span><span><small>Título</small><b>{vehicle.titleType}</b></span></div></div>
               <div className="browse-auction"><span className="auction-source">{vehicle.platform.toUpperCase()}</span><div><small><CalendarDays size={13} /> Subasta</small><b>{vehicle.auctionDate}</b></div><div className="browse-bid"><small>PUJA ACTUAL</small><b>{formatMoney(vehicle.currentBid)}</b></div><div className="browse-estimate"><small>PRESUPUESTO LSC*</small><b>{vehicle.estimatedTotal ? `${formatMoney(vehicle.estimatedTotal.min)} – ${formatMoney(vehicle.estimatedTotal.max)}` : "Sin puja"}</b></div><strong>Ver ficha <ChevronUp size={15} /></strong></div>
-            </a>
+              </a>
+            </div>
           </article>)}
           {results.length === 0 && <div className="browse-empty"><Search size={30} /><h3>{liveInventory.isLoading ? "Cargando inventario…" : "No hay vehículos con esos filtros"}</h3><p>{liveInventory.isLoading ? "Consultando el corte persistido desde Azure." : "Prueba ampliando el año, la marca o el monto máximo."}</p>{!liveInventory.isLoading && <button onClick={clearFilters}>Restablecer búsqueda</button>}</div>}
         </div>
