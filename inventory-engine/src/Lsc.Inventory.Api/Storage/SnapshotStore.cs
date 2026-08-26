@@ -9,7 +9,7 @@ public interface IInventorySnapshotStore
 {
     Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken);
     Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken);
-    Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken);
+    Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, bool allowInterruptedSnapshotRetry, CancellationToken cancellationToken);
     Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken);
     Task PersistProviderUsageAsync(string provider, JsonElement usage, DateTimeOffset capturedAt, CancellationToken cancellationToken);
     Task PersistEligibilityDecisionAsync(EligibilityEvaluation evaluation, DateTimeOffset evaluatedAt, CancellationToken cancellationToken);
@@ -135,12 +135,13 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         return Task.CompletedTask;
     }
 
-    public Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken)
+    public Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, bool allowInterruptedSnapshotRetry, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (_copartSnapshots.ContainsKey(receipt.Sha256) &&
             (!_copartSnapshotStatuses.TryGetValue(receipt.Sha256, out var status) ||
-             !string.Equals(status, "completed_with_errors", StringComparison.OrdinalIgnoreCase)))
+             (!string.Equals(status, "completed_with_errors", StringComparison.OrdinalIgnoreCase) &&
+              !(allowInterruptedSnapshotRetry && string.Equals(status, "running", StringComparison.OrdinalIgnoreCase)))))
         {
             return Task.FromResult(new CopartSnapshotRegistration(false, true, null, null, "F02: Copart snapshot hash was already processed."));
         }

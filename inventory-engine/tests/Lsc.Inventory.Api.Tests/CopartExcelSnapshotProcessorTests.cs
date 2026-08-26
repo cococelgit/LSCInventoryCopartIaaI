@@ -53,22 +53,32 @@ public sealed class CopartExcelSnapshotProcessorTests
         var store = new InMemorySnapshotStore();
         var receipt = new CopartSnapshotReceipt("salesdata.csv", "retryable-sha", DateTimeOffset.UtcNow, 2048, 1000, 100);
 
-        var first = await store.TryRegisterCopartSnapshotAsync(receipt, 0.70m, 3, CancellationToken.None);
+        var first = await store.TryRegisterCopartSnapshotAsync(receipt, 0.70m, 3, false, CancellationToken.None);
         await store.CompleteCopartSnapshotAsync(first.RunId!.Value,
             new CopartSnapshotCompletion(DateTimeOffset.UtcNow, 10, 0, 0, 0, 0, 1, false, ["row 10 failed"]),
             CancellationToken.None);
 
-        var retry = await store.TryRegisterCopartSnapshotAsync(receipt, 0.70m, 3, CancellationToken.None);
+        var retry = await store.TryRegisterCopartSnapshotAsync(receipt, 0.70m, 3, false, CancellationToken.None);
         await store.CompleteCopartSnapshotAsync(retry.RunId!.Value,
             new CopartSnapshotCompletion(DateTimeOffset.UtcNow, 1000, 900, 100, 0, 0, 0, true, []),
             CancellationToken.None);
-        var duplicate = await store.TryRegisterCopartSnapshotAsync(receipt, 0.70m, 3, CancellationToken.None);
+        var duplicate = await store.TryRegisterCopartSnapshotAsync(receipt, 0.70m, 3, false, CancellationToken.None);
 
         Assert.True(first.Accepted);
         Assert.True(retry.Accepted);
         Assert.False(retry.IsDuplicate);
         Assert.False(duplicate.Accepted);
         Assert.True(duplicate.IsDuplicate);
+
+        var interruptedReceipt = receipt with { Sha256 = "interrupted-sha" };
+        var interrupted = await store.TryRegisterCopartSnapshotAsync(interruptedReceipt, 0.70m, 3, false, CancellationToken.None);
+        var blocked = await store.TryRegisterCopartSnapshotAsync(interruptedReceipt, 0.70m, 3, false, CancellationToken.None);
+        var recovered = await store.TryRegisterCopartSnapshotAsync(interruptedReceipt, 0.70m, 3, true, CancellationToken.None);
+
+        Assert.True(interrupted.Accepted);
+        Assert.False(blocked.Accepted);
+        Assert.True(blocked.IsDuplicate);
+        Assert.True(recovered.Accepted);
     }
 
     [Fact]

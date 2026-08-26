@@ -270,7 +270,7 @@ public sealed class PostgresSnapshotStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken)
+    public async Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, bool allowInterruptedSnapshotRetry, CancellationToken cancellationToken)
     {
         await EnsureCopartSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -325,6 +325,7 @@ public sealed class PostgresSnapshotStore(
                 failures = '[]'::jsonb,
                 updated_at = now()
             where copart_snapshot_manifests.status = 'completed_with_errors'
+               or (@allow_interrupted_snapshot_retry and copart_snapshot_manifests.status = 'running')
             returning run_id;
             """;
         AddParameter(insert, "sha256", receipt.Sha256);
@@ -334,6 +335,7 @@ public sealed class PostgresSnapshotStore(
         AddParameter(insert, "row_count", receipt.RowCount);
         AddParameter(insert, "processing_batch_size", receipt.ProcessingBatchSize);
         AddParameter(insert, "run_id", runId);
+        AddParameter(insert, "allow_interrupted_snapshot_retry", allowInterruptedSnapshotRetry);
         var inserted = await insert.ExecuteScalarAsync(cancellationToken);
         return inserted is null
             ? new CopartSnapshotRegistration(false, true, null, median, "F02: Copart snapshot hash was already processed.")

@@ -59,6 +59,7 @@ public sealed class CopartExcelSnapshotProcessor(
             new CopartSnapshotReceipt(snapshot.FileName, snapshot.Sha256, snapshot.DownloadedAt, validation.FileSizeBytes, validation.RowCount, _options.ProcessingBatchSize),
             _options.MinimumRowCountRatioToRecentMedian,
             _options.RecentSnapshotCountForBaseline,
+            _options.AllowInterruptedSnapshotRetry,
             cancellationToken);
         if (!registration.Accepted)
         {

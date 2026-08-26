@@ -11,6 +11,7 @@ on:
         options:
           - normal
           - diagnostics
+          - recover
 
 permissions:
   contents: read
@@ -70,8 +71,9 @@ jobs:
           set -euo pipefail
           image="${ACR_SERVER}/${IMAGE_NAME}:copart-${GITHUB_SHA}"
           case "${{ inputs.run_mode }}" in
-            normal) job_arg="--copart-excel-run" ;;
-            diagnostics) job_arg="--copart-excel-diagnostics" ;;
+            normal) job_arg="--copart-excel-run"; allow_interrupted_retry=false ;;
+            diagnostics) job_arg="--copart-excel-diagnostics"; allow_interrupted_retry=false ;;
+            recover) job_arg="--copart-excel-run"; allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
           esac
           source_job="$(az containerapp job show --name "$SOURCE_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
@@ -94,6 +96,7 @@ jobs:
             "CopartExcel__RecentSnapshotCountForBaseline=6"
             "CopartExcel__ProcessingBatchSize=1000"
             "CopartExcel__DiagnosticHoldSeconds=300"
+            "CopartExcel__AllowInterruptedSnapshotRetry=${allow_interrupted_retry}"
           )
           env_args+=("${inherited_env[@]}")
           env_args+=("Persistence__RunMigrations=false")

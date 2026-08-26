@@ -32,4 +32,6 @@ public sealed class CopartExcelOptions
 
     [Range(1, 1000000)]
     public int ProcessingBatchSize { get; init; } = 1000;
+
+    public bool AllowInterruptedSnapshotRetry { get; init; }
 }
