@@ -106,10 +106,12 @@ public sealed class PostgresSnapshotStore(
 
     public async Task PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken)
     {
+        var observedAtUtc = observedAt.ToUniversalTime();
+        var auctionAtUtc = vehicle.Auction?.AuctionAt?.ToUniversalTime();
         var identity = BuildIdentity(vehicle);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAt, payloadHash);
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
 
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
@@ -195,7 +197,7 @@ public sealed class PostgresSnapshotStore(
         AddParameter(command, "odometer", vehicle.Odometer);
         AddParameter(command, "damage", vehicle.Damage);
         AddParameter(command, "auction_state", vehicle.Auction?.State);
-        AddParameter(command, "auction_at", vehicle.Auction?.AuctionAt);
+        AddParameter(command, "auction_at", auctionAtUtc);
         AddParameter(command, "lot_status", vehicle.Auction?.LotStatus);
         AddParameter(command, "lot_sub_status", vehicle.Auction?.LotSubStatus);
         AddParameter(command, "location_display", vehicle.Location?.Display);
@@ -206,15 +208,15 @@ public sealed class PostgresSnapshotStore(
         AddParameter(command, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
         AddParameter(command, "media_photos_count", vehicle.Media?.ThumbnailsCount);
         AddParameter(command, "media_has_360", vehicle.Media?.Has360);
-        AddParameter(command, "observed_at", observedAt);
+        AddParameter(command, "observed_at", observedAtUtc);
         AddParameter(command, "payload_hash", payloadHash);
         AddParameter(command, "raw_blob_name", blobName);
         AddParameter(command, "payload", rawJson);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
 
-        _recent[identity] = new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson);
-        logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAt);
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
+        logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAtUtc);
     }
 
     public async Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
