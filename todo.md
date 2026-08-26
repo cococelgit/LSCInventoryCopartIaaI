@@ -145,6 +145,8 @@
 - [x] Añadir pruebas de contratos IAAI, filtros, tarjetas, ficha, responsive, accesibilidad y protección de secretos: 57 Engine y 51 UI aprobadas.
 - [ ] Desplegar motor y UI, validar producción con inventario IAAI real y documentar diferencias remanentes.
 - [ ] Reautorizar una identidad Azure con permisos de ACR build y actualización de Container Apps; el tenant bloqueó Azure CLI por security defaults.
+- [x] Programar un reintento único del despliegue Azure al cierre de la ventana de ocho horas.
+- [ ] Ejecutar el reintento programado y reportar si la identidad Azure ya puede autenticarse.
 - [x] Auditar el commit remoto del adaptador Copart Excel y sus cambios de contrato, persistencia, pruebas e infraestructura.
 - [x] Integrar los cambios remotos sin sobrescribir el rediseño IAAI/BidCars ni el motor ampliado local.
 - [ ] Ejecutar las suites combinadas y publicar el monorepo integrado en GitHub.
