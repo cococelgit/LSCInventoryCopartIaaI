@@ -613,6 +613,87 @@ public sealed class PostgresSnapshotStore(
             samples);
     }
 
+    public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+
+        object? manifest = null;
+        await using (var manifestCommand = connection.CreateCommand())
+        {
+            manifestCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            manifestCommand.CommandText = """
+                select left(sha256, 12), file_name, downloaded_at, row_count, observed_count,
+                       accepted_count, discarded_count, quarantined_count, marked_count, error_count,
+                       status, is_complete
+                from copart_snapshot_manifests
+                order by downloaded_at desc
+                limit 1;
+                """;
+            await using var reader = await manifestCommand.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                manifest = new
+                {
+                    SnapshotShaPrefix = reader.GetString(0),
+                    FileName = reader.GetString(1),
+                    DownloadedAt = reader.GetFieldValue<DateTimeOffset>(2),
+                    RowsDeclared = reader.GetInt32(3),
+                    Observed = reader.GetInt32(4),
+                    Accepted = reader.GetInt32(5),
+                    Discarded = reader.GetInt32(6),
+                    Quarantined = reader.GetInt32(7),
+                    Marked = reader.GetInt32(8),
+                    Errors = reader.GetInt32(9),
+                    Status = reader.GetString(10),
+                    IsComplete = reader.GetBoolean(11)
+                };
+            }
+        }
+
+        long totalLots;
+        long activeLots;
+        long inactiveLots;
+        await using (var lotCommand = connection.CreateCommand())
+        {
+            lotCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            lotCommand.CommandText = """
+                select count(*)::bigint,
+                       count(*) filter (where coalesce(lifecycle.is_active, true))::bigint,
+                       count(*) filter (where not coalesce(lifecycle.is_active, true))::bigint
+                from auction_lots lots
+                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+                where lots.platform = 'copart';
+                """;
+            await using var reader = await lotCommand.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            totalLots = reader.GetInt64(0);
+            activeLots = reader.GetInt64(1);
+            inactiveLots = reader.GetInt64(2);
+        }
+
+        var decisions = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        await using (var auditCommand = connection.CreateCommand())
+        {
+            auditCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            auditCommand.CommandText = """
+                select decision, count(*)::bigint
+                from eligibility_decisions
+                where lower(coalesce(auction_source, '')) = 'copart'
+                group by decision
+                order by decision;
+                """;
+            await using var reader = await auditCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) decisions[reader.GetString(0)] = reader.GetInt64(1);
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            Manifest = manifest,
+            Lots = new { Total = totalLots, Active = activeLots, Inactive = inactiveLots },
+            EligibilityDecisions = decisions
+        });
+    }
+
     public async Task<string> GetStorageDiagnosticsAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);

@@ -229,6 +229,19 @@ if (args.Contains("--validation-report", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--copart-publication-report", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+    {
+        throw new InvalidOperationException("Copart publication report requires Persistence:Provider=Postgres.");
+    }
+
+    Console.WriteLine(await postgresStore.GetCopartPublicationReportAsync(CancellationToken.None));
+    return;
+}
+
 if (args.Contains("--storage-diagnostics", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
