@@ -39,6 +39,11 @@ jobs:
         run: |
           set -euo pipefail
           execution="${{ inputs.execution }}"
+          echo "Listing recent Copart executions."
+          az containerapp job execution list \
+            --name "$COPART_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            -o json
           echo "Attempting Job logs without pinning a cleaned-up replica."
           az containerapp job logs show \
             --name "$COPART_JOB_NAME" \
