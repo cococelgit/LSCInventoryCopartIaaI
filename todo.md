@@ -144,6 +144,10 @@
 - [x] Rediseñar la ficha de vehículo con galería, especificaciones, condición, venta, ubicación, vendedor y documentos disponibles.
 - [x] Añadir pruebas de contratos IAAI, filtros, tarjetas, ficha, responsive, accesibilidad y protección de secretos: 57 Engine y 51 UI aprobadas.
 - [ ] Desplegar motor y UI, validar producción con inventario IAAI real y documentar diferencias remanentes.
+- [ ] Reautorizar una identidad Azure con permisos de ACR build y actualización de Container Apps; el tenant bloqueó Azure CLI por security defaults.
+- [x] Auditar el commit remoto del adaptador Copart Excel y sus cambios de contrato, persistencia, pruebas e infraestructura.
+- [x] Integrar los cambios remotos sin sobrescribir el rediseño IAAI/BidCars ni el motor ampliado local.
+- [ ] Ejecutar las suites combinadas y publicar el monorepo integrado en GitHub.
 - [x] Contrastar el catálogo muestral contra la documentación oficial de endpoints/filtros y metadata completa de Apibara para detectar capacidades no observadas.
 - [x] Ampliar el catálogo sanitizado con 36 muestras de categorías IAAI y 551 rutas, sin almacenar identificadores ni respuestas crudas.
 - [x] Cerrar la matriz BidCars → LSC clasificando cada filtro y campo como disponible, parcial o no observado.

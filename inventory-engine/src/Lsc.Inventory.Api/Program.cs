@@ -2,6 +2,7 @@ using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Services;
+using Lsc.Inventory.Api.Sources;
 using Lsc.Inventory.Api.Storage;
 using Lsc.Inventory.Api.Workers;
 using Polly;
@@ -28,6 +29,11 @@ builder.Services
     .Bind(builder.Configuration.GetSection(IaaIPilotOptions.SectionName))
     .ValidateDataAnnotations()
     .ValidateOnStart();
+
+builder.Services
+    .AddOptions<CopartExcelOptions>()
+    .Bind(builder.Configuration.GetSection(CopartExcelOptions.SectionName))
+    .ValidateDataAnnotations();
 
 builder.Services
     .AddOptions<PersistenceOptions>()
@@ -61,6 +67,9 @@ else
 }
 builder.Services.AddScoped<IInventorySyncProcessor, InventorySyncProcessor>();
 builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
+builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
+builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
+builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
 builder.Services.AddHostedService<InventorySyncWorker>();
 
 var app = builder.Build();
@@ -312,6 +321,40 @@ if (args.Contains("--media-diagnostic", StringComparer.OrdinalIgnoreCase))
     }
 
     Console.WriteLine(await postgresStore.GetPublicMediaManifestAsync(CancellationToken.None));
+    return;
+}
+
+var copartFileIndex = Array.FindIndex(args, argument => string.Equals(argument, "--copart-excel-file", StringComparison.OrdinalIgnoreCase));
+if (copartFileIndex >= 0)
+{
+    if (copartFileIndex + 1 >= args.Length)
+        throw new ArgumentException("--copart-excel-file requires a CSV path.");
+
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotProcessor>();
+    var snapshot = await CopartSnapshotFile.OpenAsync(args[copartFileIndex + 1], CancellationToken.None);
+    await using var content = snapshot.Content;
+    var result = await processor.ProcessAsync(snapshot, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    if (!result.Processed || !result.IsComplete || result.Errors > 0)
+    {
+        Environment.ExitCode = 1;
+    }
+
+    return;
+}
+
+if (args.Contains("--copart-excel-run", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotProcessor>();
+    var result = await processor.RunLatestAsync(CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    if (!result.Processed || !result.IsComplete || result.Errors > 0)
+    {
+        Environment.ExitCode = 1;
+    }
+
     return;
 }
 
