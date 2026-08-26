@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -16,12 +17,15 @@ import Home from "./Home";
 afterEach(() => cleanup());
 
 describe("Home pagination", () => {
-  it("renders 24 vehicles first and navigates to the remaining page", () => {
+  it("renders 24 vehicles first and navigates to the remaining page by keyboard", async () => {
+    const user = userEvent.setup();
     render(createElement(Home));
     expect(document.querySelectorAll(".browse-row")).toHaveLength(24);
     expect(screen.getByText("Mostrando 1–24 de 30")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    const next = screen.getByRole("button", { name: "Siguiente" });
+    next.focus();
+    await user.keyboard("{Enter}");
 
     expect(document.querySelectorAll(".browse-row")).toHaveLength(6);
     expect(screen.getByText("Mostrando 25–30 de 30")).toBeTruthy();

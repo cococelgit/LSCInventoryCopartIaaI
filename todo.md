@@ -128,3 +128,25 @@
 - [x] Ejecutar una prueba browser automatizada contra producción que avance y retroceda fotos reales IAAI.
 - [x] Simular swipe táctil sobre el carrusel publicado y confirmar que el contador cambia sin abrir la ficha.
 - [x] Confirmar en producción que el enlace principal sigue abriendo la ficha del lote en una nueva pestaña.
+- [x] Auditar remotos y cambios pendientes de Inventory Engine e Inventory UI antes de consolidarlos.
+- [x] Excluir secretos, respuestas de proveedor, temporales, outputs y artefactos locales del commit inicial.
+- [x] Consolidar ambos proyectos en la estructura del repositorio seleccionado sin perder historial operativo útil.
+- [x] Documentar el contrato y punto de integración para que otra tarea conecte Copart Excel al Inventory Engine.
+- [x] Crear y subir un único commit inicial con motor, UI, pruebas, infraestructura y documentación.
+- [x] Verificar en GitHub la rama, commit y archivos principales después del push.
+- [ ] Auditar BidCars en escritorio y móvil: todos los filtros, orden, resultados, paginación y estados vacíos.
+- [x] Auditar una ficha real de BidCars: secciones, campos, jerarquía, galería y acciones, sin copiar marca ni contenido propietario.
+- [x] Documentar la matriz BidCars → LSC con disponibilidad real de cada campo en IAAI.
+- [x] Inspeccionar lista y detalle IAAI para inventariar campos, objetos anidados, fotos y valores disponibles mediante documentación oficial y catálogo sanitizado representativo.
+- [x] Ampliar contratos, normalización, mezcla lista/detalle y API pública para conservar los campos IAAI útiles actualmente descartados.
+- [x] Implementar paridad funcional de filtros BidCars con opciones dinámicas y datos reales; campos no disponibles quedan explícitos y cada filtro extendido tiene prueba funcional.
+- [x] Rediseñar filas/tarjetas con densidad y campos equivalentes a BidCars usando la identidad visual LSC, con prueba de render de datos densos.
+- [x] Rediseñar la ficha de vehículo con galería, especificaciones, condición, venta, ubicación, vendedor y documentos disponibles.
+- [x] Añadir pruebas de contratos IAAI, filtros, tarjetas, ficha, responsive, accesibilidad y protección de secretos: 57 Engine y 51 UI aprobadas.
+- [ ] Desplegar motor y UI, validar producción con inventario IAAI real y documentar diferencias remanentes.
+- [x] Contrastar el catálogo muestral contra la documentación oficial de endpoints/filtros y metadata completa de Apibara para detectar capacidades no observadas.
+- [x] Ampliar el catálogo sanitizado con 36 muestras de categorías IAAI y 551 rutas, sin almacenar identificadores ni respuestas crudas.
+- [x] Cerrar la matriz BidCars → LSC clasificando cada filtro y campo como disponible, parcial o no observado.
+- [x] Probar individualmente body style, loss type, llave, color, motor, seller y estados de subasta sobre fixtures IAAI extendidos.
+- [x] Verificar por render que cada tarjeta muestra estado, estimado proveedor, puja, Buy Now y especificaciones densas cuando existen.
+- [x] Añadir pruebas explícitas de teclado, labels, roles, focus y navegación sin mouse para tabs, filtros, carrusel, paginación y ficha.

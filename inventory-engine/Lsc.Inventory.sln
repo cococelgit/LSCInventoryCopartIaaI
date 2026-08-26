@@ -1,0 +1,33 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{9D9C321C-A82D-4707-B64E-BB8235928AE6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lsc.Inventory.Api", "src\Lsc.Inventory.Api\Lsc.Inventory.Api.csproj", "{D1A85202-0467-45D5-B7EE-9258A651CBE2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lsc.Inventory.Api.Tests", "tests\Lsc.Inventory.Api.Tests\Lsc.Inventory.Api.Tests.csproj", "{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D1A85202-0467-45D5-B7EE-9258A651CBE2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D1A85202-0467-45D5-B7EE-9258A651CBE2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D1A85202-0467-45D5-B7EE-9258A651CBE2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D1A85202-0467-45D5-B7EE-9258A651CBE2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{D1A85202-0467-45D5-B7EE-9258A651CBE2} = {9D9C321C-A82D-4707-B64E-BB8235928AE6}
+		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D} = {9D9C321C-A82D-4707-B64E-BB8235928AE6}
+	EndGlobalSection
+EndGlobal

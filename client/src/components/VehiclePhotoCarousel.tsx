@@ -62,8 +62,8 @@ export default function VehiclePhotoCarousel({ photos, title, lot, href }: Vehic
         />
         : <div className="browse-photo-empty"><Image size={28} /><span>Sin foto</span></div>}
     </a>
-    <span className="browse-photo-count"><Image size={12} /> {safePhotos.length ? `${activePhoto + 1} / ${safePhotos.length}` : "0 fotos"}</span>
-    {hasMultiple && <div className="browse-photo-controls" aria-label={`Fotos del lote ${lot}`}>
+    <span className="browse-photo-count" aria-live="polite"><Image size={12} /> {safePhotos.length ? `${activePhoto + 1} / ${safePhotos.length}` : "0 fotos"}</span>
+    {hasMultiple && <div className="browse-photo-controls" role="group" aria-label={`Fotos del lote ${lot}`}>
       <button type="button" onClick={() => move(-1)} aria-label={`Foto anterior de ${title}`}><ChevronLeft size={16} /></button>
       <button type="button" onClick={() => move(1)} aria-label={`Foto siguiente de ${title}`}><ChevronRight size={16} /></button>
     </div>}

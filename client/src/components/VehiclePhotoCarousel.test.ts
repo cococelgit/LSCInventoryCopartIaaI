@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import VehiclePhotoCarousel from "./VehiclePhotoCarousel";
@@ -56,5 +57,21 @@ describe("VehiclePhotoCarousel", () => {
 
     fireEvent.error(screen.getByAltText(/foto 1 de 2/i));
     expect(screen.getByAltText(/foto 1 de 1/i).getAttribute("src")).toBe("https://img.test/working.jpg");
+  });
+
+  it("supports keyboard controls and announces photo changes", async () => {
+    const user = userEvent.setup();
+    render(createElement(VehiclePhotoCarousel, {
+      photos: ["https://img.test/1.jpg", "https://img.test/2.jpg"],
+      title: "2024 Test Vehicle",
+      lot: "99887766",
+      href: "/vehiculo/99887766",
+    }));
+    const next = screen.getByRole("button", { name: /foto siguiente/i });
+    next.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByAltText(/foto 2 de 2/i)).toBeTruthy();
+    expect(screen.getByText(/2 \/ 2/).getAttribute("aria-live")).toBe("polite");
+    expect(screen.getByRole("group", { name: "Fotos del lote 99887766" })).toBeTruthy();
   });
 });
