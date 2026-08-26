@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "imageTag": { "type": "string" },
+    "managedIdentityResourceId": { "type": "string" },
+    "managedEnvironmentResourceId": { "type": "string" },
+    "postgresqlHost": { "type": "string" },
+    "databaseName": { "type": "string" },
+    "managedIdentityClientId": { "type": "string" },
+    "runtimePrincipalObjectId": { "type": "string" },
+    "blobAccountUrl": { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2024-03-01",
+      "name": "job-lsc-inv-validation-prod",
+      "location": "eastus2",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[parameters('managedIdentityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "environmentId": "[parameters('managedEnvironmentResourceId')]",
+        "configuration": {
+          "triggerType": "Manual",
+          "replicaTimeout": 300,
+          "replicaRetryLimit": 0,
+          "manualTriggerConfig": {
+            "parallelism": 1,
+            "replicaCompletionCount": 1
+          },
+          "registries": [
+            {
+              "server": "acrlscinvprodeus2.azurecr.io",
+              "identity": "[parameters('managedIdentityResourceId')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "inventory-validation",
+              "image": "[format('acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:{0}', parameters('imageTag'))]",
+              "command": [ "dotnet", "Lsc.Inventory.Api.dll", "--validation-report" ],
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              },
+              "env": [
+                { "name": "Persistence__Provider", "value": "Postgres" },
+                { "name": "Persistence__PostgreSqlHost", "value": "[parameters('postgresqlHost')]" },
+                { "name": "Persistence__Database", "value": "[parameters('databaseName')]" },
+                { "name": "Persistence__ManagedIdentityClientId", "value": "[parameters('managedIdentityClientId')]" },
+                { "name": "Persistence__DatabaseUser", "value": "id-lsc-inventory-db-runtime-prod" },
+                { "name": "Persistence__RuntimePrincipalName", "value": "id-lsc-inventory-db-runtime-prod" },
+                { "name": "Persistence__RuntimePrincipalObjectId", "value": "[parameters('runtimePrincipalObjectId')]" },
+                { "name": "BlobAudit__AccountUrl", "value": "[parameters('blobAccountUrl')]" },
+                { "name": "BlobAudit__ContainerName", "value": "raw-apibara" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

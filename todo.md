@@ -1,0 +1,136 @@
+- [x] Inspeccionar los payloads auditados para confirmar URLs y campos reales de media.
+- [x] Renovar el acceso de lectura a registros de Azure con un código de dispositivo vigente.
+- [x] Verificar que la cuenta desbloqueada ya permite consultar los registros de diagnóstico.
+- [x] Definir el acceso temporal privado a imágenes y datos completos sin exponer la llave del proveedor.
+- [x] Integrar galería real y ficha ampliada por lote en una nueva pestaña.
+- [x] Verificar la interfaz, guardar versión y compartir la URL temporal actualizada.
+
+- [x] Elegir la frecuencia de actualización del feed y el alcance de fotos en vivo.
+- [x] Resolver la integración full-stack preservando el UI existente y los secretos server-side.
+- [x] Conectar datos y media mediante API segura, con estados de carga y error.
+- [x] Verificar actualizaciones, permisos, cuota del proveedor y publicar la nueva versión.
+
+- [x] Diseñar el flujo operativo de inventario cacheado con actualización automática cada 30 minutos.
+- [x] Medir consumo de cuota de Apibara por ejecución y definir límites por alcance.
+- [x] Implementar el proceso automático y la lectura del UI desde el inventario persistido.
+- [x] Validar frescura, fallos, duplicados, media y publicación temporal.
+
+- [x] Verificar la cuota activa expuesta por Apibara: plan Test, límite efectivo 100, 75 solicitudes restantes; escalar el plan antes de agotar el límite.
+- [x] Conectar el backend del UI al inventario persistido del motor sin exponer secretos.
+- [x] Configurar una ejecución automática cada 30 minutos con reintentos controlados y estado de frescura.
+- [x] Validar una corrida controlada, fotos, errores, cuota restante y publicación temporal.
+
+- [x] Publicar una API Azure de lectura protegida como única fuente del UI.
+- [x] Mantener PostgreSQL, Blob y la llave de Apibara fuera del alcance público.
+- [x] Activar el job de sincronización automática cada 30 minutos con auditoría de uso bajo demanda protegida.
+- [x] Conectar el UI a la API Azure y verificar frescura, fotos y estados de error.
+
+- [x] Ejecutar la verificación y el despliegue directamente desde la sesión Azure autenticada, sin pedir al usuario copiar comandos.
+
+- [x] Corregir el job programado y validar ejecuciones exitosas posteriores sin alteraciones administrativas de datos.
+
+- [x] Actualizar en Key Vault la clave vigente de Apibara y restaurar de inmediato el acceso privado de la bóveda.
+- [x] Repetir una corrida controlada después de validar la nueva credencial antes de considerar estable el cron de 30 minutos.
+- [x] Corregir la API de lectura para no exigir Apibara al arrancar cuando la sincronización está desactivada.
+- [x] Verificar la revisión Azure corregida, el puente tRPC, las fotos dinámicas y los estados de frescura.
+- [x] Guardar un nuevo checkpoint del UI conectado a Azure y registrar la versión publicada: `84fa3973`.
+- [x] Activar y validar la revisión de API que lee snapshots persistidos en PostgreSQL.
+- [x] Verificar una respuesta de inventario con lotes y fotos reales tras la corrección de lectura.
+- [x] Confirmar el bridge tRPC y la ficha de detalle en el UI con datos vivos.
+- [x] Publicar y validar la versión final del UI conectado en su URL desplegada.
+- [x] Ajustar el consumo del job a la cuota real expuesta por Apibara antes de mantener el cron de 30 minutos.
+- [x] Mantener el alcance completo del feed y escalar el plan de Apibara cuando la cuota operativa lo requiera, conforme a la instrucción del usuario.
+- [x] Eliminar los fallbacks de catálogo local del UI y mostrar un estado explícito cuando Azure no responda.
+- [x] Definir y validar una auditoría de uso bajo demanda protegida que no multiplique llamadas en cada ejecución del cron.
+- [x] Proteger los endpoints internos de validación, uso y sincronización con el token de servicio para impedir acceso o ejecuciones públicas.
+- [x] Reintentar la publicación del UI tras el timeout de red del registro de imágenes y validar el despliegue resultante.
+- [x] Revisar la carpeta oficial de recursos de LSC y seleccionar logo, variantes y colores de marca aprobados.
+- [x] Sustituir la identidad visual provisional del Inventory UI por los activos oficiales de LSC.
+- [x] Validar y publicar la actualización visual de marca en el dominio del Inventory UI.
+- [x] Analizar la referencia de BidCars y definir una jerarquía de búsqueda adaptada a LSC sin copiar su identidad.
+- [x] Reemplazar el hero y la consola de evidencia por una barra de búsqueda compacta y filtros completos fijos a la izquierda.
+- [x] Rediseñar el listado derecho como resultados densos con foto real, datos clave, puja y enlace de ficha en nueva pestaña.
+- [x] Validar filtros, datos vivos y comportamiento responsive del buscador simplificado.
+- [x] Publicar y verificar el rediseño del buscador en el dominio de LSC.
+- [x] Revisar y normalizar los valores disponibles de daño, título y transmisión desde el corte Azure: el corte actual reporta “No reportado” en los 57 lotes.
+- [x] Añadir filtros laterales funcionales de tipo de daño, estado de título y transmisión, con opciones dinámicas basadas en el corte Azure.
+- [x] Validar los nuevos filtros con datos vivos y publicar la mejora.
+- [x] Inventariar los filtros relevantes de BidCars y contrastarlos con los campos reales de Azure.
+- [x] Añadir filtros funcionales de odómetro, tipo de tracción y tipo de combustible.
+- [x] Añadir los filtros adicionales soportados por el feed y estados honestos para los no disponibles.
+- [x] Validar la barra lateral ampliada, filtros combinados y comportamiento responsive con el corte Azure.
+- [x] Publicar y verificar la barra lateral ampliada en el dominio de LSC, incluidos filtros inferiores y una prueba directa de modelo en producción.
+- [x] Auditar los campos de facility, estado, odómetro, daño, título, tracción y combustible en el contrato y payload del proveedor: facility/estado ya existen; el título se estaba descartando en la salida pública; los demás campos requieren lectura de detalle cuando no vengan en la lista.
+- [x] Enriquecer la sincronización para persistir datos reales por lote sin aumentar llamadas innecesarias.
+- [x] Corregir el mapeo público del estado de título y conservar facility/estado en el contrato del UI.
+- [x] Agregar filtros activos de ubicación/facility y estado a la barra lateral.
+- [x] Ejecutar una sincronización controlada, validar los campos enriquecidos y publicar el buscador actualizado.
+- [x] Guardar la versión verificable del UI con filtros de facility/estado y el contrato actualizado.
+- [x] Validar el dominio publicado con facility/estado y al menos un campo enriquecido real.
+- [x] Formalizar el concepto como presupuesto LSC base —no total out-the-door— usando exclusivamente puja actual y el broker fee confirmado.
+- [x] Alinear el filtro y las tarjetas al mismo concepto de presupuesto LSC base con exclusiones explícitas.
+- [x] Documentar dentro del proyecto la instrucción operativa proporcionada por LSC para el broker fee usado en el cálculo.
+- [x] Probar los nuevos filtros con datos vivos y validar en el dominio publicado la fecha de subasta y el rango monetario final antes de marcarlos completos.
+- [x] Probar los nuevos filtros con datos vivos, publicar y validar el dominio actualizado.
+- [x] Probar funcionalmente en la interfaz el rango de fecha de subasta con un corte vivo.
+- [x] Probar funcionalmente en la interfaz el rango de presupuesto LSC base con un corte vivo.
+- [x] Registrar evidencia final de ambos filtros en producción y publicar el cierre de validación.
+- [x] Verificar mediante el endpoint protegido el plan, la cuota y los límites efectivos de Apibara tras el upgrade.
+- [x] Ajustar el alcance del job en función de la cuota confirmada y lanzar una sola sincronización controlada.
+- [x] Validar lotes, frescura y campos persistidos en el buscador: 487 elegibles; 483 con fotos, 474 con odómetro/daño, 487 con título y fecha.
+- [x] Adaptar el motor para procesar las 14 facilities Copart devueltas por Florida sin depender de una sola facility configurada.
+- [x] Desplegar el motor multi-facility con límites conservadores por corrida y ejecutar una única corrida controlada: 14 scopes, 280 lotes observados, 35 solicitudes y 0 fallos.
+- [x] Verificar cobertura por facility, cuota restante y filtros de ubicación/estado: 14 facilities, estado FL, 29,782 solicitudes restantes y 23 pruebas aprobadas, incluidas pruebas vivas de facility y estado.
+- [x] Convertir el prompt D00A–D10 en una especificación determinística con precedencia, evidencia y salida auditable.
+- [x] Mapear cada campo autorizado del filtro contra los payloads reales de lista y detalle de Apibara.
+- [x] Resolver con LSC las ambigüedades y datos obligatorios antes de filtrar o insertar nuevos vehículos.
+- [x] Implementar 23 pruebas del motor por regla y bloquear la carga de lotes descartados antes de PostgreSQL.
+- [x] Mapear `auction.auction_at`, `facility.state`, `seller.name`, `condition.primary_damage`, `condition.secondary_damage` y `sale_document.name/is_pending` a la entrada autorizada del filtro.
+- [x] Aplicar únicamente D00A, D00B, D01–D08 y D10 como descartes; Rebuilt y cualquier otro tipo de título deben cargarse.
+- [x] Crear un filtro UI de tipo de título que oculte por defecto Certificate of Destruction, Junk, Non-Repairable y Parts Only sin eliminarlos de la base.
+- [x] Permitir mostrar títulos especiales seleccionándolos expresamente en el filtro y conservarlos disponibles por búsqueda de lote.
+- [x] Diseñar paginación eficiente para la lista filtrada sin perder filtros, orden ni búsqueda activa.
+- [x] Persistir en PostgreSQL las decisiones DESCARTAR con regla, evidencia, versión y fecha, sin almacenar el VIN completo en el registro de auditoría.
+- [x] Exponer un endpoint Azure protegido y un bridge server-side para consultar descartes paginados.
+- [x] Crear un panel interno protegido con resumen por regla, listado de descartes y evidencia por vehículo.
+- [x] Añadir navegación entre buscador y panel interno sin exponer credenciales ni convertir el panel en una ruta pública anónima.
+- [x] Probar paginación, control de acceso, datos reales y responsive antes de publicar.
+- [x] Renderizar el panel interno con descartes reales del endpoint protegido y verificar resumen, fila y evidencia.
+- [x] Ejercitar la paginación con el corte real, incluida navegación, conteos y reinicio al cambiar el orden.
+- [x] Publicar un checkpoint y repetir validaciones básicas sobre la versión servida.
+- [x] Verificar mediante pruebas DOM y CSS el drawer móvil, la paginación apilada y la tabla interna desplazable.
+- [x] Confirmar los endpoints IAAI de Apibara, 270 facilities observadas en 50 estados y 61,793 lotes abiertos únicos con año 1900–2027, sin descargar detalles individuales.
+- [x] Calcular páginas, solicitudes, duración y margen de cuota para una carga inicial completa de IAAI: 3,230 páginas, piso paralelo de 3.76 minutos, ventana productiva estimada de 45–90 minutos y 26,091 solicitudes restantes.
+- [x] Definir el proceso de backfill completo, reglas previas a PostgreSQL y sincronización incremental de IAAI.
+- [x] Entregar la recomendación operativa con alcance, riesgos y secuencia exacta de implementación.
+- [x] Documentar el alcance de facilities como ubicaciones observadas en lotes abiertos, no como catálogo administrativo completo de IAAI.
+- [x] Pausar inmediatamente el job actual para detener nuevas llamadas Copart a Apibara sin borrar el inventario existente.
+- [x] Separar permanentemente las fuentes en código y configuración: IAAI=Apibara; Copart=adaptador Excel entregado por la otra tarea.
+- [x] Actualizar manifests y jobs para impedir que cualquier ejecución Apibara incluya la plataforma Copart.
+- [x] Dejar preparado el contrato del adaptador Excel, sin duplicar la implementación que se está construyendo en la otra tarea.
+- [x] Resolver el conflicto entre el adjunto D09 y la política vigente: ningún tipo de título, incluido Rebuilt, debe descartarse solo por su categoría.
+- [x] Añadir D00C, M00, D00D, Q01, Q04 y marcas M01–M08 al motor determinístico compartido.
+- [x] Implementar normalización técnica, comercial y evidencia raw/normalized antes de persistir vehículos aceptados.
+- [x] Incorporar estados de reconciliación y reglas de reactivación/despublicación sin borrar historial.
+- [x] Ejecutar pruebas unitarias por regla, precedencia, títulos permitidos y limpieza canónica: 55 pruebas aprobadas.
+- [x] Ejecutar un piloto controlado de 1,000 vehículos IAAI list-only y medir aceptados, descartados, marcados, errores y consumo.
+- [x] Validar en PostgreSQL/Blob y en el UI los vehículos elegibles del piloto antes de ampliar a todo IAAI.
+- [x] Exponer la plataforma por vehículo en el contrato público y el bridge para distinguir Copart de IAAI.
+- [x] Activar IAAI como fuente seleccionable en el UI y eliminar la etiqueta provisional “pronto”.
+- [x] Validar fotos IAAI, conteo y paginación con los 1,000 vehículos elegibles del piloto.
+- [x] Crear un carrusel reutilizable en cada tarjeta con foto actual, contador y controles anterior/siguiente.
+- [x] Implementar swipe horizontal táctil sin activar accidentalmente el enlace de la ficha.
+- [x] Mantener lazy loading, fallback de imagen y navegación por teclado accesible.
+- [x] Probar varias fotos, una sola foto, swipe, controles, apertura de ficha, paginación y responsive: 36 pruebas aprobadas.
+- [x] Publicar y validar el carrusel con fotos reales IAAI en producción.
+- [x] Guardar un checkpoint que incluya el carrusel dentro de las tarjetas del listado.
+- [x] Verificar en el dominio servido el bundle del carrusel y repetir sus pruebas de interacción contra datos vivos.
+- [x] Ejecutar una prueba browser automatizada contra producción que avance y retroceda fotos reales IAAI.
+- [x] Simular swipe táctil sobre el carrusel publicado y confirmar que el contador cambia sin abrir la ficha.
+- [x] Confirmar en producción que el enlace principal sigue abriendo la ficha del lote en una nueva pestaña.
+- [x] Auditar remotos y cambios pendientes de Inventory Engine e Inventory UI antes de consolidarlos.
+- [x] Excluir secretos, respuestas de proveedor, temporales, outputs y artefactos locales del commit inicial.
+- [x] Consolidar ambos proyectos en la estructura del repositorio seleccionado sin perder historial operativo útil.
+- [x] Documentar el contrato y punto de integración para que otra tarea conecte Copart Excel al Inventory Engine.
+- [x] Crear y subir un único commit inicial con motor, UI, pruebas, infraestructura y documentación.
+- [x] Verificar en GitHub la rama, commit y archivos principales después del push.

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "imageTag": { "type": "string" },
+    "managedIdentityResourceId": { "type": "string" },
+    "managedEnvironmentResourceId": { "type": "string" },
+    "apibaraApiKey": { "type": "secureString" },
+    "postgresqlHost": { "type": "string" },
+    "databaseName": { "type": "string" },
+    "managedIdentityClientId": { "type": "string" },
+    "runtimePrincipalObjectId": { "type": "string" },
+    "blobAccountUrl": { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/jobs",
+      "apiVersion": "2024-03-01",
+      "name": "job-lsc-iaai-pilot-prod",
+      "location": "eastus2",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": { "[parameters('managedIdentityResourceId')]": {} }
+      },
+      "properties": {
+        "environmentId": "[parameters('managedEnvironmentResourceId')]",
+        "configuration": {
+          "triggerType": "Manual",
+          "replicaTimeout": 7200,
+          "replicaRetryLimit": 0,
+          "registries": [{ "server": "acrlscinvprodeus2.azurecr.io", "identity": "[parameters('managedIdentityResourceId')]" }],
+          "secrets": [{ "name": "apibara-api-key", "value": "[parameters('apibaraApiKey')]" }]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "inventory-iaai-pilot",
+              "image": "[format('acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:{0}', parameters('imageTag'))]",
+              "resources": { "cpu": 1, "memory": "2Gi" },
+              "env": [
+                { "name": "Apibara__ApiKey", "secretRef": "apibara-api-key" },
+                { "name": "Apibara__BaseUrl", "value": "https://apibara.tech/api/v1/vehicle-auction/" },
+                { "name": "Apibara__PageSize", "value": "20" },
+                { "name": "Sync__Enabled", "value": "false" },
+                { "name": "IaaIPilot__Enabled", "value": "true" },
+                { "name": "IaaIPilot__RunOnStartup", "value": "true" },
+                { "name": "IaaIPilot__MaxVehicles", "value": "1000" },
+                { "name": "IaaIPilot__MaxListRequests", "value": "75" },
+                { "name": "IaaIPilot__LotSubStatus", "value": "Open" },
+                { "name": "Persistence__Provider", "value": "Postgres" },
+                { "name": "Persistence__PostgreSqlHost", "value": "[parameters('postgresqlHost')]" },
+                { "name": "Persistence__Database", "value": "[parameters('databaseName')]" },
+                { "name": "Persistence__ManagedIdentityClientId", "value": "[parameters('managedIdentityClientId')]" },
+                { "name": "Persistence__DatabaseUser", "value": "id-lsc-inventory-db-runtime-prod" },
+                { "name": "Persistence__RuntimePrincipalName", "value": "id-lsc-inventory-db-runtime-prod" },
+                { "name": "Persistence__RuntimePrincipalObjectId", "value": "[parameters('runtimePrincipalObjectId')]" },
+                { "name": "BlobAudit__AccountUrl", "value": "[parameters('blobAccountUrl')]" },
+                { "name": "BlobAudit__ContainerName", "value": "raw-apibara" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
