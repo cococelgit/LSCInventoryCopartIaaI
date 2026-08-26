@@ -8,6 +8,12 @@ Copart permanece deshabilitado en Apibara. El job IAAI es manual y el enriquecim
 
 La cuenta Azure debe tener acceso al tenant `ccfdc482-7c38-458c-b7b7-b7967a122f1d` y a la suscripción **LSC Inventory Feed Project**. El build local y las pruebas ya fueron aprobados en el commit que contiene este archivo.
 
+## Flujo Cloud Shell de un solo comando
+
+La rama de liberación `release/azure-iaai-extended-20260826` une de forma no destructiva el historial público del adaptador Copart Excel con el monorepo integrado. El script `cloud-shell-deploy-iaai-extended.sh` valida ambas procedencias antes de cambiar Azure, calcula una etiqueta de imagen a partir del commit y solo actualiza la imagen de la API de lectura y del job IAAI manual. No ejecuta el job, no cambia secretos, redes, identidades administradas ni programación.
+
+Ejecutar el script desde esa rama en una Cloud Shell ya autenticada. Si cualquiera de las comprobaciones de tenant, suscripción, historial o recursos no coincide, el script termina antes de construir o actualizar recursos.
+
 ## Secuencia de despliegue
 
 Ejecute desde la raíz `inventory-engine`:

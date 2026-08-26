@@ -156,3 +156,5 @@
 - [x] Probar individualmente body style, loss type, llave, color, motor, seller y estados de subasta sobre fixtures IAAI extendidos.
 - [x] Verificar por render que cada tarjeta muestra estado, estimado proveedor, puja, Buy Now y especificaciones densas cuando existen.
 - [x] Añadir pruebas explícitas de teclado, labels, roles, focus y navegación sin mouse para tabs, filtros, carrusel, paginación y ficha.
+- [ ] Preparar y revisar un único comando de Cloud Shell, sin secretos, para construir la imagen integrada y actualizar solo la API y el job IAAI manual.
+- [ ] Ejecutar el comando autorizado desde Cloud Shell y conservar evidencia de la revisión e imagen realmente desplegadas.
