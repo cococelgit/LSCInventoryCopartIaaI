@@ -1,0 +1,162 @@
+name: Copart Azure Deploy and Run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-azure-deploy-and-run
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  ENVIRONMENT_NAME: cae-lsc-inventory-prod
+  SOURCE_JOB_NAME: job-lsc-inventory-ingestion-prod
+  COPART_JOB_NAME: job-lsc-copart-excel-prod
+  RUNTIME_IDENTITY: /subscriptions/99edf3d1-a651-4d2d-af8e-d44a3360f584/resourceGroups/rg-lsc-inventory-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-lsc-inventory-db-runtime-prod
+
+jobs:
+  deploy-and-run:
+    name: Build and run isolated Copart processor
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Build immutable Inventory Engine image in ACR
+        run: |
+          set -euo pipefail
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "$IMAGE_NAME:copart-${GITHUB_SHA}" \
+            --file inventory-engine/Dockerfile \
+            inventory-engine
+
+      - name: Create or update the isolated Copart Job
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${ACR_SERVER}/${IMAGE_NAME}:copart-${GITHUB_SHA}"
+          source_job="$(az containerapp job show --name "$SOURCE_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+
+          mapfile -t inherited_env < <(
+            echo "$source_job" | jq -r '
+              .properties.template.containers[0].env[]
+              | select(.name | startswith("Persistence__") or startswith("BlobAudit__"))
+              | select(.value != null)
+              | "\(.name)=\(.value)"'
+          )
+
+          env_args=(
+            "CopartExcel__AccountUrl=https://stlscinvprodeus2.blob.core.windows.net"
+            "CopartExcel__ContainerName=copart-raw"
+            "CopartExcel__MinimumFileSizeKilobytes=1024"
+            "CopartExcel__MaximumFileSizeMegabytes=512"
+            "CopartExcel__MinimumRowsForCompleteSnapshot=1000"
+            "CopartExcel__MinimumRowCountRatioToRecentMedian=0.70"
+            "CopartExcel__RecentSnapshotCountForBaseline=6"
+            "CopartExcel__ProcessingBatchSize=1000"
+          )
+          env_args+=("${inherited_env[@]}")
+
+          if az containerapp job show --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp job update \
+              --name "$COPART_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$image" \
+              --command dotnet Lsc.Inventory.Api.dll --copart-excel-run \
+              --replace-env-vars "${env_args[@]}" \
+              --replica-timeout 3600 \
+              --replica-retry-limit 0 \
+              --parallelism 1 \
+              --replica-completion-count 1 \
+              --only-show-errors
+          else
+            az containerapp job create \
+              --name "$COPART_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$ENVIRONMENT_NAME" \
+              --trigger-type Manual \
+              --image "$image" \
+              --cpu 1.0 \
+              --memory 2Gi \
+              --command dotnet Lsc.Inventory.Api.dll --copart-excel-run \
+              --env-vars "${env_args[@]}" \
+              --replica-timeout 3600 \
+              --replica-retry-limit 0 \
+              --parallelism 1 \
+              --replica-completion-count 1 \
+              --mi-user-assigned "$RUNTIME_IDENTITY" \
+              --registry-server "$ACR_SERVER" \
+              --registry-identity "$RUNTIME_IDENTITY" \
+              --only-show-errors
+          fi
+
+      - name: Start the complete Copart snapshot run
+        shell: bash
+        run: |
+          set -euo pipefail
+          execution="$(az containerapp job start --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          echo "$execution" | jq .
+          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+          if [ -z "$execution_name" ]; then
+            echo "Azure did not return an execution name." >&2
+            exit 1
+          fi
+          echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
+
+      - name: Wait for the Copart execution result
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3300))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            execution="$(az containerapp job execution show \
+              --name "$COPART_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$COPART_EXECUTION_NAME" -o json)"
+            status="$(echo "$execution" | jq -r '.properties.status // .properties.runningState // "Unknown"')"
+            echo "Copart execution status: $status"
+            case "$status" in
+              Succeeded)
+                echo "$execution" | jq .
+                exit 0
+                ;;
+              Failed|Canceled)
+                echo "$execution" | jq .
+                exit 1
+                ;;
+            esac
+            sleep 20
+          done
+          echo "Timed out waiting for Copart execution." >&2
+          exit 1
+
+      - name: Publish execution reference
+        run: |
+          echo "Image: ${ACR_SERVER}/${IMAGE_NAME}:copart-${GITHUB_SHA}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Job: ${COPART_JOB_NAME}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Execution: ${COPART_EXECUTION_NAME}" >> "$GITHUB_STEP_SUMMARY"
