@@ -83,14 +83,18 @@ public sealed class CopartBlobSnapshotSource(
             return container.GetBlobClient(copart.SnapshotBlobName);
 
         BlobItem? newest = null;
+        var inspected = 0;
+        var sampleNames = new List<string>(capacity: 5);
         await foreach (var candidate in container.GetBlobsAsync(cancellationToken: cancellationToken))
         {
+            inspected++;
+            if (sampleNames.Count < 5) sampleNames.Add(candidate.Name);
             if (!candidate.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)) continue;
             if (newest is null || candidate.Properties.LastModified > newest.Properties.LastModified) newest = candidate;
         }
 
         return newest is null
-            ? throw new FileNotFoundException("No .csv Copart snapshot was found in the configured Blob container.")
+            ? throw new FileNotFoundException($"No .csv Copart snapshot was found in the configured Blob container after inspecting {inspected} blob(s). Sample names: {string.Join(", ", sampleNames)}")
             : container.GetBlobClient(newest.Name);
     }
 
