@@ -32,6 +32,12 @@ public sealed class InventorySourcePolicyTests
 
     private sealed class ContractProbeAdapter : ICopartExcelSnapshotAdapter
     {
+        public Task<CopartSnapshotValidation> ValidateAsync(CopartSnapshotEnvelope snapshot, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new CopartSnapshotValidation(true, 0, 1, []));
+        }
+
         public async IAsyncEnumerable<AuctionVehicle> ReadAcceptedSnapshotAsync(CopartSnapshotEnvelope snapshot, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();

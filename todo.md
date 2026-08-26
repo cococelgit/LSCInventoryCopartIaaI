@@ -134,3 +134,16 @@
 - [x] Documentar el contrato y punto de integración para que otra tarea conecte Copart Excel al Inventory Engine.
 - [x] Crear y subir un único commit inicial con motor, UI, pruebas, infraestructura y documentación.
 - [x] Verificar en GitHub la rama, commit y archivos principales después del push.
+
+## Copart Excel streaming integration
+
+- [x] Implementar `ICopartExcelSnapshotAdapter` para snapshots Copart descargados al servidor, sin llamadas a Apibara.
+- [x] Validar extensión, tamaño, SHA-256, columnas obligatorias, estructura y completitud antes de permitir reconciliación.
+- [x] Procesar CSV/Excel de Copart en streaming con memoria acotada y conservar fila raw más campos normalizados en `AuctionVehicle`.
+- [x] Conectar el adaptador al núcleo existente: `CanonicalVehicleCleaner`, `AuctionEligibilityEvaluator` v4, auditoría, PostgreSQL, Blob y reconciliación.
+- [x] Mantener D09 desactivada y preservar títulos especiales para el filtro UI; no introducir descarte por tipo de título.
+- [x] Proteger el aislamiento de fuentes: IAAI solo Apibara; Copart solo Excel; bloquear Copart antes de llamadas Apibara.
+- [x] Añadir pruebas de archivo válido/grande, hash duplicado, snapshot incompleto, aceptados/descartados, aislamiento Apibara, tres misses, reactivación y métricas auditables.
+- [ ] Ejecutar `pnpm check`, `pnpm test` y `dotnet test inventory-engine/Lsc.Inventory.sln -c Release`.
+- [x] Ejecutar un dry run de 1,000 filas Copart, reportar observados/aceptados/descartados/duplicados/errores/duración/memoria y solicitar aprobación antes de publicar.
+- [ ] Subir la implementación validada a la rama `main` sin secretos ni artefactos de snapshots.

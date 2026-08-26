@@ -97,8 +97,9 @@ public static partial class CanonicalVehicleCleaner
     {
         var compact = Compact(value);
         if (compact is null) return null;
-        var digits = DigitsRegex().Replace(compact, string.Empty);
-        return digits.Length > 0 && compact.Any(char.IsDigit) ? digits : compact;
+        var candidate = compact.StartsWith("LOT ", StringComparison.OrdinalIgnoreCase) ? compact[4..].Trim() : compact;
+        var digits = DigitsRegex().Replace(candidate, string.Empty);
+        return digits.Length > 0 && candidate.Any(char.IsDigit) && !candidate.Any(char.IsLetter) ? digits : compact;
     }
     private static string? Compact(string? value) => string.IsNullOrWhiteSpace(value) ? null : WhitespaceRegex().Replace(value.Trim(), " ");
 

@@ -24,6 +24,10 @@ public sealed record CopartSnapshotEnvelope(
 
 public interface ICopartExcelSnapshotAdapter
 {
+    Task<CopartSnapshotValidation> ValidateAsync(
+        CopartSnapshotEnvelope snapshot,
+        CancellationToken cancellationToken);
+
     IAsyncEnumerable<AuctionVehicle> ReadAcceptedSnapshotAsync(
         CopartSnapshotEnvelope snapshot,
         CancellationToken cancellationToken);

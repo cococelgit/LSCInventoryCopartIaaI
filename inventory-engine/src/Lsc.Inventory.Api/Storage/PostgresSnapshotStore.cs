@@ -266,6 +266,93 @@ public sealed class PostgresSnapshotStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+
+        var historicalRows = new List<int>();
+        await using (var baseline = connection.CreateCommand())
+        {
+            baseline.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            baseline.CommandText = """
+                select row_count
+                from copart_snapshot_manifests
+                where status = 'succeeded' and is_complete = true
+                order by downloaded_at desc
+                limit @limit;
+                """;
+            AddParameter(baseline, "limit", Math.Max(1, baselineSnapshotCount));
+            await using var reader = await baseline.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) historicalRows.Add(reader.GetInt32(0));
+        }
+
+        var ordered = historicalRows.OrderBy(value => value).ToArray();
+        var median = ordered.Length == 0 ? (int?)null : ordered[ordered.Length / 2];
+        if (median is > 0 && receipt.RowCount < decimal.Ceiling(median.Value * minimumRowCountRatio))
+            return new CopartSnapshotRegistration(false, false, null, median, "F05: Copart snapshot row count is below the accepted baseline.");
+
+        var runId = Guid.NewGuid();
+        await using var insert = connection.CreateCommand();
+        insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        insert.CommandText = """
+            insert into copart_snapshot_manifests (
+                sha256, file_name, downloaded_at, file_size_bytes, row_count, processing_batch_size,
+                is_complete, status, run_id)
+            values (
+                @sha256, @file_name, @downloaded_at, @file_size_bytes, @row_count, @processing_batch_size,
+                true, 'running', @run_id)
+            on conflict (sha256) do nothing
+            returning run_id;
+            """;
+        AddParameter(insert, "sha256", receipt.Sha256);
+        AddParameter(insert, "file_name", receipt.FileName);
+        AddParameter(insert, "downloaded_at", receipt.DownloadedAt);
+        AddParameter(insert, "file_size_bytes", receipt.FileSizeBytes);
+        AddParameter(insert, "row_count", receipt.RowCount);
+        AddParameter(insert, "processing_batch_size", receipt.ProcessingBatchSize);
+        AddParameter(insert, "run_id", runId);
+        var inserted = await insert.ExecuteScalarAsync(cancellationToken);
+        return inserted is null
+            ? new CopartSnapshotRegistration(false, true, null, median, "F02: Copart snapshot hash was already processed.")
+            : new CopartSnapshotRegistration(true, false, runId, median, null);
+    }
+
+    public async Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            update copart_snapshot_manifests
+            set finished_at = @finished_at,
+                observed_count = @observed_count,
+                accepted_count = @accepted_count,
+                discarded_count = @discarded_count,
+                quarantined_count = @quarantined_count,
+                marked_count = @marked_count,
+                error_count = @error_count,
+                is_complete = @is_complete,
+                status = @status,
+                failures = cast(@failures as jsonb),
+                updated_at = now()
+            where run_id = @run_id;
+            """;
+        AddParameter(command, "run_id", runId);
+        AddParameter(command, "finished_at", completion.FinishedAt);
+        AddParameter(command, "observed_count", completion.Observed);
+        AddParameter(command, "accepted_count", completion.Accepted);
+        AddParameter(command, "discarded_count", completion.Discarded);
+        AddParameter(command, "quarantined_count", completion.Quarantined);
+        AddParameter(command, "marked_count", completion.Marked);
+        AddParameter(command, "error_count", completion.Errors);
+        AddParameter(command, "is_complete", completion.IsComplete);
+        AddParameter(command, "status", completion.Failures.Count == 0 && completion.IsComplete ? "succeeded" : "completed_with_errors");
+        AddParameter(command, "failures", JsonSerializer.Serialize(completion.Failures));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task PersistProviderUsageAsync(string provider, JsonElement usage, DateTimeOffset capturedAt, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
@@ -777,6 +864,30 @@ public sealed class PostgresSnapshotStore(
                     usage jsonb not null,
                     created_at timestamptz not null default now()
                 );
+
+                create table if not exists copart_snapshot_manifests (
+                    sha256 text primary key,
+                    file_name text not null,
+                    downloaded_at timestamptz not null,
+                    file_size_bytes bigint not null,
+                    row_count integer not null,
+                    processing_batch_size integer not null,
+                    is_complete boolean not null,
+                    status text not null,
+                    run_id uuid not null unique,
+                    finished_at timestamptz,
+                    observed_count integer not null default 0,
+                    accepted_count integer not null default 0,
+                    discarded_count integer not null default 0,
+                    quarantined_count integer not null default 0,
+                    marked_count integer not null default 0,
+                    error_count integer not null default 0,
+                    failures jsonb not null default '[]'::jsonb,
+                    created_at timestamptz not null default now(),
+                    updated_at timestamptz not null default now()
+                );
+
+                create index if not exists ix_copart_snapshot_manifests_status_downloaded on copart_snapshot_manifests (status, downloaded_at desc);
 
                 create index if not exists ix_provider_usage_snapshots_provider_captured on provider_usage_snapshots (provider, captured_at desc);
 

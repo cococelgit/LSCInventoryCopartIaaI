@@ -9,6 +9,8 @@ public interface IInventorySnapshotStore
 {
     Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken);
     Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken);
+    Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken);
+    Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken);
     Task PersistProviderUsageAsync(string provider, JsonElement usage, DateTimeOffset capturedAt, CancellationToken cancellationToken);
     Task PersistEligibilityDecisionAsync(EligibilityEvaluation evaluation, DateTimeOffset evaluatedAt, CancellationToken cancellationToken);
     Task<EligibilityAuditPage> GetDiscardedEligibilityDecisionsAsync(int page, int pageSize, string? ruleCode, string? query, CancellationToken cancellationToken);
@@ -30,6 +32,32 @@ public sealed record InventorySyncRunCompletion(
     DateTimeOffset FinishedAt,
     int VehiclesObserved,
     int RequestsIssued,
+    IReadOnlyList<string> Failures);
+
+public sealed record CopartSnapshotReceipt(
+    string FileName,
+    string Sha256,
+    DateTimeOffset DownloadedAt,
+    long FileSizeBytes,
+    int RowCount,
+    int ProcessingBatchSize);
+
+public sealed record CopartSnapshotRegistration(
+    bool Accepted,
+    bool IsDuplicate,
+    Guid? RunId,
+    int? BaselineMedianRowCount,
+    string? RejectionReason);
+
+public sealed record CopartSnapshotCompletion(
+    DateTimeOffset FinishedAt,
+    int Observed,
+    int Accepted,
+    int Discarded,
+    int Quarantined,
+    int Marked,
+    int Errors,
+    bool IsComplete,
     IReadOnlyList<string> Failures);
 
 public sealed record StoredVehicleSnapshot(
@@ -91,6 +119,8 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     private readonly ConcurrentDictionary<string, StoredVehicleSnapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, EligibilityAuditItem> _eligibility = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (string Platform, bool Active, int MissingCount)> _lifecycle = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CopartSnapshotReceipt> _copartSnapshots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<Guid, string> _copartRuns = new();
 
     public Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
@@ -99,6 +129,34 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     }
 
     public Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_copartSnapshots.ContainsKey(receipt.Sha256))
+            return Task.FromResult(new CopartSnapshotRegistration(false, true, null, null, "F02: Copart snapshot hash was already processed."));
+
+        var historicalRows = _copartSnapshots.Values
+            .OrderByDescending(snapshot => snapshot.DownloadedAt)
+            .Take(Math.Max(1, baselineSnapshotCount))
+            .Select(snapshot => snapshot.RowCount)
+            .OrderBy(value => value)
+            .ToArray();
+        var median = historicalRows.Length == 0 ? (int?)null : historicalRows[historicalRows.Length / 2];
+        if (median is > 0 && receipt.RowCount < decimal.Ceiling(median.Value * minimumRowCountRatio))
+            return Task.FromResult(new CopartSnapshotRegistration(false, false, null, median, "F05: Copart snapshot row count is below the accepted baseline."));
+
+        _copartSnapshots[receipt.Sha256] = receipt;
+        var runId = Guid.NewGuid();
+        _copartRuns[runId] = receipt.Sha256;
+        return Task.FromResult(new CopartSnapshotRegistration(true, false, runId, median, null));
+    }
+
+    public Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.CompletedTask;
