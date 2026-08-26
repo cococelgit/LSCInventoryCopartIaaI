@@ -7,6 +7,7 @@ using Lsc.Inventory.Api.Workers;
 using Polly;
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
 using Microsoft.AspNetCore.WebUtilities;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -94,36 +95,104 @@ static string? SafePhotoUrl(string? candidate)
 static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot)
 {
     var vehicle = snapshot.Vehicle;
-    var photos = (vehicle.Media?.Photos ?? Array.Empty<string>())
+    var media = (vehicle.Media?.Items ?? Array.Empty<AuctionMediaItem>())
+        .Select(item => new { Url = SafePhotoUrl(item.Large) ?? SafePhotoUrl(item.Thumb), item.Type })
+        .Where(item => item.Url is not null)
+        .Select(item => new PublicMediaItem(item.Url!, item.Type))
+        .DistinctBy(item => item.Url)
+        .Take(20)
+        .ToArray();
+    var photos = media.Select(item => item.Url)
+        .Concat(vehicle.Media?.Photos ?? Array.Empty<string>())
         .Select(SafePhotoUrl)
         .Where(url => url is not null)
         .Cast<string>()
-        .Take(6)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(20)
         .ToArray();
-    return new PublicInventoryVehicle(
-        vehicle.LotNumber ?? snapshot.Identity,
-        vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
-        snapshot.ObservedAt,
-        vehicle.Title,
-        vehicle.Year,
-        vehicle.Make,
-        vehicle.Model,
-        vehicle.VehicleType,
-        vehicle.Color,
-        vehicle.FuelType,
-        vehicle.Transmission,
-        vehicle.DriveType,
-        vehicle.Odometer,
-        vehicle.Damage,
-        vehicle.Auction?.AuctionAt,
-        vehicle.Auction?.LotStatus,
-        vehicle.Pricing?.CurrentBidUsd,
-        vehicle.Pricing?.BuyNowUsd,
-        vehicle.Location?.Display,
-        vehicle.Location?.State,
-        vehicle.SaleDocument?.Name,
-        vehicle.Location?.FacilityId,
-        photos);
+    var description = vehicle.Details?.VehicleDescription;
+    var information = vehicle.Details?.VehicleInformation;
+    var sale = vehicle.Details?.SaleInformation;
+    return new PublicInventoryVehicle
+    {
+        Lot = vehicle.LotNumber ?? snapshot.Identity,
+        Platform = vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
+        ObservedAt = snapshot.ObservedAt,
+        Title = vehicle.Title,
+        Year = vehicle.Year,
+        Make = vehicle.Make,
+        Model = vehicle.Model,
+        Series = description?.Series,
+        VehicleType = vehicle.VehicleType,
+        BodyStyle = vehicle.VehicleSpecs?.BodyStyle ?? description?.BodyStyle,
+        Color = vehicle.Color,
+        FuelType = vehicle.FuelType,
+        Transmission = vehicle.Transmission,
+        DriveType = vehicle.DriveType,
+        Odometer = vehicle.Odometer,
+        OdometerKm = vehicle.OdometerInfo?.Kilometers,
+        OdometerStatus = vehicle.OdometerInfo?.Status,
+        Damage = vehicle.Damage,
+        SecondaryDamage = vehicle.Condition?.SecondaryDamage,
+        LossType = vehicle.Condition?.Loss,
+        StartCode = vehicle.Condition?.RunCondition?.Label ?? vehicle.Condition?.RunCondition?.Value,
+        HasKey = vehicle.Condition?.HasKey,
+        AuctionAt = vehicle.Auction?.AuctionAt,
+        LotStatus = vehicle.Auction?.LotStatus,
+        LotSubStatus = vehicle.Auction?.LotSubStatus,
+        IsBuyNow = vehicle.Auction?.IsBuyNow,
+        IsTimed = vehicle.Auction?.IsTimed,
+        CurrentBidUsd = vehicle.Pricing?.CurrentBidUsd,
+        PreBidUsd = vehicle.Pricing?.PreBidUsd,
+        BuyNowUsd = vehicle.Pricing?.BuyNowUsd,
+        EstimatedPriceFromUsd = vehicle.Pricing?.EstimatedCost?.FromUsd,
+        EstimatedPriceToUsd = vehicle.Pricing?.EstimatedCost?.ToUsd,
+        EstimatedPriceText = vehicle.Pricing?.EstimatedCost?.Text,
+        ActualCashValueUsd = ParseMoney(sale?.ActualCashValue),
+        EstimatedRepairCostUsd = ParseMoney(sale?.EstimatedRepairCost),
+        Location = vehicle.Location?.Display,
+        SendFrom = vehicle.Location?.SendFrom,
+        State = vehicle.Location?.State,
+        FacilityId = vehicle.Location?.FacilityId,
+        SellingBranch = sale?.SellingBranch,
+        Lane = sale?.Lane,
+        Aisle = sale?.Aisle,
+        SellerName = vehicle.Seller?.Name ?? sale?.Seller,
+        SellerType = vehicle.Seller?.Type ?? sale?.SellerType,
+        TitleType = vehicle.SaleDocument?.Name,
+        SaleDocumentType = vehicle.SaleDocument?.Type,
+        SaleDocumentGroup = vehicle.SaleDocument?.Group,
+        SaleDocumentPending = vehicle.SaleDocument?.IsPending,
+        SaleDocumentExport = vehicle.SaleDocument?.Export,
+        SaleDocumentRegistration = vehicle.SaleDocument?.Registration,
+        TitleBrand = information?.TitleBrand,
+        TitleNotes = information?.TitleNotes,
+        EngineSizeLiters = vehicle.VehicleSpecs?.Engine?.SizeLiters,
+        EngineHorsepower = vehicle.VehicleSpecs?.Engine?.Horsepower,
+        EngineLayout = vehicle.VehicleSpecs?.Engine?.Layout,
+        EngineDescription = vehicle.VehicleSpecs?.Engine?.Raw,
+        Cylinders = description?.Cylinders,
+        Airbags = vehicle.VehicleSpecs?.Airbags,
+        RestraintSystem = vehicle.VehicleSpecs?.RestraintSystem,
+        VinStatus = information?.VinStatus ?? description?.VinStatus,
+        VehicleClass = description?.VehicleClass,
+        VehicleScore = description?.VehicleScore,
+        ManufacturedIn = description?.ManufacturedIn,
+        Options = description?.Options,
+        Has360 = vehicle.Media?.Has360,
+        HasVideo = vehicle.Media?.HasVideo ?? media.Any(item => string.Equals(item.Type, "video", StringComparison.OrdinalIgnoreCase)),
+        Photos = photos,
+        Media = media
+    };
+}
+
+static decimal? ParseMoney(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return null;
+    var sanitized = new string(value.Where(character => char.IsDigit(character) || character is '.' or '-').ToArray());
+    return decimal.TryParse(sanitized, NumberStyles.Number | NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var result)
+        ? result
+        : null;
 }
 
 app.MapGet("/healthz", () => Results.Ok(new

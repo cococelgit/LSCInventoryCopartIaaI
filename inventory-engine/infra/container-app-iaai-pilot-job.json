@@ -47,6 +47,8 @@
                 { "name": "IaaIPilot__MaxVehicles", "value": "1000" },
                 { "name": "IaaIPilot__MaxListRequests", "value": "75" },
                 { "name": "IaaIPilot__LotSubStatus", "value": "Open" },
+                { "name": "IaaIPilot__EnrichDetails", "value": "true" },
+                { "name": "IaaIPilot__DetailEnrichmentLimit", "value": "1000" },
                 { "name": "Persistence__Provider", "value": "Postgres" },
                 { "name": "Persistence__PostgreSqlHost", "value": "[parameters('postgresqlHost')]" },
                 { "name": "Persistence__Database", "value": "[parameters('databaseName')]" },

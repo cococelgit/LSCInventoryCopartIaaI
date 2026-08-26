@@ -105,6 +105,9 @@ public sealed record AuctionVehicle
     [JsonPropertyName("announcements")]
     public JsonElement? Announcements { get; init; }
 
+    [JsonPropertyName("details")]
+    public VehicleDetails? Details { get; init; }
+
     [JsonPropertyName("damage")]
     public string? Damage { get; init; }
 
@@ -141,6 +144,12 @@ public sealed record AuctionInfo
     [JsonPropertyName("lot_sub_status")]
     public string? LotSubStatus { get; init; }
 
+    [JsonPropertyName("is_buy_now")]
+    public bool? IsBuyNow { get; init; }
+
+    [JsonPropertyName("is_timed")]
+    public bool? IsTimed { get; init; }
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalData { get; init; }
 }
@@ -158,6 +167,27 @@ public sealed record PricingInfo
     [JsonPropertyName("sale_price_usd")]
     [JsonConverter(typeof(NullableDecimalJsonConverter))]
     public decimal? SalePriceUsd { get; init; }
+
+    [JsonPropertyName("current_bid2_usd")]
+    [JsonConverter(typeof(NullableDecimalJsonConverter))]
+    public decimal? PreBidUsd { get; init; }
+
+    [JsonPropertyName("estimated_cost")]
+    public EstimatedCostInfo? EstimatedCost { get; init; }
+}
+
+public sealed record EstimatedCostInfo
+{
+    [JsonPropertyName("from")]
+    [JsonConverter(typeof(NullableDecimalJsonConverter))]
+    public decimal? FromUsd { get; init; }
+
+    [JsonPropertyName("to")]
+    [JsonConverter(typeof(NullableDecimalJsonConverter))]
+    public decimal? ToUsd { get; init; }
+
+    [JsonPropertyName("text")]
+    public string? Text { get; init; }
 }
 
 public sealed record VehicleLocation
@@ -171,6 +201,9 @@ public sealed record VehicleLocation
     [JsonPropertyName("facility_id")]
     [JsonConverter(typeof(StringOrNumberJsonConverter))]
     public string? FacilityId { get; init; }
+
+    [JsonPropertyName("send_from")]
+    public string? SendFrom { get; init; }
 }
 
 public sealed record AuctionLocation
@@ -215,6 +248,12 @@ public sealed record AuctionSeller
 
     [JsonPropertyName("type")]
     public string? Type { get; init; }
+
+    [JsonPropertyName("class")]
+    public string? Class { get; init; }
+
+    [JsonPropertyName("text_class")]
+    public string? TextClass { get; init; }
 }
 
 public sealed record MediaInfo
@@ -225,8 +264,26 @@ public sealed record MediaInfo
     [JsonPropertyName("has_360")]
     public bool? Has360 { get; init; }
 
+    [JsonPropertyName("has_video")]
+    public bool? HasVideo { get; init; }
+
     [JsonPropertyName("thumbs")]
     public IReadOnlyList<string>? Photos { get; init; }
+
+    [JsonPropertyName("items")]
+    public IReadOnlyList<AuctionMediaItem>? Items { get; init; }
+}
+
+public sealed record AuctionMediaItem
+{
+    [JsonPropertyName("large")]
+    public string? Large { get; init; }
+
+    [JsonPropertyName("thumb")]
+    public string? Thumb { get; init; }
+
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
 }
 
 public sealed record VehicleSpecs
@@ -242,6 +299,34 @@ public sealed record VehicleSpecs
 
     [JsonPropertyName("drive_type")]
     public string? DriveType { get; init; }
+
+    [JsonPropertyName("body_style")]
+    public string? BodyStyle { get; init; }
+
+    [JsonPropertyName("engine")]
+    public VehicleEngine? Engine { get; init; }
+
+    [JsonPropertyName("airbags")]
+    public string? Airbags { get; init; }
+
+    [JsonPropertyName("restraint_system")]
+    public string? RestraintSystem { get; init; }
+}
+
+public sealed record VehicleEngine
+{
+    [JsonPropertyName("size_l")]
+    public string? SizeLiters { get; init; }
+
+    [JsonPropertyName("hp")]
+    [JsonConverter(typeof(NullableDecimalJsonConverter))]
+    public decimal? Horsepower { get; init; }
+
+    [JsonPropertyName("layout")]
+    public string? Layout { get; init; }
+
+    [JsonPropertyName("raw")]
+    public string? Raw { get; init; }
 }
 
 public sealed record VehicleCondition
@@ -251,6 +336,9 @@ public sealed record VehicleCondition
 
     [JsonPropertyName("secondary_damage")]
     public string? SecondaryDamage { get; init; }
+
+    [JsonPropertyName("loss")]
+    public string? Loss { get; init; }
 
     [JsonPropertyName("has_key")]
     public bool? HasKey { get; init; }
@@ -266,6 +354,9 @@ public sealed record RunConditionInfo
 
     [JsonPropertyName("label")]
     public string? Label { get; init; }
+
+    [JsonPropertyName("class_hint")]
+    public string? ClassHint { get; init; }
 }
 
 public sealed record OdometerInfo
@@ -276,6 +367,10 @@ public sealed record OdometerInfo
 
     [JsonPropertyName("status")]
     public string? Status { get; init; }
+
+    [JsonPropertyName("km")]
+    [JsonConverter(typeof(NullableDecimalJsonConverter))]
+    public decimal? Kilometers { get; init; }
 }
 
 public sealed record SaleDocument
@@ -285,6 +380,106 @@ public sealed record SaleDocument
 
     [JsonPropertyName("is_pending")]
     public bool? IsPending { get; init; }
+
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
+
+    [JsonPropertyName("sale_document_group")]
+    public string? Group { get; init; }
+
+    [JsonPropertyName("export")]
+    public bool? Export { get; init; }
+
+    [JsonPropertyName("registration")]
+    public bool? Registration { get; init; }
+
+    [JsonPropertyName("page_id")]
+    [JsonConverter(typeof(StringOrNumberJsonConverter))]
+    public string? PageId { get; init; }
+}
+
+public sealed record VehicleDetails
+{
+    [JsonPropertyName("sale_information")]
+    public VehicleSaleInformation? SaleInformation { get; init; }
+
+    [JsonPropertyName("vehicle_description")]
+    public VehicleDescriptionDetails? VehicleDescription { get; init; }
+
+    [JsonPropertyName("vehicle_information")]
+    public VehicleInformationDetails? VehicleInformation { get; init; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; init; }
+}
+
+public sealed record VehicleSaleInformation
+{
+    [JsonPropertyName("ActualCashValue")]
+    public string? ActualCashValue { get; init; }
+
+    [JsonPropertyName("EstimatedRepairCost")]
+    public string? EstimatedRepairCost { get; init; }
+
+    [JsonPropertyName("Lane")]
+    public string? Lane { get; init; }
+
+    [JsonPropertyName("Aisle")]
+    public string? Aisle { get; init; }
+
+    [JsonPropertyName("SellingBranch")]
+    public string? SellingBranch { get; init; }
+
+    [JsonPropertyName("Seller")]
+    public string? Seller { get; init; }
+
+    [JsonPropertyName("SellerType")]
+    public string? SellerType { get; init; }
+
+    [JsonPropertyName("Notes")]
+    public string? Notes { get; init; }
+}
+
+public sealed record VehicleDescriptionDetails
+{
+    [JsonPropertyName("BodyStyle")]
+    public string? BodyStyle { get; init; }
+
+    [JsonPropertyName("Series")]
+    public string? Series { get; init; }
+
+    [JsonPropertyName("Cylinders")]
+    public string? Cylinders { get; init; }
+
+    [JsonPropertyName("ManufacturedIn")]
+    public string? ManufacturedIn { get; init; }
+
+    [JsonPropertyName("Options")]
+    public string? Options { get; init; }
+
+    [JsonPropertyName("VehicleClass")]
+    public string? VehicleClass { get; init; }
+
+    [JsonPropertyName("VehicleScore")]
+    public string? VehicleScore { get; init; }
+
+    [JsonPropertyName("VINStatus")]
+    public string? VinStatus { get; init; }
+}
+
+public sealed record VehicleInformationDetails
+{
+    [JsonPropertyName("VINStatus")]
+    public string? VinStatus { get; init; }
+
+    [JsonPropertyName("TitleSaleDocBrand")]
+    public string? TitleBrand { get; init; }
+
+    [JsonPropertyName("TitleSaleDocNotes")]
+    public string? TitleNotes { get; init; }
+
+    [JsonPropertyName("Notes")]
+    public string? Notes { get; init; }
 }
 
 public static partial class AuctionVehicleNormalizer

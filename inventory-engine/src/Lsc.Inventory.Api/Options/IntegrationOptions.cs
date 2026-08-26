@@ -68,4 +68,9 @@ public sealed class IaaIPilotOptions
     public int MaxListRequests { get; init; } = 60;
 
     public string LotSubStatus { get; init; } = "Open";
+
+    public bool EnrichDetails { get; init; }
+
+    [Range(0, 10000)]
+    public int DetailEnrichmentLimit { get; init; }
 }

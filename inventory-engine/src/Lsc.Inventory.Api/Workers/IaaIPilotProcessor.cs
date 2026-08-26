@@ -52,6 +52,7 @@ public sealed class IaaIPilotProcessor(
         var discarded = 0;
         var quarantined = 0;
         var requests = 0;
+        var detailsRequested = 0;
         string? cursor = null;
 
         try
@@ -68,7 +69,27 @@ public sealed class IaaIPilotProcessor(
                 {
                     if (loaded >= _pilot.MaxVehicles) break;
                     var evaluatedAt = DateTimeOffset.UtcNow;
-                    var vehicle = CanonicalVehicleCleaner.Clean(AuctionVehicleNormalizer.Normalize(rawVehicle, null, null));
+                    var providerVehicle = rawVehicle;
+                    if (_pilot.EnrichDetails && detailsRequested < _pilot.DetailEnrichmentLimit)
+                    {
+                        var lookup = rawVehicle.LotNumber ?? rawVehicle.Vin;
+                        if (!string.IsNullOrWhiteSpace(lookup))
+                        {
+                            try
+                            {
+                                requests++;
+                                detailsRequested++;
+                                var detail = await apibaraClient.GetVehicleAsync(lookup, cancellationToken);
+                                providerVehicle = AuctionVehicleMerger.Merge(detail.Data, rawVehicle);
+                            }
+                            catch (Exception exception) when (exception is not OperationCanceledException)
+                            {
+                                failures.Add($"detail:{lookup}:{exception.GetType().Name}");
+                                logger.LogWarning(exception, "IAAI detail enrichment failed for lookup {Lookup}.", lookup);
+                            }
+                        }
+                    }
+                    var vehicle = CanonicalVehicleCleaner.Clean(AuctionVehicleNormalizer.Normalize(providerVehicle, null, null));
                     var eligibility = AuctionEligibilityEvaluator.Evaluate(vehicle, evaluatedAt);
                     await snapshotStore.PersistEligibilityDecisionAsync(eligibility, evaluatedAt, cancellationToken);
                     observed++;

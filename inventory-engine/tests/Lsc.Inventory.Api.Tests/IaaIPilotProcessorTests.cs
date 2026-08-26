@@ -36,9 +36,37 @@ public sealed class IaaIPilotProcessorTests
         Assert.Equal(1000, (await store.GetRecentAsync(5000, CancellationToken.None)).Count);
     }
 
+    [Fact]
+    public async Task Enriches_only_the_configured_number_of_iaai_vehicles_with_details()
+    {
+        var client = new FakeApibaraClient(supportDetails: true);
+        var store = new InMemorySnapshotStore();
+        var processor = new IaaIPilotProcessor(
+            client,
+            store,
+            Microsoft.Extensions.Options.Options.Create(new ApibaraOptions { ApiKey = "test", PageSize = 20 }),
+            Microsoft.Extensions.Options.Options.Create(new IaaIPilotOptions { Enabled = true, MaxVehicles = 2, MaxListRequests = 1, EnrichDetails = true, DetailEnrichmentLimit = 2 }),
+            NullLogger<IaaIPilotProcessor>.Instance);
+
+        var result = await processor.RunAsync(CancellationToken.None);
+        var stored = await store.GetRecentAsync(10, CancellationToken.None);
+
+        Assert.Equal(2, result.Loaded);
+        Assert.Equal(3, result.RequestsIssued);
+        Assert.Equal(2, client.DetailRequests);
+        Assert.All(stored, snapshot => Assert.Equal("$18,500", snapshot.Vehicle.Details?.SaleInformation?.ActualCashValue));
+        Assert.All(stored, snapshot => Assert.Equal("Premium", snapshot.Vehicle.Details?.VehicleDescription?.Series));
+        Assert.All(stored, snapshot => Assert.Equal("2.0L I4", snapshot.Vehicle.VehicleSpecs?.Engine?.Raw));
+    }
+
     private sealed class FakeApibaraClient : IApibaraClient
     {
+        private readonly bool _supportDetails;
+
+        public FakeApibaraClient(bool supportDetails = false) => _supportDetails = supportDetails;
+
         public int ListRequests { get; private set; }
+        public int DetailRequests { get; private set; }
         public List<VehicleSearchRequest> Requests { get; } = [];
 
         public Task<VehicleListResponse> SearchVehiclesAsync(VehicleSearchRequest request, CancellationToken cancellationToken)
@@ -65,7 +93,22 @@ public sealed class IaaIPilotProcessorTests
         }
 
         public Task<LocationsResponse> GetLocationsAsync(string platform, string state, int perPage, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<VehicleDetailsResponse> GetVehicleAsync(string vinOrLot, CancellationToken cancellationToken) => throw new NotSupportedException("Pilot must not call per-vehicle details.");
+        public Task<VehicleDetailsResponse> GetVehicleAsync(string vinOrLot, CancellationToken cancellationToken)
+        {
+            if (!_supportDetails) throw new NotSupportedException("Pilot must not call per-vehicle details.");
+            DetailRequests++;
+            return Task.FromResult(new VehicleDetailsResponse(new AuctionVehicle
+            {
+                Platform = "iaai",
+                LotNumber = vinOrLot,
+                VehicleSpecs = new VehicleSpecs { Engine = new VehicleEngine { Raw = "2.0L I4", SizeLiters = "2.0" } },
+                Details = new VehicleDetails
+                {
+                    SaleInformation = new VehicleSaleInformation { ActualCashValue = "$18,500" },
+                    VehicleDescription = new VehicleDescriptionDetails { Series = "Premium" }
+                }
+            }));
+        }
         public Task<UsageResponse> GetUsageAsync(CancellationToken cancellationToken) => Task.FromResult(new UsageResponse(JsonSerializer.SerializeToElement(new { })));
     }
 }
