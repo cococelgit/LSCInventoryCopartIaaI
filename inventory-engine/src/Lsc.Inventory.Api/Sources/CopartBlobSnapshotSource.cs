@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
 using Azure.Core;
 using Azure.Identity;
@@ -46,35 +47,57 @@ public sealed class CopartBlobSnapshotSource(
             throw new IOException("Copart Blob snapshot is empty.");
 
         var temporaryPath = Path.Combine(Path.GetTempPath(), $"copart-{Guid.NewGuid():N}.csv");
+        var downloadedPath = $"{temporaryPath}.download";
         try
         {
-            string sha256;
-            await using (var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            await using (var destination = new FileStream(downloadedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
                 var response = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
-                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-                var buffer = new byte[128 * 1024];
-                int read;
-                while ((read = await response.Value.Content.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
-                {
-                    hash.AppendData(buffer, 0, read);
-                    await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                }
+                await response.Value.Content.CopyToAsync(destination, 128 * 1024, cancellationToken);
                 await destination.FlushAsync(cancellationToken);
-                destination.Position = 0;
-                sha256 = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
             }
 
+            var compressed = blob.Name.EndsWith(".gz", StringComparison.OrdinalIgnoreCase);
+            if (compressed)
+            {
+                await using var source = new FileStream(downloadedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await using var gzip = new GZipStream(source, CompressionMode.Decompress, leaveOpen: false);
+                await using var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await gzip.CopyToAsync(destination, 128 * 1024, cancellationToken);
+                await destination.FlushAsync(cancellationToken);
+                File.Delete(downloadedPath);
+            }
+            else
+            {
+                File.Move(downloadedPath, temporaryPath);
+            }
+
+            var sha256 = await ComputeFileHashAsync(temporaryPath, cancellationToken);
+            var logicalName = compressed ? blob.Name[..^3] : blob.Name;
             var stream = new FileStream(temporaryPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             var downloadedAt = properties.Value.LastModified == default ? DateTimeOffset.UtcNow : properties.Value.LastModified;
-            logger.LogInformation("Prepared Copart snapshot {BlobName} with {Bytes} bytes and SHA-256 {HashPrefix}.", blob.Name, properties.Value.ContentLength, sha256[..12]);
-            return new CopartSnapshotLease(new CopartSnapshotEnvelope(blob.Name, sha256, downloadedAt, stream), temporaryPath);
+            logger.LogInformation("Prepared Copart snapshot {BlobName} as {LogicalName} with {Bytes} bytes and SHA-256 {HashPrefix}.", blob.Name, logicalName, new FileInfo(temporaryPath).Length, sha256[..12]);
+            return new CopartSnapshotLease(new CopartSnapshotEnvelope(logicalName, sha256, downloadedAt, stream), temporaryPath);
         }
         catch
         {
             File.Delete(temporaryPath);
+            File.Delete(downloadedPath);
             throw;
         }
+    }
+
+    private static async Task<string> ComputeFileHashAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[128 * 1024];
+        int read;
+        while ((read = await stream.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
+        {
+            hash.AppendData(buffer, 0, read);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
     private static async Task<BlobClient> ResolveBlobAsync(BlobContainerClient container, CopartExcelOptions copart, CancellationToken cancellationToken)
@@ -89,12 +112,12 @@ public sealed class CopartBlobSnapshotSource(
         {
             inspected++;
             if (sampleNames.Count < 5) sampleNames.Add(candidate.Name);
-            if (!candidate.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!candidate.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase) && !candidate.Name.EndsWith(".csv.gz", StringComparison.OrdinalIgnoreCase)) continue;
             if (newest is null || candidate.Properties.LastModified > newest.Properties.LastModified) newest = candidate;
         }
 
         return newest is null
-            ? throw new FileNotFoundException($"No .csv Copart snapshot was found in the configured Blob container after inspecting {inspected} blob(s). Sample names: {string.Join(", ", sampleNames)}")
+            ? throw new FileNotFoundException($"No .csv or .csv.gz Copart snapshot was found in the configured Blob container after inspecting {inspected} blob(s). Sample names: {string.Join(", ", sampleNames)}")
             : container.GetBlobClient(newest.Name);
     }
 
