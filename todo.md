@@ -156,6 +156,17 @@
 - [x] Probar individualmente body style, loss type, llave, color, motor, seller y estados de subasta sobre fixtures IAAI extendidos.
 - [x] Verificar por render que cada tarjeta muestra estado, estimado proveedor, puja, Buy Now y especificaciones densas cuando existen.
 - [x] Añadir pruebas explícitas de teclado, labels, roles, focus y navegación sin mouse para tabs, filtros, carrusel, paginación y ficha.
-- [ ] Preparar y revisar un único comando de Cloud Shell, sin secretos, para construir la imagen integrada y actualizar solo la API y el job IAAI manual.
+- [x] Preparar y revisar un único comando de Cloud Shell, sin secretos, para construir la imagen integrada y actualizar solo la API y el job IAAI manual.
 - [ ] Ejecutar el comando autorizado desde Cloud Shell y conservar evidencia de la revisión e imagen realmente desplegadas.
-- [ ] Sustituir la descarga Git de Cloud Shell por una variante pública que no active solicitudes de credenciales locales.
+- [x] Sustituir la descarga Git de Cloud Shell por una variante pública que no active solicitudes de credenciales locales.
+- [ ] Diagnosticar la desconexión de Cloud Shell que ocurre al iniciar el comando de despliegue y recuperar una sesión estable.
+- [ ] Desplegar mediante una ruta del portal Azure que no requiera ejecutar comandos dentro de Cloud Shell.
+- [ ] Configurar una integración GitHub-Azure de mínimo privilegio para construir la imagen y actualizar la API sin usar Cloud Shell.
+- [x] Reemplazar el asistente que exige credenciales administrativas de ACR por una publicación federada con permisos mínimos, manteniendo el usuario administrador de ACR deshabilitado.
+- [ ] Ejecutar la plantilla federada revisada en Azure y comprobar el build, la nueva revisión API y la imagen del job IAAI sin iniciar una ejecución IAAI.
+- [ ] Corregir la ruta federada para el entorno Azure Deployment Scripts, donde el runtime Azure CLI no incluye `tar`, y repetir el despliegue sin ampliar permisos ni habilitar ACR admin.
+- [ ] Corregir el formato de contexto Git que ACR rechazó antes de iniciar el build, conservando el commit de liberación y el aislamiento del subdirectorio `inventory-engine`.
+- [ ] Cambiar el build federado al paquete fuente HTTPS inmutable, porque el repositorio GitHub consolidado no es accesible anónimamente por ACR.
+- [ ] Comprobar `az account show` local antes de cualquier reintento y comparar su resultado con el estado del despliegue federado ya activo para evitar una actualización duplicada.
+- [ ] Tras un despliegue verificado, ejecutar una sola sincronización IAAI manual de validación y medir la cobertura de campos ampliados mediante el bridge seguro.
+- [x] Documentar el bloqueo actual: `az account show` local exige login y el portal Azure controlable reporta falta de conexión; no iniciar otra mutación hasta recuperar una sesión autenticada y observable.

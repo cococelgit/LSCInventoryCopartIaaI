@@ -1,0 +1,145 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "acrScope": "[resourceId('Microsoft.ContainerRegistry/registries', 'acrlscinvprodeus2')]",
+    "apiScope": "[resourceId('Microsoft.App/containerApps', 'ca-lsc-inventory-api-prod')]",
+    "jobScope": "[resourceId('Microsoft.App/jobs', 'job-lsc-iaai-pilot-prod')]",
+    "tasksContributorRole": "fb382eab-e894-4461-af04-94435c366c3f",
+    "acrPushRole": "8311e382-0749-4cb8-b61a-304f252e45ec",
+    "repositoryWriterRole": "2a1e307c-b015-4ebd-883e-5b7698a07328",
+    "containerAppsContributorRole": "358470bc-b998-42bd-ab17-a7e34c199c0f",
+    "containerAppsJobsContributorRole": "4e3d2b60-56ae-4dc6-a233-09c8e5a82e68",
+    "federatedScriptUri": "https://lsc-inv-revi-zyn4tlbw.manus.space/manus-storage/federated-deploy-iaai-extended-afaac3d-r4_0dfa550f.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('identityName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "Project": "LaSubastaCubana",
+        "System": "InventoryEngine",
+        "Purpose": "OneTimeIaaIExtendedRelease",
+        "Release": "afaac3df4e386d6fef1a421f9c34597b3a0c8240"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[variables('acrScope')]",
+      "name": "[guid(variables('identityResourceId'), variables('acrScope'), variables('tasksContributorRole'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('tasksContributorRole'))]",
+        "principalId": "[reference(variables('identityResourceId'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[variables('acrScope')]",
+      "name": "[guid(variables('identityResourceId'), variables('acrScope'), variables('acrPushRole'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPushRole'))]",
+        "principalId": "[reference(variables('identityResourceId'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[variables('acrScope')]",
+      "name": "[guid(variables('identityResourceId'), variables('acrScope'), variables('repositoryWriterRole'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('repositoryWriterRole'))]",
+        "principalId": "[reference(variables('identityResourceId'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[variables('apiScope')]",
+      "name": "[guid(variables('identityResourceId'), variables('apiScope'), variables('containerAppsContributorRole'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('containerAppsContributorRole'))]",
+        "principalId": "[reference(variables('identityResourceId'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[variables('jobScope')]",
+      "name": "[guid(variables('identityResourceId'), variables('jobScope'), variables('containerAppsJobsContributorRole'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('containerAppsJobsContributorRole'))]",
+        "principalId": "[reference(variables('identityResourceId'), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "run-iaai-extended-afaac3d",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(variables('acrScope'), 'Microsoft.Authorization/roleAssignments', guid(variables('identityResourceId'), variables('acrScope'), variables('tasksContributorRole')))]",
+        "[extensionResourceId(variables('acrScope'), 'Microsoft.Authorization/roleAssignments', guid(variables('identityResourceId'), variables('acrScope'), variables('acrPushRole')))]",
+        "[extensionResourceId(variables('acrScope'), 'Microsoft.Authorization/roleAssignments', guid(variables('identityResourceId'), variables('acrScope'), variables('repositoryWriterRole')))]",
+        "[extensionResourceId(variables('apiScope'), 'Microsoft.Authorization/roleAssignments', guid(variables('identityResourceId'), variables('apiScope'), variables('containerAppsContributorRole')))]",
+        "[extensionResourceId(variables('jobScope'), 'Microsoft.Authorization/roleAssignments', guid(variables('identityResourceId'), variables('jobScope'), variables('containerAppsJobsContributorRole')))]"
+      ],
+      "properties": {
+        "forceUpdateTag": "afaac3d-iaai-extended-r3-tarball-context",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('federatedScriptUri')]",
+        "timeout": "PT90M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "releaseIdentityResourceId": {
+      "type": "string",
+      "value": "[variables('identityResourceId')]"
+    },
+    "releaseScriptResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Resources/deploymentScripts', 'run-iaai-extended-afaac3d')]"
+    }
+  }
+}
