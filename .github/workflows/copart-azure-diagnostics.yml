@@ -7,6 +7,11 @@ on:
         description: Copart Job execution name
         required: true
         default: job-lsc-copart-excel-prod-n11yc6q
+      stop_execution:
+        description: Stop only the specified Copart execution before collecting diagnostics
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -44,6 +49,14 @@ jobs:
             --name "$COPART_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             -o json
+          if [ "${{ inputs.stop_execution }}" = "true" ]; then
+            echo "Stopping only the specified Copart execution."
+            az containerapp job stop \
+              --name "$COPART_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$execution" \
+              --only-show-errors
+          fi
           echo "Attempting Job logs without pinning a cleaned-up replica."
           az containerapp job logs show \
             --name "$COPART_JOB_NAME" \
