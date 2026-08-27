@@ -184,7 +184,8 @@
 ## Cobertura de campos Copart
 
 - [x] Medir el CSV Copart y confirmar que VIN, vendedor y campos técnicos se distinguen entre datos fuente y campos no expuestos.
-- [ ] Exponer VIN enmascarado y vendedor condicionalmente, sin filtrar el VIN completo al portal.
-- [ ] Promover los campos Copart de alto valor ya disponibles: trim, carrocería, motor, cilindros, valor estimado, costo de reparación, estado del título y condición del lote.
-- [ ] Actualizar bridge, lista y ficha para mostrar datos reales y eliminar textos fijos engañosos.
-- [ ] Reprocesar y validar cobertura real en API y portal sin afectar elegibilidad, Copart media ni IAAI.
+- [x] Exponer VIN enmascarado y vendedor condicionalmente, sin filtrar el VIN completo al portal.
+- [x] Promover los campos Copart de alto valor ya disponibles: trim, carrocería, motor, cilindros, valor estimado, costo de reparación, estado del título y condición del lote.
+- [x] Actualizar bridge, lista y ficha del repositorio para mostrar datos reales y eliminar textos fijos engañosos.
+- [x] Desplegar y validar la API de Azure con fallback seguro al payload raw ya auditado; el portal publicado actual permanece en un proyecto/bundle separado y debe desplegar estos cambios desde `main`.
+- [x] Validar sin afectar elegibilidad, Copart media ni IAAI: 64/64 pruebas .NET y `pnpm check` aprobados; `pnpm test` conserva 3 fallos en 5 archivos por expectativas antiguas de la UI y pruebas de feed vivo.
