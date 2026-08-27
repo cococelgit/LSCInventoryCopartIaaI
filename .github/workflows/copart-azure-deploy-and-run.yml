@@ -162,7 +162,6 @@ jobs:
             --name "$COPART_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --execution "$COPART_EXECUTION_NAME" \
-            --container "$(az containerapp job show --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].name' -o tsv)" \
             --follow \
             --tail 300 \
             --format text || true
