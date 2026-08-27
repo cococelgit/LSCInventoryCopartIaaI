@@ -320,7 +320,7 @@ if (args.Contains("--storage-diagnostics", StringComparer.OrdinalIgnoreCase))
         throw new InvalidOperationException("Storage diagnostics require Persistence:Provider=Postgres.");
     }
 
-    Console.WriteLine(await postgresStore.GetStorageDiagnosticsAsync(CancellationToken.None));
+    Console.Error.WriteLine(await postgresStore.GetStorageDiagnosticsAsync(CancellationToken.None));
     var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
     await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
     return;
