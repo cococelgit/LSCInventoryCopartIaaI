@@ -321,6 +321,8 @@ if (args.Contains("--storage-diagnostics", StringComparer.OrdinalIgnoreCase))
     }
 
     Console.WriteLine(await postgresStore.GetStorageDiagnosticsAsync(CancellationToken.None));
+    var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
+    await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
     return;
 }
 
