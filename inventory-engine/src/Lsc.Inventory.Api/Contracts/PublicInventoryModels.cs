@@ -31,3 +31,12 @@ public sealed record PublicInventoryResponse(
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("generatedAt")] DateTimeOffset GeneratedAt,
     [property: JsonPropertyName("vehicles")] IReadOnlyList<PublicInventoryVehicle> Vehicles);
+
+public sealed record PublicInventoryPageResponse(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("generatedAt")] DateTimeOffset GeneratedAt,
+    [property: JsonPropertyName("page")] int Page,
+    [property: JsonPropertyName("pageSize")] int PageSize,
+    [property: JsonPropertyName("total")] long Total,
+    [property: JsonPropertyName("totalPages")] int TotalPages,
+    [property: JsonPropertyName("vehicles")] IReadOnlyList<PublicInventoryVehicle> Vehicles);

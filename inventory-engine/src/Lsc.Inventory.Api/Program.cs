@@ -162,6 +162,73 @@ app.MapGet("/api/v1/inventory/recent", async (HttpContext context, IInventorySna
     return Results.Ok(new PublicInventoryResponse("lsc-inventory-postgres", generatedAt, vehicles));
 });
 
+app.MapGet("/api/v1/inventory/browse", async (
+    HttpContext context,
+    IInventorySnapshotStore store,
+    string? platform,
+    string? query,
+    int? page,
+    int? pageSize,
+    string? sort,
+    int? yearFrom,
+    int? yearTo,
+    decimal? maximumBid,
+    bool? requireBid,
+    bool? requirePhotos,
+    bool? includeSpecialTitles,
+    string[]? makes,
+    string[]? models,
+    string[]? facilities,
+    string[]? states,
+    string[]? vehicleTypes,
+    string[]? damages,
+    string[]? titleTypes,
+    string[]? drives,
+    string[]? transmissions,
+    string[]? fuels,
+    decimal? odometerFrom,
+    decimal? odometerTo,
+    DateOnly? auctionFrom,
+    DateOnly? auctionTo,
+    decimal? estimatedTotalFrom,
+    decimal? estimatedTotalTo,
+    CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var requested = new InventoryBrowseQuery(
+        platform,
+        query,
+        page ?? 1,
+        pageSize ?? 24,
+        sort ?? "auction",
+        yearFrom,
+        yearTo,
+        maximumBid,
+        requireBid ?? false,
+        requirePhotos ?? false,
+        includeSpecialTitles ?? false,
+        makes,
+        models,
+        facilities,
+        states,
+        vehicleTypes,
+        damages,
+        titleTypes,
+        drives,
+        transmissions,
+        fuels,
+        odometerFrom,
+        odometerTo,
+        auctionFrom,
+        auctionTo,
+        estimatedTotalFrom,
+        estimatedTotalTo);
+    var result = await store.GetPageAsync(requested, cancellationToken);
+    var vehicles = result.Vehicles.Select(ToPublicVehicle).ToArray();
+    var generatedAt = result.Vehicles.Count > 0 ? result.Vehicles.Max(snapshot => snapshot.ObservedAt) : DateTimeOffset.UtcNow;
+    return Results.Ok(new PublicInventoryPageResponse("lsc-inventory-postgres", generatedAt, result.Page, result.PageSize, result.Total, result.TotalPages, vehicles));
+});
+
 app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInventorySnapshotStore store, string lot, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();

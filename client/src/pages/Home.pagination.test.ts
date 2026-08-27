@@ -9,7 +9,7 @@ const vehicles = Array.from({ length: 30 }, (_, index) => ({
   location: "Clewiston (FL)", state: "FL", titleType: "CT", facilityId: "366", photos: [],
 }));
 
-vi.mock("../lib/trpc", () => ({ trpc: { inventory: { recent: { useQuery: () => ({ data: { source: "test", generatedAt: "2026-08-25T18:40:00.000Z", vehicles }, isLoading: false }) } } } }));
+vi.mock("../lib/trpc", () => ({ trpc: { inventory: { browse: { useQuery: (input: { page: number }) => ({ data: { source: "test", generatedAt: "2026-08-25T18:40:00.000Z", page: input.page, pageSize: 24, total: 30, totalPages: 2, vehicles: input.page === 1 ? vehicles.slice(0, 24) : vehicles.slice(24) }, isLoading: false }) } } } }));
 
 import Home from "./Home";
 

@@ -831,6 +831,121 @@ public sealed class PostgresSnapshotStore(
         return snapshots.OrderByDescending(snapshot => snapshot.ObservedAt).ToArray();
     }
 
+    public async Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        var page = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 1, 100);
+        var sort = query.Sort is "bid-low" or "bid-high" ? query.Sort : "auction";
+        var platform = string.IsNullOrWhiteSpace(query.Platform) || string.Equals(query.Platform, "all", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : query.Platform.Trim().ToLowerInvariant();
+        var search = string.IsNullOrWhiteSpace(query.Search) ? null : query.Search.Trim();
+        var offset = (page - 1) * pageSize;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            with filtered as (
+                select lots.lot_key, lots.observed_at, latest.payload::text as payload,
+                       lots.current_bid_usd, lots.auction_at
+                from auction_lots lots
+                join lateral (
+                    select payload
+                    from auction_lot_versions versions
+                    where versions.lot_key = lots.lot_key
+                    order by versions.observed_at desc
+                    limit 1
+                ) latest on true
+                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+                where coalesce(lifecycle.is_active, true)
+                  and (@platform is null or lots.platform = @platform)
+                  and (@search is null or concat_ws(' ', lots.lot_number, lots.title, lots.make, lots.model, latest.payload #>> '{sale_document,name}') ilike '%' || @search || '%')
+                  and (@year_from is null or lots.year >= @year_from)
+                  and (@year_to is null or lots.year <= @year_to)
+                  and (@maximum_bid is null or lots.current_bid_usd is null or lots.current_bid_usd <= @maximum_bid)
+                  and (not @require_bid or lots.current_bid_usd is not null)
+                  and (not @require_photos or coalesce(lots.media_photos_count, 0) > 0)
+                  and (@odometer_from is null or lots.odometer >= @odometer_from)
+                  and (@odometer_to is null or lots.odometer <= @odometer_to)
+                  and (@auction_from is null or (lots.auction_at at time zone 'America/New_York')::date >= @auction_from)
+                  and (@auction_to is null or (lots.auction_at at time zone 'America/New_York')::date <= @auction_to)
+                  and (@estimated_total_from is null or (lots.current_bid_usd is not null and lots.current_bid_usd + 699 >= @estimated_total_from))
+                  and (@estimated_total_to is null or (lots.current_bid_usd is not null and lots.current_bid_usd + 399 <= @estimated_total_to))
+                  and (cardinality(@makes) = 0 or lots.make = any(@makes))
+                  and (cardinality(@models) = 0 or lots.model = any(@models))
+                  and (cardinality(@facilities) = 0 or lots.facility_id = any(@facilities) or lots.location_display = any(@facilities))
+                  and (cardinality(@states) = 0 or lots.location_state = any(@states))
+                  and (cardinality(@vehicle_types) = 0 or lots.vehicle_type = any(@vehicle_types))
+                  and (cardinality(@damages) = 0 or lots.damage = any(@damages))
+                  and (cardinality(@title_types) = 0 or latest.payload #>> '{sale_document,name}' = any(@title_types))
+                  and (cardinality(@drives) = 0 or lots.drive_type = any(@drives))
+                  and (cardinality(@transmissions) = 0 or lots.transmission = any(@transmissions))
+                  and (cardinality(@fuels) = 0 or lots.fuel_type = any(@fuels))
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%CERTIFICATE OF DESTRUCTION%')
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%JUNK%')
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%NON REPAIRABLE%')
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%PARTS ONLY%')
+            ), numbered as (
+                select *, count(*) over() as total_count
+                from filtered
+            )
+            select lot_key, observed_at, payload, total_count
+            from numbered
+            order by
+                case when @sort = 'bid-low' then current_bid_usd end asc nulls last,
+                case when @sort = 'bid-high' then current_bid_usd end desc nulls last,
+                case when @sort = 'auction' then auction_at end asc nulls last,
+                observed_at desc,
+                lot_key
+            limit @limit offset @offset;
+            """;
+        AddParameter(command, "platform", platform);
+        AddParameter(command, "search", search);
+        AddParameter(command, "year_from", query.YearFrom);
+        AddParameter(command, "year_to", query.YearTo);
+        AddParameter(command, "maximum_bid", query.MaximumBid);
+        AddParameter(command, "require_bid", query.RequireBid);
+        AddParameter(command, "require_photos", query.RequirePhotos);
+        AddParameter(command, "odometer_from", query.OdometerFrom);
+        AddParameter(command, "odometer_to", query.OdometerTo);
+        AddParameter(command, "auction_from", query.AuctionFrom);
+        AddParameter(command, "auction_to", query.AuctionTo);
+        AddParameter(command, "estimated_total_from", query.EstimatedTotalFrom);
+        AddParameter(command, "estimated_total_to", query.EstimatedTotalTo);
+        AddParameter(command, "makes", query.Makes?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "models", query.Models?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "facilities", query.Facilities?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "states", query.States?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "vehicle_types", query.VehicleTypes?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "damages", query.Damages?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "title_types", query.TitleTypes?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "drives", query.Drives?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "transmissions", query.Transmissions?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "fuels", query.Fuels?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "include_special_titles", query.IncludeSpecialTitles);
+        AddParameter(command, "sort", sort);
+        AddParameter(command, "limit", pageSize);
+        AddParameter(command, "offset", offset);
+
+        var vehicles = new List<StoredVehicleSnapshot>(pageSize);
+        long total = 0;
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            total = reader.GetInt64(3);
+            var rawJson = reader.GetString(2);
+            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (vehicle is not null)
+                vehicles.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
+        }
+
+        return new InventoryPage(page, pageSize, total, Math.Max(1, (int)Math.Ceiling(total / (double)pageSize)), vehicles);
+    }
+
     public async Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();

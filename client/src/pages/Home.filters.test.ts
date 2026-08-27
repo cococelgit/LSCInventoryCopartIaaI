@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const liveInventory = {
   source: "lsc-inventory-postgres",
   generatedAt: "2026-08-25T18:40:00.000Z",
+  page: 1,
+  pageSize: 24,
+  total: 3,
+  totalPages: 1,
   vehicles: [
     {
       lot: "11111111", observedAt: "2026-08-25T18:40:00.000Z", title: "2020 ALPHA SEDAN", year: 2020, make: "ALPHA", model: "SEDAN", vehicleType: "AUTOMOBILE", color: null,
@@ -28,8 +32,18 @@ const liveInventory = {
 vi.mock("../lib/trpc", () => ({
   trpc: {
     inventory: {
-      recent: {
-        useQuery: () => ({ data: liveInventory, isLoading: false }),
+      browse: {
+        useQuery: (input: { auctionFrom?: string; auctionTo?: string; estimatedTotalFrom?: number; includeSpecialTitles?: boolean }) => {
+          const vehicles = liveInventory.vehicles.filter((vehicle) => {
+            const auctionDate = vehicle.auctionAt?.slice(0, 10) ?? "";
+            const special = vehicle.titleType === "CERTIFICATE OF DESTRUCTION";
+            return (!input.auctionFrom || auctionDate >= input.auctionFrom)
+              && (!input.auctionTo || auctionDate <= input.auctionTo)
+              && (!input.estimatedTotalFrom || (vehicle.currentBidUsd ?? 0) + 699 >= input.estimatedTotalFrom)
+              && (input.includeSpecialTitles || !special);
+          });
+          return { data: { ...liveInventory, total: vehicles.length, totalPages: 1, vehicles }, isLoading: false };
+        },
       },
     },
   },
