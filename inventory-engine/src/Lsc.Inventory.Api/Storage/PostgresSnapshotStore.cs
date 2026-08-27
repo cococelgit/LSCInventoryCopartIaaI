@@ -715,10 +715,11 @@ public sealed class PostgresSnapshotStore(
         await using var relations = connection.CreateCommand();
         relations.CommandTimeout = _persistence.CommandTimeoutSeconds;
         relations.CommandText = """
-            select n.nspname, c.relname, c.relkind, c.reltuples::bigint, pg_get_userbyid(c.relowner)
+            select n.nspname, c.relname, c.relkind::text, c.reltuples::bigint, pg_get_userbyid(c.relowner)
             from pg_catalog.pg_class c
             inner join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-            where c.relname in ('auction_lots', 'auction_lot_versions', 'inventory_sync_runs', 'provider_usage_snapshots')
+            where n.nspname = 'public'
+              and (c.relname like 'inventory_%' or c.relname like 'copart_%' or c.relname like 'execution_%')
             order by n.nspname, c.relname;
             """;
 
