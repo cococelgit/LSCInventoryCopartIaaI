@@ -1,0 +1,81 @@
+direction: down
+
+title: "Copart → Inventario LSC: Flujo Operativo y Controles"
+title.style: {font-size: 28; bold: true; fill: "#0F172A"}
+
+classes: {
+  source: {style: {fill: "#E0F2FE"; stroke: "#0369A1"; stroke-width: 2}}
+  job: {style: {fill: "#EDE9FE"; stroke: "#6D28D9"; stroke-width: 2}}
+  store: {style: {fill: "#DCFCE7"; stroke: "#15803D"; stroke-width: 2}}
+  gate: {shape: diamond; style: {fill: "#FCE7F3"; stroke: "#BE185D"; stroke-width: 2}}
+  control: {style: {fill: "#FEF3C7"; stroke: "#B45309"; stroke-width: 2}}
+  blocked: {style: {fill: "#FEE2E2"; stroke: "#B91C1C"; stroke-width: 2; stroke-dash: 3}}
+  output: {style: {fill: "#F1F5F9"; stroke: "#475569"; stroke-width: 2}}
+}
+
+copart: "1. COPART\nListado de subasta protegido" {class: source}
+secrets: "Seguridad de descarga\nAzure Key Vault mantiene URL/credenciales\n• No hay secretos en Git\n• No se imprimen en logs" {class: control}
+download: "2. Job descargador Azure\nEjecuta cada 20 min\n• Descarga archivo sales data\n• Comprime/preserva CSV.GZ\n• No procesa elegibilidad" {class: job}
+raw: "3. Blob privado: copart-raw\n• latest/salesdata.csv.gz\n• snapshots por fecha/hora\n• Original disponible para trazabilidad" {class: store}
+
+sourceRead: "4. CopartBlobSnapshotSource\n• Localiza el snapshot más reciente\n• Soporta .csv y .csv.gz\n• Descarga en streaming a disco temporal\n• SHA-256 del CSV lógico" {class: job}
+fileGate: "¿Snapshot válido y completo?\nExtensión + tamaño + hash + headers\n≥1,000 filas + ≥70% baseline\nSHA no exitoso previamente" {class: gate}
+abort: "DETENER SIN CAMBIAR INVENTARIO\n• corrupto / parcial / duplicado\n• se registra el resultado\n• no ejecuta reconciliación\n• no despublica lotes" {class: blocked}
+manifest: "PostgreSQL: copart_snapshot_manifests\n• SHA único\n• running / succeeded / completed_with_errors\n• conteos, fallos, duración\n• reintento solo controlado de ejecución interrumpida" {class: store}
+
+adapter: "5. ICopyartExcelSnapshotAdapter\nLectura CSV streaming fila a fila\n• Mapea valores a AuctionVehicle\n• Preserva fila raw JSON\n• Fila malformada → CUARENTENA\n• No carga el archivo entero en RAM" {class: job}
+clean: "6. CanonicalVehicleCleaner\n• Normaliza lote, VIN, marca y modelo\n• Conserva raw + campos canónicos\n• Identidad: platform:lot\n• VIN solo agrupa; nunca fusiona listados" {class: job}
+ruleGate: "7. AuctionEligibilityEvaluator — Policy v4\n¿Cargar, marcar o descartar?" {class: gate}
+
+rules: "Reglas automáticas\nDESCARTAR: D00C VIN inválido; D00D venta pasada; D01 WI/AL/MI; D02 vendedor vetado; D03 undercarriage; D04 burn; D05 flood; D06 frame; D07 VIN alterado; D08 bio/chemical; D10 notas impeditivas\nMARCAR: M01–M08\nD09 título rebuilt/especial: DESACTIVADA" {class: control}
+discardAudit: "Auditoría interna\nPostgreSQL: eligibility_decisions\n• DESCARTAR / CUARENTENA\n• razón, evidencia, regla, versión\n• VIN mascarado\n• nunca aparece en el portal" {class: blocked}
+
+batch: "8. CopartExcelSnapshotProcessor\n• bloques de 1,000 filas\n• hasta 12 persistencias controladas\n• aisla error por fila\n• acumula conteos auditables\n• no reconcilia si hubo errores" {class: job}
+lots: "9. PostgreSQL: auction_lots\nEstado actual del lote\n• source/platform = copart\n• upsert del listado actual\n• solo lotes activos se publican" {class: store}
+versions: "PostgreSQL: auction_lot_versions\nHistorial por payload hash\n• cambios de precio, fecha, estatus\n• raw JSON versionado" {class: store}
+privatePayload: "Blob privado: raw payload + evidencia\n• payload/versiones\n• separado del listado original\n• no expuesto al navegador" {class: store}
+
+completeGate: "¿Procesamiento completo\ny con cero errores?" {class: gate}
+lifecycle: "10. Reconciliación: inventory_lot_lifecycle\n• 3 snapshots completos sin lote → inactivo\n• reaparece → activo, misses = 0\n• nunca borra historial\n• parcial/corrupto/duplicado → no toca lifecycle" {class: store}
+completion: "Cerrar manifiesto\n• Observados / aceptados / descartados\n• marcados / cuarentena / errores\n• SHA y duración\n• status=succeeded solo si completo" {class: store}
+
+api: "11. Inventory Engine .NET 8 API\nAzure Container App\n• rutas públicas con token server-side\n• inventario por source / lot / página\n• fotos HTTPS sanitizadas\n• no expone VIN completo ni secretos" {class: job}
+portal: "12. Portal LSC\nReact + tRPC\n• asesores y clientes consultan catálogo\n• Copart identificado como fuente\n• títulos especiales ocultos por defecto\n• auditoría solo interna\n• la paginación pertenece al proyecto del portal" {class: output}
+
+# Flujo secuencial principal
+copart -> download: "archivo de listado"
+secrets -> download: "secreto en runtime"
+download -> raw: "cada 20 min"
+raw -> sourceRead: "stream comprimido"
+sourceRead -> fileGate
+fileGate -> abort: "NO"
+fileGate -> manifest: "SÍ: registra ejecución"
+manifest -> adapter: "SHA aceptado"
+adapter -> clean
+clean -> ruleGate
+rules -> ruleGate: "evaluación determinista"
+ruleGate -> discardAudit: "DESCARTAR o CUARENTENA"
+ruleGate -> batch: "CARGAR / MARCAR"
+batch -> lots
+batch -> versions
+batch -> privatePayload
+batch -> completeGate
+completeGate -> abort: "NO"
+completeGate -> lifecycle: "SÍ"
+lifecycle -> completion
+completion -> api
+lots -> api
+versions -> api
+api -> portal
+
+# Límites de fuente obligatorios
+iaai: "Ruta IAAI separada\nApibara solamente\nReutiliza cleaner/policy/audit/DB" {class: source}
+sourcePolicy: "InventorySourcePolicy\nSolo permite Apibara para IAAI\nCopart por Apibara se bloquea antes de HTTP" {class: blocked}
+iaai -> sourcePolicy
+sourcePolicy -> clean: "solo IAAI autorizado"
+copart -> sourcePolicy: "intento Copart por API"
+sourcePolicy -> abort: "BLOQUEADO"
+
+release: "Despliegue seguro\nGitHub Actions + Azure OIDC\n• ACR: imagen inmutable por SHA\n• Managed Identity: Blob + PostgreSQL + ACR\n• Job Copart aislado\n• no modifica el Job IAAI" {class: control}
+release -> download: "imagen/operación"
+release -> batch: "imagen/operación"
