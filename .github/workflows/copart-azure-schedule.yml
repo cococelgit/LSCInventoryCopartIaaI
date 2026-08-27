@@ -84,7 +84,7 @@ jobs:
               --resource-group "$RESOURCE_GROUP" \
               --image "$processor_image" \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args "--copart-excel-run" \
+              --args=--copart-excel-run \
               --cron-expression "$COPART_PROCESS_CRON" \
               --parallelism 1 \
               --replica-completion-count 1 \
@@ -103,7 +103,7 @@ jobs:
               --cpu 1.0 \
               --memory 2Gi \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args "--copart-excel-run" \
+              --args=--copart-excel-run \
               --env-vars "${processor_env[@]}" \
               --replica-timeout 3600 \
               --replica-retry-limit 0 \
