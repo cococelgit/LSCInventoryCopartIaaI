@@ -24,6 +24,7 @@ env:
   RESOURCE_GROUP: rg-lsc-inventory-prod
   COPART_JOB_NAME: job-lsc-copart-excel-prod
   SOURCE_JOB_NAME: job-lsc-inventory-ingestion-prod
+  COPART_DOWNLOAD_JOB_NAME: job-lsc-copart-download-prod
 
 jobs:
   diagnose:
@@ -56,12 +57,22 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --query '{name:name,triggerType:properties.configuration.triggerType,schedule:properties.configuration.scheduleTriggerConfig,manual:properties.configuration.manualTriggerConfig,template:properties.template}' \
             -o json
+          az containerapp job show \
+            --name "$COPART_DOWNLOAD_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '{name:name,triggerType:properties.configuration.triggerType,schedule:properties.configuration.scheduleTriggerConfig,manual:properties.configuration.manualTriggerConfig,template:properties.template}' \
+            -o json
           echo "Listing recent IAAI executions."
           az containerapp job execution list \
             --name "$SOURCE_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             -o json
-          echo "Listing recent Copart executions."
+          echo "Listing recent Copart download executions."
+          az containerapp job execution list \
+            --name "$COPART_DOWNLOAD_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            -o json
+          echo "Listing recent Copart processing executions."
           az containerapp job execution list \
             --name "$COPART_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
