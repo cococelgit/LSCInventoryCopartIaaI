@@ -149,3 +149,10 @@
 - [x] Subir la implementación validada a la rama `main` sin secretos ni artefactos de snapshots.
 - [x] Publicar el snapshot Copart completo verificado en producción desde Blob: 145,710 observados, 58,829 aceptados, 86,871 descartados, 10 cuarentena, 58,829 marcados, 0 errores; manifiesto completo y reconciliado.
 - [x] Verificar persistencia de producción sin VINs completos: 59,059 lotes Copart totales, 58,836 activos, 223 inactivos y decisiones auditadas por estado.
+
+## Paginación de inventario completo
+
+- [x] Identificar el límite de 1,000 registros entre el bridge del portal y el endpoint Azure.
+- [x] Implementar consulta paginada, filtrada y source-aware desde PostgreSQL para Copart e IAAI.
+- [ ] Desplegar la API paginada y el bridge/UI actualizado.
+- [ ] Validar en producción que el portal recorra todos los resultados elegibles y no solo el primer corte.
