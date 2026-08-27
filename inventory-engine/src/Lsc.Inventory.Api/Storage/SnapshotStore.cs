@@ -16,6 +16,8 @@ public interface IInventorySnapshotStore
     Task<EligibilityAuditPage> GetDiscardedEligibilityDecisionsAsync(int page, int pageSize, string? ruleCode, string? query, CancellationToken cancellationToken);
     Task<InventoryValidationReport> GetValidationReportAsync(CancellationToken cancellationToken);
     Task PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken);
+    Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken);
+    Task<bool> UpdateCopartMediaAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, string resolutionStatus, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken);
     Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken);
@@ -67,6 +69,15 @@ public sealed record StoredVehicleSnapshot(
     DateTimeOffset ObservedAt,
     AuctionVehicle Vehicle,
     string RawJson);
+
+public sealed record CopartMediaEnrichmentResult(
+    bool Processed,
+    int Candidates,
+    int Resolved,
+    int AlreadyComplete,
+    int Failed,
+    TimeSpan Duration,
+    IReadOnlyList<string> Failures);
 
 public sealed record InventoryBrowseQuery(
     string? Platform,
@@ -311,6 +322,32 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         _snapshots[identity] = snapshot;
         _lifecycle[identity] = (vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", true, 0);
         return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var candidates = _snapshots.Values
+            .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
+            .Where(snapshot => snapshot.Vehicle.AdditionalData is null || !snapshot.Vehicle.AdditionalData.ContainsKey("copart_media_resolution"))
+            .Where(snapshot => snapshot.Vehicle.Media?.Photos?.Count is <= 1 or null)
+            .OrderByDescending(snapshot => snapshot.ObservedAt)
+            .Take(Math.Clamp(maximum, 1, 10000))
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<StoredVehicleSnapshot>>(candidates);
+    }
+
+    public Task<bool> UpdateCopartMediaAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, string resolutionStatus, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_snapshots.TryGetValue(identity, out var snapshot) || snapshot.ObservedAt != expectedObservedAt) return Task.FromResult(false);
+        var additional = vehicle.AdditionalData is null
+            ? new Dictionary<string, JsonElement>()
+            : new Dictionary<string, JsonElement>(vehicle.AdditionalData);
+        additional["copart_media_resolution"] = JsonSerializer.SerializeToElement(resolutionStatus);
+        var enriched = vehicle with { AdditionalData = additional };
+        _snapshots[identity] = snapshot with { Vehicle = enriched, RawJson = JsonSerializer.Serialize(enriched) };
+        return Task.FromResult(true);
     }
 
     public Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)

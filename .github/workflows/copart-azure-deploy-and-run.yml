@@ -14,6 +14,7 @@ on:
           - publication_report
           - storage_diagnostics
           - media_probe
+          - media_enrich
           - recover
 
 permissions:
@@ -79,6 +80,7 @@ jobs:
             publication_report) job_arg="--copart-publication-report"; allow_interrupted_retry=false ;;
             storage_diagnostics) job_arg="--storage-diagnostics"; allow_interrupted_retry=false ;;
             media_probe) job_arg="--copart-media-probe"; allow_interrupted_retry=false ;;
+            media_enrich) job_arg="--copart-media-enrich"; allow_interrupted_retry=false ;;
             recover) job_arg="--copart-excel-run"; allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
           esac
@@ -102,6 +104,8 @@ jobs:
             "CopartExcel__RecentSnapshotCountForBaseline=6"
             "CopartExcel__ProcessingBatchSize=1000"
             "CopartExcel__PersistenceConcurrency=12"
+            "CopartExcel__MediaEnrichmentBatchSize=1000"
+            "CopartExcel__MediaResolutionConcurrency=8"
             "CopartExcel__DiagnosticHoldSeconds=300"
             "CopartExcel__PublicationReportHoldSeconds=60"
             "CopartExcel__AllowInterruptedSnapshotRetry=${allow_interrupted_retry}"
@@ -158,7 +162,7 @@ jobs:
           echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
 
       - name: Capture live Copart diagnostic output
-        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' }}
+        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' }}
         shell: bash
         run: |
           set -euo pipefail

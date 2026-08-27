@@ -37,4 +37,10 @@ public sealed class CopartExcelOptions
 
     [Range(1, 64)]
     public int PersistenceConcurrency { get; init; } = 8;
+
+    [Range(1, 10000)]
+    public int MediaEnrichmentBatchSize { get; init; } = 1000;
+
+    [Range(1, 32)]
+    public int MediaResolutionConcurrency { get; init; } = 8;
 }

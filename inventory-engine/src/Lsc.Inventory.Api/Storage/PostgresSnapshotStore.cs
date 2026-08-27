@@ -219,6 +219,113 @@ public sealed class PostgresSnapshotStore(
         logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAtUtc);
     }
 
+    public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        var limit = Math.Clamp(maximum, 1, 10000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            with latest as (
+                select distinct on (versions.lot_key)
+                       versions.lot_key, versions.observed_at, versions.payload::text
+                from auction_lot_versions versions
+                join auction_lots lots on lots.lot_key = versions.lot_key
+                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = versions.lot_key
+                where lots.platform = 'copart'
+                  and coalesce(lifecycle.is_active, true)
+                order by versions.lot_key, versions.created_at desc
+            )
+            select lot_key, observed_at, payload
+            from latest
+            where coalesce(jsonb_array_length(cast(payload as jsonb) #> '{media,thumbs}'), 0) <= 1
+              and not (cast(payload as jsonb) ? 'copart_media_resolution')
+              and coalesce(cast(payload as jsonb) #>> '{_raw_source,Image URL}', '') <> ''
+            order by observed_at desc, lot_key
+            limit @limit;
+            """;
+        AddParameter(command, "limit", limit);
+        var result = new List<StoredVehicleSnapshot>(limit);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var identity = reader.GetString(0);
+            var observedAt = reader.GetFieldValue<DateTimeOffset>(1);
+            var rawJson = reader.GetString(2);
+            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (vehicle is not null) result.Add(new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson));
+        }
+        return result;
+    }
+
+    public async Task<bool> UpdateCopartMediaAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, string resolutionStatus, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Copart media can only update Copart inventory.");
+
+        var observedAtUtc = expectedObservedAt.ToUniversalTime();
+        var additional = vehicle.AdditionalData is null
+            ? new Dictionary<string, JsonElement>()
+            : new Dictionary<string, JsonElement>(vehicle.AdditionalData);
+        additional["copart_media_resolution"] = JsonSerializer.SerializeToElement(resolutionStatus);
+        var enriched = vehicle with { AdditionalData = additional };
+        var rawJson = JsonSerializer.Serialize(enriched);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+
+        await EnsureSchemaAsync(cancellationToken);
+        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using (var update = connection.CreateCommand())
+        {
+            update.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            update.CommandText = """
+                update auction_lots
+                set media_photos_count = @media_photos_count,
+                    media_has_360 = @media_has_360,
+                    updated_at = now()
+                where lot_key = @lot_key
+                  and platform = 'copart'
+                  and observed_at = @observed_at;
+                """;
+            AddParameter(update, "lot_key", identity);
+            AddParameter(update, "media_photos_count", enriched.Media?.ThumbnailsCount);
+            AddParameter(update, "media_has_360", enriched.Media?.Has360);
+            AddParameter(update, "observed_at", observedAtUtc);
+            if (await update.ExecuteNonQueryAsync(cancellationToken) != 1) return false;
+        }
+
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            insert.CommandText = """
+                insert into auction_lot_versions (
+                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    sale_price_usd, lot_status, lot_sub_status, payload)
+                values (
+                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
+                on conflict (lot_key, payload_hash) do nothing;
+                """;
+            AddParameter(insert, "lot_key", identity);
+            AddParameter(insert, "observed_at", observedAtUtc);
+            AddParameter(insert, "payload_hash", payloadHash);
+            AddParameter(insert, "raw_blob_name", blobName);
+            AddParameter(insert, "current_bid_usd", enriched.Pricing?.CurrentBidUsd);
+            AddParameter(insert, "sale_price_usd", enriched.Pricing?.SalePriceUsd);
+            AddParameter(insert, "lot_status", enriched.Auction?.LotStatus);
+            AddParameter(insert, "lot_sub_status", enriched.Auction?.LotSubStatus);
+            AddParameter(insert, "payload", rawJson);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, enriched, rawJson);
+        logger.LogInformation("Resolved Copart media for inventory lot {LotKey} with {PhotoCount} photos.", identity, enriched.Media?.Photos?.Count ?? 0);
+        return true;
+    }
+
     public async Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);

@@ -55,6 +55,11 @@ builder.Services.AddHttpClient<IApibaraClient, ApibaraClient>((serviceProvider, 
     pipeline.AddTimeout(TimeSpan.FromSeconds(30));
 });
 
+builder.Services.AddHttpClient<ICopartMediaResolver, CopartMediaResolver>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+});
+
 var persistenceProvider = builder.Configuration.GetValue<string>($"{PersistenceOptions.SectionName}:Provider") ?? "InMemory";
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
 {
@@ -69,6 +74,7 @@ builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
 builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
 builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
+builder.Services.AddScoped<ICopartMediaEnrichmentProcessor, CopartMediaEnrichmentProcessor>();
 builder.Services.AddHostedService<InventorySyncWorker>();
 
 var app = builder.Build();
@@ -107,7 +113,7 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot)
         .Select(SafePhotoUrl)
         .Where(url => url is not null)
         .Cast<string>()
-        .Take(6)
+        .Distinct(StringComparer.Ordinal)
         .ToArray();
     return new PublicInventoryVehicle(
         vehicle.LotNumber ?? snapshot.Identity,
@@ -348,6 +354,14 @@ if (args.Contains("--copart-media-probe", StringComparer.OrdinalIgnoreCase))
     Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
     var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
     await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
+    return;
+}
+
+if (args.Contains("--copart-media-enrich", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<ICopartMediaEnrichmentProcessor>();
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await processor.RunAsync(CancellationToken.None)));
     return;
 }
 
