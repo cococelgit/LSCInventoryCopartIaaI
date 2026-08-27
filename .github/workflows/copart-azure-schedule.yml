@@ -24,6 +24,7 @@ env:
   COPART_DOWNLOAD_CRON: 25,55 * * * *
   COPART_PROCESS_CRON: 0,30 * * * *
   COPART_MEDIA_CRON: 25,55 * * * *
+  COPART_MEDIA_BATCH_SIZE: 5000
   RUNTIME_IDENTITY: /subscriptions/99edf3d1-a651-4d2d-af8e-d44a3360f584/resourceGroups/rg-lsc-inventory-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-lsc-inventory-db-runtime-prod
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
 
@@ -130,8 +131,10 @@ jobs:
             echo "$manual_job" | jq -r '
               .properties.template.containers[0].env[]
               | select(.value != null)
+              | select(.name != "CopartExcel__MediaEnrichmentBatchSize")
               | "\(.name)=\(.value)"'
           )
+          media_env+=("CopartExcel__MediaEnrichmentBatchSize=$COPART_MEDIA_BATCH_SIZE")
           if [ -z "$media_image" ] || [ "$media_image" = "null" ] || [ "${#media_env[@]}" -eq 0 ]; then
             echo "Could not obtain validated Copart media runtime settings." >&2
             exit 1
