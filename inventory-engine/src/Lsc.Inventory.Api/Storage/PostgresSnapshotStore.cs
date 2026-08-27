@@ -739,12 +739,43 @@ public sealed class PostgresSnapshotStore(
             }
         }
 
+        var recentCopartRuns = new List<object>();
+        await using (var runs = connection.CreateCommand())
+        {
+            runs.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            runs.CommandText = """
+                select run_id, platform_scope, state_scope, started_at, finished_at,
+                       vehicles_observed, requests_issued, status, jsonb_array_length(failures)
+                from inventory_sync_runs
+                where provider = 'copart-excel'
+                order by started_at desc
+                limit 5;
+                """;
+            await using var reader = await runs.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                recentCopartRuns.Add(new
+                {
+                    RunId = reader.GetGuid(0),
+                    Platform = reader.GetString(1),
+                    Scope = reader.GetString(2),
+                    StartedAt = reader.GetFieldValue<DateTimeOffset>(3),
+                    FinishedAt = ReadNullableDateTimeOffset(reader, 4),
+                    Observed = reader.GetInt32(5),
+                    Requests = reader.GetInt32(6),
+                    Status = reader.GetString(7),
+                    FailureCount = reader.GetInt32(8)
+                });
+            }
+        }
+
         return JsonSerializer.Serialize(new
         {
             Database = database,
             DatabaseUser = databaseUser,
             SearchPath = searchPath,
-            Relations = relationList
+            Relations = relationList,
+            RecentCopartRuns = recentCopartRuns
         });
     }
 
