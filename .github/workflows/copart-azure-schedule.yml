@@ -20,8 +20,8 @@ env:
   COPART_DOWNLOAD_JOB_NAME: job-lsc-copart-download-prod
   COPART_MANUAL_PROCESS_JOB_NAME: job-lsc-copart-excel-prod
   COPART_SCHEDULED_PROCESS_JOB_NAME: job-lsc-copart-auto-prod
-  COPART_DOWNLOAD_CRON: 0,30 * * * *
-  COPART_PROCESS_CRON: 20,50 * * * *
+  COPART_DOWNLOAD_CRON: 25,55 * * * *
+  COPART_PROCESS_CRON: 0,30 * * * *
   RUNTIME_IDENTITY: /subscriptions/99edf3d1-a651-4d2d-af8e-d44a3360f584/resourceGroups/rg-lsc-inventory-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-lsc-inventory-db-runtime-prod
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
 
@@ -45,7 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # This job is already Scheduled. Updating only its cron preserves its container, Key Vault references and managed identity.
+          # Downloads five minutes before each `:00/:30` process run. Updating only its cron preserves Key Vault references and managed identity.
           az containerapp job update \
             --name "$COPART_DOWNLOAD_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
@@ -59,6 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The processor runs at `:00/:30`; IAAI remains owned by its separate job at `:15/:45`.
           # Keep the existing manual processor intact for diagnostic/recovery runs.
           # Copy only its non-secret runtime configuration into a new Schedule-type job.
           manual_job="$(az containerapp job show --name "$COPART_MANUAL_PROCESS_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
