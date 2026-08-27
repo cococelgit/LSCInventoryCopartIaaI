@@ -106,6 +106,34 @@ static string? SafePhotoUrl(string? candidate)
     return uri.ToString();
 }
 
+static string? MaskVin(string? vin)
+{
+    var normalized = new string((vin ?? string.Empty).Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+    if (normalized.Length < 7) return null;
+    return $"***********{normalized[^6..]}";
+}
+
+static string? RawText(AuctionVehicle vehicle, string field)
+{
+    if (vehicle.RawSource is not { } raw || raw.ValueKind != System.Text.Json.JsonValueKind.Object ||
+        !raw.TryGetProperty(field, out var value) || value.ValueKind != System.Text.Json.JsonValueKind.String) return null;
+    var text = value.GetString()?.Trim();
+    return string.IsNullOrWhiteSpace(text) ? null : text;
+}
+
+static decimal? RawDecimal(AuctionVehicle vehicle, string field)
+{
+    var raw = RawText(vehicle, field);
+    return decimal.TryParse(raw, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var value) ? value : null;
+}
+
+static bool? RawYesNo(AuctionVehicle vehicle, string field) => RawText(vehicle, field)?.ToUpperInvariant() switch
+{
+    "YES" or "Y" or "TRUE" => true,
+    "NO" or "N" or "FALSE" => false,
+    _ => null
+};
+
 static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot)
 {
     var vehicle = snapshot.Vehicle;
@@ -136,8 +164,20 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot)
         vehicle.Pricing?.BuyNowUsd,
         vehicle.Location?.Display,
         vehicle.Location?.State,
-        vehicle.SaleDocument?.Name,
+        vehicle.SaleDocument?.Name ?? vehicle.Title,
+        vehicle.SaleDocument?.State ?? RawText(vehicle, "Sale Title State"),
         vehicle.Location?.FacilityId,
+        MaskVin(vehicle.Vin ?? RawText(vehicle, "VIN")),
+        vehicle.Seller?.Name ?? RawText(vehicle, "Seller Name"),
+        vehicle.VehicleSpecs?.Trim ?? RawText(vehicle, "Trim"),
+        vehicle.VehicleSpecs?.BodyStyle ?? RawText(vehicle, "Body Style"),
+        vehicle.VehicleSpecs?.Engine ?? RawText(vehicle, "Engine"),
+        vehicle.VehicleSpecs?.Cylinders ?? RawText(vehicle, "Cylinders"),
+        vehicle.Pricing?.EstimatedRetailValueUsd ?? RawDecimal(vehicle, "Est. Retail Value"),
+        vehicle.Pricing?.RepairCostUsd ?? RawDecimal(vehicle, "Repair cost"),
+        vehicle.Condition?.LotConditionCode ?? RawText(vehicle, "Lot Cond. Code"),
+        vehicle.Condition?.RunCondition?.Label ?? RawText(vehicle, "Runs/Drives"),
+        vehicle.Condition?.HasKey ?? RawYesNo(vehicle, "Has Keys-Yes or No"),
         photos);
 }
 

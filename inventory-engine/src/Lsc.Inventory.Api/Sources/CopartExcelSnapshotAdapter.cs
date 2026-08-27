@@ -210,14 +210,19 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
                 ExteriorColor = Get(row, "Color"),
                 FuelType = Get(row, "Fuel Type"),
                 Transmission = Get(row, "Transmission"),
-                DriveType = Get(row, "Drive")
+                DriveType = Get(row, "Drive"),
+                BodyStyle = Get(row, "Body Style"),
+                Engine = Get(row, "Engine"),
+                Cylinders = Get(row, "Cylinders"),
+                Trim = Get(row, "Trim")
             },
             Condition = new VehicleCondition
             {
                 PrimaryDamage = primaryDamage,
                 SecondaryDamage = secondaryDamage,
                 HasKey = ParseYesNo(Get(row, "Has Keys-Yes or No")),
-                RunCondition = new RunConditionInfo { Value = NormalizeRunCondition(Get(row, "Runs/Drives")), Label = Get(row, "Runs/Drives") }
+                RunCondition = new RunConditionInfo { Value = NormalizeRunCondition(Get(row, "Runs/Drives")), Label = Get(row, "Runs/Drives") },
+                LotConditionCode = Get(row, "Lot Cond. Code")
             },
             Facility = new AuctionFacility
             {
@@ -228,7 +233,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             },
             Seller = new AuctionSeller { Name = Get(row, "Seller Name"), Type = null },
             OdometerInfo = new OdometerInfo { Miles = ParseDecimal(Get(row, "Odometer")), Status = Get(row, "Odometer Brand") },
-            SaleDocument = null,
+            SaleDocument = new SaleDocument { Name = titleType, State = Get(row, "Sale Title State") },
             TitleNotes = JsonSerializer.SerializeToElement(titleNotes),
             SpecialNote = ToJson(Get(row, "Special Note")),
             Announcements = ToJson(Get(row, "Announcements")),
@@ -244,6 +249,8 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             {
                 CurrentBidUsd = ParseDecimal(Get(row, "High Bid =non-vix,Sealed=Vix")),
                 BuyNowUsd = ParseDecimal(Get(row, "Buy-It-Now Price")),
+                EstimatedRetailValueUsd = ParseDecimal(Get(row, "Est. Retail Value")),
+                RepairCostUsd = ParseDecimal(Get(row, "Repair cost")),
                 SalePriceUsd = null
             },
             Location = new VehicleLocation

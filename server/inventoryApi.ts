@@ -22,7 +22,19 @@ export type AzureVehicle = {
   location: string | null;
   state: string | null;
   titleType: string | null;
+  titleState: string | null;
   facilityId: string | null;
+  vinMasked: string | null;
+  sellerName: string | null;
+  trim: string | null;
+  bodyStyle: string | null;
+  engine: string | null;
+  cylinders: string | null;
+  estimatedRetailValueUsd: number | null;
+  repairCostUsd: number | null;
+  lotConditionCode: string | null;
+  runCondition: string | null;
+  hasKeys: boolean | null;
   photos: string[];
 };
 

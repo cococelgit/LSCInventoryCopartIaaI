@@ -24,7 +24,19 @@ public sealed record PublicInventoryVehicle(
     [property: JsonPropertyName("location")] string? Location,
     [property: JsonPropertyName("state")] string? State,
     [property: JsonPropertyName("titleType")] string? TitleType,
+    [property: JsonPropertyName("titleState")] string? TitleState,
     [property: JsonPropertyName("facilityId")] string? FacilityId,
+    [property: JsonPropertyName("vinMasked")] string? VinMasked,
+    [property: JsonPropertyName("sellerName")] string? SellerName,
+    [property: JsonPropertyName("trim")] string? Trim,
+    [property: JsonPropertyName("bodyStyle")] string? BodyStyle,
+    [property: JsonPropertyName("engine")] string? Engine,
+    [property: JsonPropertyName("cylinders")] string? Cylinders,
+    [property: JsonPropertyName("estimatedRetailValueUsd")] decimal? EstimatedRetailValueUsd,
+    [property: JsonPropertyName("repairCostUsd")] decimal? RepairCostUsd,
+    [property: JsonPropertyName("lotConditionCode")] string? LotConditionCode,
+    [property: JsonPropertyName("runCondition")] string? RunCondition,
+    [property: JsonPropertyName("hasKeys")] bool? HasKeys,
     [property: JsonPropertyName("photos")] IReadOnlyList<string> Photos);
 
 public sealed record PublicInventoryResponse(

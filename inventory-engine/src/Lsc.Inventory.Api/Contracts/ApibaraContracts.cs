@@ -155,6 +155,14 @@ public sealed record PricingInfo
     [JsonConverter(typeof(NullableDecimalJsonConverter))]
     public decimal? BuyNowUsd { get; init; }
 
+    [JsonPropertyName("estimated_retail_value_usd")]
+    [JsonConverter(typeof(NullableDecimalJsonConverter))]
+    public decimal? EstimatedRetailValueUsd { get; init; }
+
+    [JsonPropertyName("repair_cost_usd")]
+    [JsonConverter(typeof(NullableDecimalJsonConverter))]
+    public decimal? RepairCostUsd { get; init; }
+
     [JsonPropertyName("sale_price_usd")]
     [JsonConverter(typeof(NullableDecimalJsonConverter))]
     public decimal? SalePriceUsd { get; init; }
@@ -242,6 +250,18 @@ public sealed record VehicleSpecs
 
     [JsonPropertyName("drive_type")]
     public string? DriveType { get; init; }
+
+    [JsonPropertyName("body_style")]
+    public string? BodyStyle { get; init; }
+
+    [JsonPropertyName("engine")]
+    public string? Engine { get; init; }
+
+    [JsonPropertyName("cylinders")]
+    public string? Cylinders { get; init; }
+
+    [JsonPropertyName("trim")]
+    public string? Trim { get; init; }
 }
 
 public sealed record VehicleCondition
@@ -257,6 +277,9 @@ public sealed record VehicleCondition
 
     [JsonPropertyName("run_condition")]
     public RunConditionInfo? RunCondition { get; init; }
+
+    [JsonPropertyName("lot_condition_code")]
+    public string? LotConditionCode { get; init; }
 }
 
 public sealed record RunConditionInfo
@@ -285,6 +308,9 @@ public sealed record SaleDocument
 
     [JsonPropertyName("is_pending")]
     public bool? IsPending { get; init; }
+
+    [JsonPropertyName("state")]
+    public string? State { get; init; }
 }
 
 public static partial class AuctionVehicleNormalizer

@@ -159,6 +159,8 @@ export default function Home() {
       fuel: vehicle.fuelType ?? "No reportado",
       drive: vehicle.driveType ?? "No reportada",
       titleType: vehicle.titleType ?? "No reportado",
+      vinMasked: vehicle.vinMasked ?? null,
+      sellerName: vehicle.sellerName ?? null,
       vehicleType: vehicle.vehicleType ?? "No reportado",
       startCode: "No reportado",
       odometer: parseOdometer(vehicle.odometer),
@@ -295,7 +297,7 @@ export default function Home() {
             <div className="browse-row-link">
               <VehiclePhotoCarousel photos={vehicle.photos} title={vehicle.title} lot={vehicle.lot} href={`/vehiculo/${vehicle.lot}`} />
               <a href={`/vehiculo/${vehicle.lot}`} target="_blank" rel="noreferrer" className="browse-row-details-link" aria-label={`Abrir ficha de ${vehicle.title} en una nueva pestaña`}>
-              <div className="browse-vehicle-main"><div className="browse-lot"><b>{vehicle.title}</b><em>LOTE #{vehicle.lot}</em></div><div className="browse-specs"><span>{vehicle.year || "Año N/R"}</span><span>{vehicle.transmission}</span><span>{vehicle.fuel}</span><span>{vehicle.drive}</span></div><div className="browse-data"><span><small>Ubicación</small><b><MapPin size={13} /> {vehicle.location}</b></span><span><small>Daño</small><b>{vehicle.damage}</b></span><span><small>Título</small><b>{vehicle.titleType}</b></span></div></div>
+              <div className="browse-vehicle-main"><div className="browse-lot"><b>{vehicle.title}</b><em>LOTE #{vehicle.lot}{vehicle.vinMasked ? ` · VIN ${vehicle.vinMasked}` : ""}</em></div><div className="browse-specs"><span>{vehicle.year || "Año N/R"}</span><span>{vehicle.transmission}</span><span>{vehicle.fuel}</span><span>{vehicle.drive}</span></div><div className="browse-data"><span><small>Ubicación</small><b><MapPin size={13} /> {vehicle.location}</b></span><span><small>Daño</small><b>{vehicle.damage}</b></span><span><small>Título</small><b>{vehicle.titleType}</b></span>{vehicle.sellerName && <span><small>Vendedor</small><b>{vehicle.sellerName}</b></span>}</div></div>
               <div className="browse-auction"><span className="auction-source">{vehicle.platform.toUpperCase()}</span><div><small><CalendarDays size={13} /> Subasta</small><b>{vehicle.auctionDate}</b></div><div className="browse-bid"><small>PUJA ACTUAL</small><b>{formatMoney(vehicle.currentBid)}</b></div><div className="browse-estimate"><small>PRESUPUESTO LSC*</small><b>{vehicle.estimatedTotal ? `${formatMoney(vehicle.estimatedTotal.min)} – ${formatMoney(vehicle.estimatedTotal.max)}` : "Sin puja"}</b></div><strong>Ver ficha <ChevronUp size={15} /></strong></div>
               </a>
             </div>

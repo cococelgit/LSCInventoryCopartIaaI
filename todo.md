@@ -180,3 +180,11 @@
 - [x] Persistir y publicar galerías Copart completas sin consultar Apibara ni alterar la elegibilidad.
 - [x] Medir la primera sincronización enriquecida: 1,000 candidatos, 993 galerías HD resueltas, 7 fallos seguros, 57.76 s de proceso.
 - [x] Activar `job-lsc-copart-media-prod` en `25,55 * * * *` UTC: procesa 5,000 lotes por turno, con concurrencia 8, sin elegibilidad ni reconciliación.
+
+## Cobertura de campos Copart
+
+- [x] Medir el CSV Copart y confirmar que VIN, vendedor y campos técnicos se distinguen entre datos fuente y campos no expuestos.
+- [ ] Exponer VIN enmascarado y vendedor condicionalmente, sin filtrar el VIN completo al portal.
+- [ ] Promover los campos Copart de alto valor ya disponibles: trim, carrocería, motor, cilindros, valor estimado, costo de reparación, estado del título y condición del lote.
+- [ ] Actualizar bridge, lista y ficha para mostrar datos reales y eliminar textos fijos engañosos.
+- [ ] Reprocesar y validar cobertura real en API y portal sin afectar elegibilidad, Copart media ni IAAI.
