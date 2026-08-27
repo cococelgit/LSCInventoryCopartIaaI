@@ -1,0 +1,57 @@
+name: Deploy Inventory API
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-api:
+    runs-on: ubuntu-latest
+    env:
+      RESOURCE_GROUP: rg-lsc-inventory-prod
+      ACR_NAME: acrlscinvprodeus2
+      ACR_SERVER: acrlscinvprodeus2.azurecr.io
+      API_APP_NAME: ca-lsc-inventory-api-prod
+      IMAGE_NAME: lsc-inventory-engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build immutable Inventory API image in ACR
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "${IMAGE_NAME}:api-${GITHUB_SHA}" \
+            --file inventory-engine/Dockerfile \
+            inventory-engine
+
+      - name: Deploy paginated Inventory API revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --yes
+          az containerapp update \
+            --name "$API_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "${ACR_SERVER}/${IMAGE_NAME}:api-${GITHUB_SHA}"
+
+      - name: Verify API revision is healthy
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp show \
+            --name "$API_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '{provisioningState:properties.provisioningState,latestRevision:properties.latestRevisionName,fqdn:properties.configuration.ingress.fqdn}' \
+            -o json
