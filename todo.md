@@ -159,8 +159,8 @@
 
 ## Operación recurrente Copart
 
-- [x] Confirmar que el descargador Copart está separado de IAAI y configurarlo en `0,30 * * * *` UTC.
-- [x] Crear un Job programado dedicado `job-lsc-copart-auto-prod` con `20,50 * * * *` UTC y el comando `--copart-excel-run`.
+- [x] Configurar el descargador Copart en `25,55 * * * *` UTC, cinco minutos antes de la carga.
+- [x] Crear un Job programado dedicado `job-lsc-copart-auto-prod` con `0,30 * * * *` UTC y el comando `--copart-excel-run`.
 - [x] Conservar `job-lsc-copart-excel-prod` como Job manual para diagnóstico y recuperación, sin convertirlo en la producción recurrente.
 - [ ] La tarea IAAI debe configurar su propio Job en `15,45 * * * *` UTC y, antes de elevar frecuencias, ambos flujos deben implementar/validar un candado compartido de escritura.
 - [x] Confirmar la primera ejecución disparada por cron en `job-lsc-copart-auto-prod`: inició a las 14:20 UTC, terminó a las 14:43:43 UTC y finalizó `Succeeded` sin intervención manual.
@@ -175,7 +175,8 @@
 ## Media Copart: fotos completas y HD
 
 - [x] Auditar columnas, URLs y cobertura de media del snapshot Copart sin exponer VINs ni parámetros sensibles.
-- [ ] Verificar desde la ruta Azure autorizada si `Image URL` resuelve el catálogo completo de fotos y variantes HD.
-- [ ] Definir y probar el mapeo de todas las imágenes por lote, con fallback seguro para miniatura y URLs rotas.
-- [ ] Persistir y publicar galerías Copart completas sin consultar Apibara ni alterar la elegibilidad.
-- [ ] Medir cobertura de fotos, HD y errores después de la primera sincronización enriquecida.
+- [x] Verificar desde la ruta Azure autorizada si `Image URL` resuelve el catálogo completo de fotos y variantes HD: 11/12 catálogos respondieron; promedio 12.09 fotos y 12.09 enlaces HD.
+- [x] Definir y probar el mapeo de todas las imágenes por lote, con fallback seguro para miniatura y URLs rotas.
+- [x] Persistir y publicar galerías Copart completas sin consultar Apibara ni alterar la elegibilidad.
+- [x] Medir la primera sincronización enriquecida: 1,000 candidatos, 993 galerías HD resueltas, 7 fallos seguros, 57.76 s de proceso.
+- [x] Activar `job-lsc-copart-media-prod` en `25,55 * * * *` UTC: procesa 5,000 lotes por turno, con concurrencia 8, sin elegibilidad ni reconciliación.
