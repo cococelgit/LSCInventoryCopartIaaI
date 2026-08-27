@@ -106,15 +106,16 @@ public sealed class PostgresSnapshotStore(
 
     public async Task PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken)
     {
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
         var observedAtUtc = observedAt.ToUniversalTime();
         var auctionAtUtc = vehicle.Auction?.AuctionAt?.ToUniversalTime();
         var identity = BuildIdentity(vehicle);
+        vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
         var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
 
-        await EnsureSchemaAsync(cancellationToken);
-        await EnsureLifecycleSchemaAsync(cancellationToken);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -219,6 +220,43 @@ public sealed class PostgresSnapshotStore(
         logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAtUtc);
     }
 
+    private async Task<AuctionVehicle> ReuseResolvedCopartMediaAsync(string identity, AuctionVehicle vehicle, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase) || vehicle.Media?.Photos?.Count is > 1)
+            return vehicle;
+        var catalogUrl = ReadCopartCatalogUrl(vehicle);
+        if (catalogUrl is null) return vehicle;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select payload::text
+            from auction_lot_versions
+            where lot_key = @lot_key
+              and payload ? 'copart_media_resolution'
+              and payload #>> '{_raw_source,Image URL}' = @catalog_url
+              and coalesce(jsonb_array_length(payload #> '{media,thumbs}'), 0) > 1
+            order by created_at desc
+            limit 1;
+            """;
+        AddParameter(command, "lot_key", identity);
+        AddParameter(command, "catalog_url", catalogUrl);
+        var rawJson = await command.ExecuteScalarAsync(cancellationToken) as string;
+        if (string.IsNullOrWhiteSpace(rawJson)) return vehicle;
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        var resolved = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+        return resolved?.Media?.Photos?.Count is > 1 ? vehicle with { Media = resolved.Media } : vehicle;
+    }
+
+    private static string? ReadCopartCatalogUrl(AuctionVehicle vehicle)
+    {
+        if (vehicle.RawSource is not { } rawSource || rawSource.ValueKind != JsonValueKind.Object ||
+            !rawSource.TryGetProperty("Image URL", out var candidate) || candidate.ValueKind != JsonValueKind.String) return null;
+        var value = candidate.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
     public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
@@ -241,8 +279,15 @@ public sealed class PostgresSnapshotStore(
             where lots.platform = 'copart'
               and coalesce(lifecycle.is_active, true)
               and coalesce(lots.media_photos_count, 0) <= 1
-              and not (versions.payload ? 'copart_media_resolution')
               and coalesce(versions.payload #>> '{_raw_source,Image URL}', '') <> ''
+              and not exists (
+                  select 1
+                  from auction_lot_versions resolved
+                  where resolved.lot_key = lots.lot_key
+                    and resolved.payload ? 'copart_media_resolution'
+                    and resolved.payload #>> '{_raw_source,Image URL}' = versions.payload #>> '{_raw_source,Image URL}'
+                    and coalesce(jsonb_array_length(resolved.payload #> '{media,thumbs}'), 0) > 1
+              )
             order by lots.observed_at desc, lots.lot_key
             limit @limit;
             """;

@@ -20,8 +20,10 @@ env:
   COPART_DOWNLOAD_JOB_NAME: job-lsc-copart-download-prod
   COPART_MANUAL_PROCESS_JOB_NAME: job-lsc-copart-excel-prod
   COPART_SCHEDULED_PROCESS_JOB_NAME: job-lsc-copart-auto-prod
+  COPART_MEDIA_JOB_NAME: job-lsc-copart-media-prod
   COPART_DOWNLOAD_CRON: 25,55 * * * *
   COPART_PROCESS_CRON: 0,30 * * * *
+  COPART_MEDIA_CRON: 25,55 * * * *
   RUNTIME_IDENTITY: /subscriptions/99edf3d1-a651-4d2d-af8e-d44a3360f584/resourceGroups/rg-lsc-inventory-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-lsc-inventory-db-runtime-prod
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
 
@@ -116,11 +118,66 @@ jobs:
               --only-show-errors
           fi
 
+      - name: Create or update scheduled Copart media enrichment
+        shell: bash
+        run: |
+          set -euo pipefail
+          # At :25/:55, the :00/:30 Copart ingest has normally completed and IAAI owns :15/:45.
+          # Keep media as a small independent batch: no eligibility, reconciliation, or IAAI writes occur here.
+          manual_job="$(az containerapp job show --name "$COPART_MANUAL_PROCESS_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          media_image="$(echo "$manual_job" | jq -r '.properties.template.containers[0].image')"
+          mapfile -t media_env < <(
+            echo "$manual_job" | jq -r '
+              .properties.template.containers[0].env[]
+              | select(.value != null)
+              | "\(.name)=\(.value)"'
+          )
+          if [ -z "$media_image" ] || [ "$media_image" = "null" ] || [ "${#media_env[@]}" -eq 0 ]; then
+            echo "Could not obtain validated Copart media runtime settings." >&2
+            exit 1
+          fi
+          if az containerapp job show --name "$COPART_MEDIA_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp job update \
+              --name "$COPART_MEDIA_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$media_image" \
+              --command dotnet Lsc.Inventory.Api.dll \
+              --args=--copart-media-enrich \
+              --cron-expression "$COPART_MEDIA_CRON" \
+              --parallelism 1 \
+              --replica-completion-count 1 \
+              --replica-retry-limit 0 \
+              --replica-timeout 900 \
+              --replace-env-vars "${media_env[@]}" \
+              --only-show-errors
+          else
+            az containerapp job create \
+              --name "$COPART_MEDIA_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$ENVIRONMENT_NAME" \
+              --trigger-type Schedule \
+              --cron-expression "$COPART_MEDIA_CRON" \
+              --image "$media_image" \
+              --cpu 1.0 \
+              --memory 2Gi \
+              --command dotnet Lsc.Inventory.Api.dll \
+              --args=--copart-media-enrich \
+              --env-vars "${media_env[@]}" \
+              --replica-timeout 900 \
+              --replica-retry-limit 0 \
+              --parallelism 1 \
+              --replica-completion-count 1 \
+              --mi-user-assigned "$RUNTIME_IDENTITY" \
+              --registry-server "$ACR_SERVER" \
+              --registry-identity "$RUNTIME_IDENTITY" \
+              --only-show-errors
+          fi
+
       - name: Confirm only Copart schedules
         shell: bash
         run: |
           set -euo pipefail
-          for job in "$COPART_DOWNLOAD_JOB_NAME" "$COPART_SCHEDULED_PROCESS_JOB_NAME"; do
+          for job in "$COPART_DOWNLOAD_JOB_NAME" "$COPART_SCHEDULED_PROCESS_JOB_NAME" "$COPART_MEDIA_JOB_NAME"; do
             az containerapp job show \
               --name "$job" \
               --resource-group "$RESOURCE_GROUP" \
