@@ -168,6 +168,6 @@
 ## Integración Copart con Centro de Ejecuciones
 
 - [x] Confirmar que la tabla de sesiones existente es `inventory_sync_runs`; no recrear ni duplicar el Centro de Ejecuciones.
-- [ ] Registrar cada corrida Copart como `provider=copart-excel`, `platform=copart` y completar sus resultados en `inventory_sync_runs`.
-- [ ] Registrar archivos inválidos y SHA duplicados como ejecuciones visibles, con datos seguros y sin duplicar cargas.
-- [ ] Validar en producción que la próxima corrida Copart aparezca en el Centro de Ejecuciones existente.
+- [x] Registrar cada corrida Copart como `provider=copart-excel`, `platform=copart` y completar sus resultados en `inventory_sync_runs`.
+- [x] Registrar archivos inválidos y SHA duplicados como ejecuciones visibles, con datos seguros y sin duplicar cargas.
+- [x] Validar en producción que la corrida automática Copart aparezca en el Centro de Ejecuciones: ejecución 16:00 UTC completó correctamente con 145,583 observados; siguiente ejecución 16:30 UTC fue creada por cron.
