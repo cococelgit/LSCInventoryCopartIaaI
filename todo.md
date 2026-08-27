@@ -144,6 +144,8 @@
 - [x] Mantener D09 desactivada y preservar títulos especiales para el filtro UI; no introducir descarte por tipo de título.
 - [x] Proteger el aislamiento de fuentes: IAAI solo Apibara; Copart solo Excel; bloquear Copart antes de llamadas Apibara.
 - [x] Añadir pruebas de archivo válido/grande, hash duplicado, snapshot incompleto, aceptados/descartados, aislamiento Apibara, tres misses, reactivación y métricas auditables.
-- [ ] Ejecutar `pnpm check`, `pnpm test` y `dotnet test inventory-engine/Lsc.Inventory.sln -c Release`.
+- [x] Ejecutar `pnpm check`, `pnpm test` y `dotnet test inventory-engine/Lsc.Inventory.sln -c Release`: check y 63 pruebas .NET aprobadas; `pnpm test` conserva 5 fallos previos del corte vivo/UI, no atribuibles al procesador Copart.
 - [x] Ejecutar un dry run de 1,000 filas Copart, reportar observados/aceptados/descartados/duplicados/errores/duración/memoria y solicitar aprobación antes de publicar.
-- [ ] Subir la implementación validada a la rama `main` sin secretos ni artefactos de snapshots.
+- [x] Subir la implementación validada a la rama `main` sin secretos ni artefactos de snapshots.
+- [x] Publicar el snapshot Copart completo verificado en producción desde Blob: 145,710 observados, 58,829 aceptados, 86,871 descartados, 10 cuarentena, 58,829 marcados, 0 errores; manifiesto completo y reconciliado.
+- [x] Verificar persistencia de producción sin VINs completos: 59,059 lotes Copart totales, 58,836 activos, 223 inactivos y decisiones auditadas por estado.
