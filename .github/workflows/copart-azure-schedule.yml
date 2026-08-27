@@ -16,10 +16,14 @@ env:
   AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
+  ENVIRONMENT_NAME: cae-lsc-inventory-prod
   COPART_DOWNLOAD_JOB_NAME: job-lsc-copart-download-prod
-  COPART_PROCESS_JOB_NAME: job-lsc-copart-excel-prod
+  COPART_MANUAL_PROCESS_JOB_NAME: job-lsc-copart-excel-prod
+  COPART_SCHEDULED_PROCESS_JOB_NAME: job-lsc-copart-auto-prod
   COPART_DOWNLOAD_CRON: 0,30 * * * *
   COPART_PROCESS_CRON: 20,50 * * * *
+  RUNTIME_IDENTITY: /subscriptions/99edf3d1-a651-4d2d-af8e-d44a3360f584/resourceGroups/rg-lsc-inventory-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-lsc-inventory-db-runtime-prod
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
 
 jobs:
   activate-copart-schedule:
@@ -41,40 +45,81 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Copart downloads at :00 and :30 UTC. IAAI is deliberately not referenced or changed.
+          # This job is already Scheduled. Updating only its cron preserves its container, Key Vault references and managed identity.
           az containerapp job update \
             --name "$COPART_DOWNLOAD_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --trigger-type Schedule \
             --cron-expression "$COPART_DOWNLOAD_CRON" \
             --parallelism 1 \
             --replica-completion-count 1 \
             --replica-retry-limit 0 \
             --only-show-errors
 
-      - name: Set Copart process-and-publish schedule only
+      - name: Create or update dedicated Copart processor schedule
         shell: bash
         run: |
           set -euo pipefail
-          # Starts 20 minutes after every Copart download and five minutes after the IAAI slots (:15/:45).
-          # It restores the production command after the last read-only report run.
-          az containerapp job update \
-            --name "$COPART_PROCESS_JOB_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            --trigger-type Schedule \
-            --cron-expression "$COPART_PROCESS_CRON" \
-            --args "--copart-excel-run" \
-            --parallelism 1 \
-            --replica-completion-count 1 \
-            --replica-retry-limit 0 \
-            --replica-timeout 3600 \
-            --only-show-errors
+          # Keep the existing manual processor intact for diagnostic/recovery runs.
+          # Copy only its non-secret runtime configuration into a new Schedule-type job.
+          manual_job="$(az containerapp job show --name "$COPART_MANUAL_PROCESS_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          processor_image="$(echo "$manual_job" | jq -r '.properties.template.containers[0].image')"
+          if [ -z "$processor_image" ] || [ "$processor_image" = "null" ]; then
+            echo "Could not obtain the validated Copart processor image." >&2
+            exit 1
+          fi
+          mapfile -t processor_env < <(
+            echo "$manual_job" | jq -r '
+              .properties.template.containers[0].env[]
+              | select(.value != null)
+              | "\(.name)=\(.value)"'
+          )
+          if [ "${#processor_env[@]}" -eq 0 ]; then
+            echo "The validated Copart processor has no copyable runtime settings." >&2
+            exit 1
+          fi
+
+          if az containerapp job show --name "$COPART_SCHEDULED_PROCESS_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp job update \
+              --name "$COPART_SCHEDULED_PROCESS_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$processor_image" \
+              --command dotnet Lsc.Inventory.Api.dll \
+              --args "--copart-excel-run" \
+              --cron-expression "$COPART_PROCESS_CRON" \
+              --parallelism 1 \
+              --replica-completion-count 1 \
+              --replica-retry-limit 0 \
+              --replica-timeout 3600 \
+              --replace-env-vars "${processor_env[@]}" \
+              --only-show-errors
+          else
+            az containerapp job create \
+              --name "$COPART_SCHEDULED_PROCESS_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$ENVIRONMENT_NAME" \
+              --trigger-type Schedule \
+              --cron-expression "$COPART_PROCESS_CRON" \
+              --image "$processor_image" \
+              --cpu 1.0 \
+              --memory 2Gi \
+              --command dotnet Lsc.Inventory.Api.dll \
+              --args "--copart-excel-run" \
+              --env-vars "${processor_env[@]}" \
+              --replica-timeout 3600 \
+              --replica-retry-limit 0 \
+              --parallelism 1 \
+              --replica-completion-count 1 \
+              --mi-user-assigned "$RUNTIME_IDENTITY" \
+              --registry-server "$ACR_SERVER" \
+              --registry-identity "$RUNTIME_IDENTITY" \
+              --only-show-errors
+          fi
 
       - name: Confirm only Copart schedules
         shell: bash
         run: |
           set -euo pipefail
-          for job in "$COPART_DOWNLOAD_JOB_NAME" "$COPART_PROCESS_JOB_NAME"; do
+          for job in "$COPART_DOWNLOAD_JOB_NAME" "$COPART_SCHEDULED_PROCESS_JOB_NAME"; do
             az containerapp job show \
               --name "$job" \
               --resource-group "$RESOURCE_GROUP" \
