@@ -921,13 +921,37 @@ public sealed class PostgresSnapshotStore(
             }
         }
 
+        long zeroPhotos;
+        long onePhoto;
+        long multiplePhotos;
+        await using (var photoCoverage = connection.CreateCommand())
+        {
+            photoCoverage.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            photoCoverage.CommandText = """
+                select
+                    count(*) filter (where coalesce(lots.media_photos_count, 0) = 0)::bigint as zero_photos,
+                    count(*) filter (where coalesce(lots.media_photos_count, 0) = 1)::bigint as one_photo,
+                    count(*) filter (where coalesce(lots.media_photos_count, 0) > 1)::bigint as multiple_photos
+                from auction_lots lots
+                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+                where lots.platform = 'copart'
+                  and coalesce(lifecycle.is_active, true);
+                """;
+            await using var reader = await photoCoverage.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            zeroPhotos = reader.GetInt64(0);
+            onePhoto = reader.GetInt64(1);
+            multiplePhotos = reader.GetInt64(2);
+        }
+
         return JsonSerializer.Serialize(new
         {
             Database = database,
             DatabaseUser = databaseUser,
             SearchPath = searchPath,
             Relations = relationList,
-            RecentCopartRuns = recentCopartRuns
+            RecentCopartRuns = recentCopartRuns,
+            CopartActivePhotoCoverage = new { ZeroPhotos = zeroPhotos, OnePhoto = onePhoto, MultiplePhotos = multiplePhotos }
         });
     }
 
