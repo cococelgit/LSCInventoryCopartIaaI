@@ -1,0 +1,83 @@
+name: Activate Copart Production Schedule
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-production-schedule
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  COPART_DOWNLOAD_JOB_NAME: job-lsc-copart-download-prod
+  COPART_PROCESS_JOB_NAME: job-lsc-copart-excel-prod
+  COPART_DOWNLOAD_CRON: 0,30 * * * *
+  COPART_PROCESS_CRON: 20,50 * * * *
+
+jobs:
+  activate-copart-schedule:
+    name: Activate only Copart schedules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Set Copart download schedule only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Copart downloads at :00 and :30 UTC. IAAI is deliberately not referenced or changed.
+          az containerapp job update \
+            --name "$COPART_DOWNLOAD_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --trigger-type Schedule \
+            --cron-expression "$COPART_DOWNLOAD_CRON" \
+            --parallelism 1 \
+            --replica-completion-count 1 \
+            --replica-retry-limit 0 \
+            --only-show-errors
+
+      - name: Set Copart process-and-publish schedule only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Starts 20 minutes after every Copart download and five minutes after the IAAI slots (:15/:45).
+          # It restores the production command after the last read-only report run.
+          az containerapp job update \
+            --name "$COPART_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --trigger-type Schedule \
+            --cron-expression "$COPART_PROCESS_CRON" \
+            --args "--copart-excel-run" \
+            --parallelism 1 \
+            --replica-completion-count 1 \
+            --replica-retry-limit 0 \
+            --replica-timeout 3600 \
+            --only-show-errors
+
+      - name: Confirm only Copart schedules
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in "$COPART_DOWNLOAD_JOB_NAME" "$COPART_PROCESS_JOB_NAME"; do
+            az containerapp job show \
+              --name "$job" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,args:properties.template.containers[0].args,parallelism:properties.configuration.scheduleTriggerConfig.parallelism,replicaCompletionCount:properties.configuration.scheduleTriggerConfig.replicaCompletionCount,replicaRetryLimit:properties.configuration.replicaRetryLimit,replicaTimeout:properties.configuration.replicaTimeout}' \
+              -o json
+          done
