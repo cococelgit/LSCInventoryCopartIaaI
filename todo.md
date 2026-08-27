@@ -156,3 +156,11 @@
 - [x] Implementar consulta paginada, filtrada y source-aware desde PostgreSQL para Copart e IAAI.
 - [ ] Desplegar la API paginada y el bridge/UI actualizado.
 - [ ] Validar en producción que el portal recorra todos los resultados elegibles y no solo el primer corte.
+
+## Operación recurrente Copart
+
+- [x] Confirmar que el descargador Copart está separado de IAAI y configurarlo en `0,30 * * * *` UTC.
+- [x] Crear un Job programado dedicado `job-lsc-copart-auto-prod` con `20,50 * * * *` UTC y el comando `--copart-excel-run`.
+- [x] Conservar `job-lsc-copart-excel-prod` como Job manual para diagnóstico y recuperación, sin convertirlo en la producción recurrente.
+- [ ] La tarea IAAI debe configurar su propio Job en `15,45 * * * *` UTC y, antes de elevar frecuencias, ambos flujos deben implementar/validar un candado compartido de escritura.
+- [ ] Confirmar la primera ejecución disparada por cron en `job-lsc-copart-auto-prod` y registrar sus conteos de manifiesto.
