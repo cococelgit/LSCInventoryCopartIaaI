@@ -12,6 +12,7 @@ on:
           - normal
           - diagnostics
           - publication_report
+          - storage_diagnostics
           - recover
 
 permissions:
@@ -75,6 +76,7 @@ jobs:
             normal) job_arg="--copart-excel-run"; allow_interrupted_retry=false ;;
             diagnostics) job_arg="--copart-excel-diagnostics"; allow_interrupted_retry=false ;;
             publication_report) job_arg="--copart-publication-report"; allow_interrupted_retry=false ;;
+            storage_diagnostics) job_arg="--storage-diagnostics"; allow_interrupted_retry=false ;;
             recover) job_arg="--copart-excel-run"; allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
           esac
@@ -154,7 +156,7 @@ jobs:
           echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
 
       - name: Capture live Copart diagnostic output
-        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' }}
+        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' }}
         shell: bash
         run: |
           set -euo pipefail
