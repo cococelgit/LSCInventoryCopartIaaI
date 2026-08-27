@@ -158,6 +158,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sleep 20
           az containerapp job logs show \
             --name "$COPART_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
