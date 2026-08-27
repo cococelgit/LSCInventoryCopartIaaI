@@ -184,8 +184,16 @@ jobs:
             --execution "$COPART_EXECUTION_NAME" \
             --replica "$replica" \
             --container "$container" \
-            --follow \
             --tail 300 \
+            --format text || true
+          az containerapp job logs show \
+            --name "$COPART_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --execution "$COPART_EXECUTION_NAME" \
+            --replica "$replica" \
+            --container "$container" \
+            --follow \
+            --tail 20 \
             --format text || true
 
       - name: Wait for the Copart execution result
