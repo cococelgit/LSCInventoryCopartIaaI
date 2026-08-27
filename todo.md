@@ -171,3 +171,11 @@
 - [x] Registrar cada corrida Copart como `provider=copart-excel`, `platform=copart` y completar sus resultados en `inventory_sync_runs`.
 - [x] Registrar archivos inválidos y SHA duplicados como ejecuciones visibles, con datos seguros y sin duplicar cargas.
 - [x] Validar en producción que la corrida automática Copart aparezca en el Centro de Ejecuciones: ejecución 16:00 UTC completó correctamente con 145,583 observados; siguiente ejecución 16:30 UTC fue creada por cron.
+
+## Media Copart: fotos completas y HD
+
+- [x] Auditar columnas, URLs y cobertura de media del snapshot Copart sin exponer VINs ni parámetros sensibles.
+- [ ] Verificar desde la ruta Azure autorizada si `Image URL` resuelve el catálogo completo de fotos y variantes HD.
+- [ ] Definir y probar el mapeo de todas las imágenes por lote, con fallback seguro para miniatura y URLs rotas.
+- [ ] Persistir y publicar galerías Copart completas sin consultar Apibara ni alterar la elegibilidad.
+- [ ] Medir cobertura de fotos, HD y errores después de la primera sincronización enriquecida.

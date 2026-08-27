@@ -339,6 +339,18 @@ if (args.Contains("--media-diagnostic", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--copart-media-probe", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var source = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotSource>();
+    var adapter = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotAdapter>();
+    var result = await CopartMediaSnapshotProbe.ProbeAsync(source, adapter, CancellationToken.None);
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
+    await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
+    return;
+}
+
 var copartFileIndex = Array.FindIndex(args, argument => string.Equals(argument, "--copart-excel-file", StringComparison.OrdinalIgnoreCase));
 if (copartFileIndex >= 0)
 {
