@@ -228,22 +228,22 @@ public sealed class PostgresSnapshotStore(
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
-            with latest as (
-                select distinct on (versions.lot_key)
-                       versions.lot_key, versions.observed_at, versions.payload::text
-                from auction_lot_versions versions
-                join auction_lots lots on lots.lot_key = versions.lot_key
-                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = versions.lot_key
-                where lots.platform = 'copart'
-                  and coalesce(lifecycle.is_active, true)
-                order by versions.lot_key, versions.created_at desc
-            )
-            select lot_key, observed_at, payload
-            from latest
-            where coalesce(jsonb_array_length(cast(payload as jsonb) #> '{media,thumbs}'), 0) <= 1
-              and not (cast(payload as jsonb) ? 'copart_media_resolution')
-              and coalesce(cast(payload as jsonb) #>> '{_raw_source,Image URL}', '') <> ''
-            order by observed_at desc, lot_key
+            select lots.lot_key, lots.observed_at, versions.payload::text
+            from auction_lots lots
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) versions on true
+            where lots.platform = 'copart'
+              and coalesce(lifecycle.is_active, true)
+              and coalesce(lots.media_photos_count, 0) <= 1
+              and not (versions.payload ? 'copart_media_resolution')
+              and coalesce(versions.payload #>> '{_raw_source,Image URL}', '') <> ''
+            order by lots.observed_at desc, lots.lot_key
             limit @limit;
             """;
         AddParameter(command, "limit", limit);
