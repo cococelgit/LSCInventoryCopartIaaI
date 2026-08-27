@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
 
@@ -6,19 +8,26 @@ namespace Lsc.Inventory.Api.Sources;
 public sealed record CopartMediaProbeResult(
     bool SnapshotValid,
     int SnapshotRows,
-    bool SampleMediaUrlFound,
-    int? HttpStatus,
-    string? ContentType,
-    long? ContentLength,
-    string? JsonShape,
+    int SampleMediaUrls,
+    int SuccessfulResponses,
+    IReadOnlyDictionary<int, int> StatusCounts,
+    double? MedianRequestMilliseconds,
+    double? P95RequestMilliseconds,
+    double? AverageGalleryImages,
+    double? AverageResolvedPhotos,
+    double? AverageHdPhotos,
+    int FailedResponses,
     string? Failure);
 
 /// <summary>
-/// Performs one read-only request against an Image URL already supplied by an approved Copart snapshot.
+/// Performs a small, read-only sample against Image URLs already supplied by an approved Copart snapshot.
 /// It never logs lots, VINs, URLs, query values, response values, or credentials.
 /// </summary>
 public static class CopartMediaSnapshotProbe
 {
+    private const int SampleLimit = 12;
+    private const int MaximumConcurrency = 4;
+
     public static async Task<CopartMediaProbeResult> ProbeAsync(
         ICopartExcelSnapshotSource snapshotSource,
         ICopartExcelSnapshotAdapter adapter,
@@ -28,44 +37,103 @@ public static class CopartMediaSnapshotProbe
         var validation = await adapter.ValidateAsync(lease.Snapshot, cancellationToken);
         if (!validation.IsComplete)
         {
-            return new CopartMediaProbeResult(false, validation.RowCount, false, null, null, null, null,
+            return new CopartMediaProbeResult(false, validation.RowCount, 0, 0, new Dictionary<int, int>(), null, null, null, null, null, 0,
                 string.Join(" | ", validation.Failures));
         }
 
-        string? mediaUrl = null;
+        var mediaUrls = new List<string>(SampleLimit);
         await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(lease.Snapshot, cancellationToken))
         {
-            mediaUrl = ReadRawMediaUrl(vehicle);
-            if (mediaUrl is not null)
-                break;
+            var mediaUrl = ReadRawMediaUrl(vehicle);
+            if (mediaUrl is not null) mediaUrls.Add(mediaUrl);
+            if (mediaUrls.Count == SampleLimit) break;
         }
 
-        if (mediaUrl is null)
-            return new CopartMediaProbeResult(true, validation.RowCount, false, null, null, null, null, "No valid Copart Image URL was present in the snapshot.");
+        if (mediaUrls.Count == 0)
+            return new CopartMediaProbeResult(true, validation.RowCount, 0, 0, new Dictionary<int, int>(), null, null, null, null, null, 0,
+                "No valid Copart Image URL was present in the snapshot.");
 
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        var samples = new ConcurrentBag<MediaResponseSample>();
+        await Parallel.ForEachAsync(mediaUrls, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = MaximumConcurrency,
+            CancellationToken = cancellationToken
+        }, async (mediaUrl, token) => samples.Add(await FetchAsync(client, mediaUrl, token)));
+
+        var completed = samples.Where(sample => sample.StatusCode is >= 200 and < 300).ToArray();
+        var elapsed = completed.Select(sample => sample.ElapsedMilliseconds).OrderBy(value => value).ToArray();
+        var galleries = completed.Where(sample => sample.DeclaredImageCount is not null).Select(sample => sample.DeclaredImageCount!.Value).ToArray();
+        var photos = completed.Select(sample => sample.ResolvedPhotoCount).ToArray();
+        var hdPhotos = completed.Select(sample => sample.HdPhotoCount).ToArray();
+
+        return new CopartMediaProbeResult(
+            true,
+            validation.RowCount,
+            mediaUrls.Count,
+            completed.Length,
+            samples.Where(sample => sample.StatusCode is not null).GroupBy(sample => sample.StatusCode!.Value).ToDictionary(group => group.Key, group => group.Count()),
+            Percentile(elapsed, 0.50),
+            Percentile(elapsed, 0.95),
+            Average(galleries),
+            Average(photos),
+            Average(hdPhotos),
+            samples.Count - completed.Length,
+            null);
+    }
+
+    private static async Task<MediaResponseSample> FetchAsync(HttpClient client, string mediaUrl, CancellationToken cancellationToken)
+    {
+        var timer = Stopwatch.StartNew();
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
             using var request = new HttpRequestMessage(HttpMethod.Get, mediaUrl);
-            request.Headers.Accept.ParseAdd("application/json, image/*;q=0.9");
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            var contentType = response.Content.Headers.ContentType?.MediaType;
-            var contentLength = response.Content.Headers.ContentLength;
-            string? jsonShape = null;
+            request.Headers.Accept.ParseAdd("application/json");
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+            timer.Stop();
+            if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType?.Contains("json", StringComparison.OrdinalIgnoreCase) != true)
+                return new MediaResponseSample((int)response.StatusCode, timer.Elapsed.TotalMilliseconds, null, 0, 0);
 
-            if (contentType?.Contains("json", StringComparison.OrdinalIgnoreCase) == true && response.IsSuccessStatusCode)
+            using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+            var root = document.RootElement;
+            int? declaredImages = root.TryGetProperty("imgCount", out var imageCount) && imageCount.TryGetInt32(out var count) ? count : null;
+            var directPhotos = new HashSet<string>(StringComparer.Ordinal);
+            var hdPhotos = new HashSet<string>(StringComparer.Ordinal);
+
+            if (root.TryGetProperty("lotImages", out var lotImages) && lotImages.ValueKind == JsonValueKind.Array)
             {
-                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-                using var document = JsonDocument.Parse(bytes);
-                jsonShape = Describe(document.RootElement, 0);
+                foreach (var image in lotImages.EnumerateArray())
+                {
+                    if (!image.TryGetProperty("link", out var links) || links.ValueKind != JsonValueKind.Array) continue;
+                    foreach (var link in links.EnumerateArray())
+                    {
+                        if (!TryReadDirectImage(link, out var url, out var isThumbnail, out var isHd)) continue;
+                        if (isThumbnail) continue;
+                        directPhotos.Add(url);
+                        if (isHd) hdPhotos.Add(url);
+                    }
+                }
             }
 
-            return new CopartMediaProbeResult(true, validation.RowCount, true, (int)response.StatusCode, contentType, contentLength, jsonShape, null);
+            return new MediaResponseSample((int)response.StatusCode, timer.Elapsed.TotalMilliseconds, declaredImages, directPhotos.Count, hdPhotos.Count);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return new CopartMediaProbeResult(true, validation.RowCount, true, null, null, null, null, $"Media request failed: {exception.GetType().Name}");
+            timer.Stop();
+            return new MediaResponseSample(null, timer.Elapsed.TotalMilliseconds, null, 0, 0);
         }
+    }
+
+    private static bool TryReadDirectImage(JsonElement link, out string url, out bool isThumbnail, out bool isHd)
+    {
+        url = string.Empty;
+        isThumbnail = link.TryGetProperty("isThumbNail", out var thumbnail) && thumbnail.ValueKind == JsonValueKind.True;
+        isHd = link.TryGetProperty("isHdImage", out var hd) && hd.ValueKind == JsonValueKind.True;
+        if (!link.TryGetProperty("url", out var candidate) || candidate.ValueKind != JsonValueKind.String) return false;
+        var value = candidate.GetString()?.Trim();
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || !uri.Host.EndsWith("copart.com", StringComparison.OrdinalIgnoreCase)) return false;
+        url = uri.ToString();
+        return true;
     }
 
     private static string? ReadRawMediaUrl(AuctionVehicle vehicle)
@@ -86,18 +154,14 @@ public static class CopartMediaSnapshotProbe
             : null;
     }
 
-    private static string Describe(JsonElement value, int depth)
+    private static double? Average(IReadOnlyCollection<int> values) => values.Count == 0 ? null : values.Average();
+
+    private static double? Percentile(IReadOnlyList<double> values, double percentile)
     {
-        if (depth > 4) return value.ValueKind.ToString();
-        return value.ValueKind switch
-        {
-            JsonValueKind.Object => "object(" + string.Join(",", value.EnumerateObject().Take(16).Select(property => property.Name + ":" + Describe(property.Value, depth + 1))) + ")",
-            JsonValueKind.Array => "array[" + (value.GetArrayLength() == 0 ? 0 : Describe(value[0], depth + 1)) + "]",
-            JsonValueKind.String => "string",
-            JsonValueKind.Number => "number",
-            JsonValueKind.True or JsonValueKind.False => "boolean",
-            JsonValueKind.Null => "null",
-            _ => value.ValueKind.ToString()
-        };
+        if (values.Count == 0) return null;
+        var index = (int)Math.Ceiling(values.Count * percentile) - 1;
+        return Math.Round(values[Math.Clamp(index, 0, values.Count - 1)], 2);
     }
+
+    private sealed record MediaResponseSample(int? StatusCode, double ElapsedMilliseconds, int? DeclaredImageCount, int ResolvedPhotoCount, int HdPhotoCount);
 }
