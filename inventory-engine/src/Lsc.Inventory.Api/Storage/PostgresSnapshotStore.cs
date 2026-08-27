@@ -222,7 +222,7 @@ public sealed class PostgresSnapshotStore(
     public async Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
-        var runId = Guid.NewGuid();
+        var runId = start.RunId ?? Guid.NewGuid();
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();

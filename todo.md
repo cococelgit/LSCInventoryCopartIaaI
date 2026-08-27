@@ -164,3 +164,10 @@
 - [x] Conservar `job-lsc-copart-excel-prod` como Job manual para diagnóstico y recuperación, sin convertirlo en la producción recurrente.
 - [ ] La tarea IAAI debe configurar su propio Job en `15,45 * * * *` UTC y, antes de elevar frecuencias, ambos flujos deben implementar/validar un candado compartido de escritura.
 - [x] Confirmar la primera ejecución disparada por cron en `job-lsc-copart-auto-prod`: inició a las 14:20 UTC, terminó a las 14:43:43 UTC y finalizó `Succeeded` sin intervención manual.
+
+## Integración Copart con Centro de Ejecuciones
+
+- [x] Confirmar que la tabla de sesiones existente es `inventory_sync_runs`; no recrear ni duplicar el Centro de Ejecuciones.
+- [ ] Registrar cada corrida Copart como `provider=copart-excel`, `platform=copart` y completar sus resultados en `inventory_sync_runs`.
+- [ ] Registrar archivos inválidos y SHA duplicados como ejecuciones visibles, con datos seguros y sin duplicar cargas.
+- [ ] Validar en producción que la próxima corrida Copart aparezca en el Centro de Ejecuciones existente.

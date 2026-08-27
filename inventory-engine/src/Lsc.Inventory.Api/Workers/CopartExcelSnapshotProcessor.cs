@@ -52,7 +52,16 @@ public sealed class CopartExcelSnapshotProcessor(
         var validation = await adapter.ValidateAsync(snapshot, cancellationToken);
         if (!validation.IsComplete)
         {
-            return Failed(validation.Failures, validation.RowCount, startedAt, "Copart snapshot validation failed; no rows were persisted or reconciled.");
+            var reason = "Copart snapshot validation failed; no rows were persisted or reconciled.";
+            var validationRunId = await snapshotStore.StartSyncRunAsync(
+                new InventorySyncRunStart("copart-excel", InventorySourcePolicy.CopartExcelSource, "snapshot-validation", 1, _options.ProcessingBatchSize, startedAt),
+                cancellationToken);
+            var finishedAt = DateTimeOffset.UtcNow;
+            await snapshotStore.CompleteSyncRunAsync(
+                validationRunId,
+                new InventorySyncRunCompletion(finishedAt, validation.RowCount, 1, validation.Failures.Append(reason).ToArray()),
+                cancellationToken);
+            return Failed(validation.Failures, validation.RowCount, startedAt, reason);
         }
 
         var registration = await snapshotStore.TryRegisterCopartSnapshotAsync(
@@ -64,8 +73,28 @@ public sealed class CopartExcelSnapshotProcessor(
         if (!registration.Accepted)
         {
             var reason = registration.RejectionReason ?? "Copart snapshot registration was rejected.";
-            return new CopartExcelProcessingResult(false, registration.IsDuplicate, false, reason, 0, 0, 0, 0, 0, 0, DateTimeOffset.UtcNow - startedAt, null, new Dictionary<string, int>(), new Dictionary<string, int>(), [reason]);
+            var registrationState = registration.IsDuplicate ? "duplicate" : "snapshot-registration";
+            var registrationRunId = await snapshotStore.StartSyncRunAsync(
+                new InventorySyncRunStart("copart-excel", InventorySourcePolicy.CopartExcelSource, registrationState, 1, _options.ProcessingBatchSize, startedAt),
+                cancellationToken);
+            var finishedAt = DateTimeOffset.UtcNow;
+            await snapshotStore.CompleteSyncRunAsync(
+                registrationRunId,
+                new InventorySyncRunCompletion(finishedAt, validation.RowCount, 1, registration.IsDuplicate ? [] : [reason]),
+                cancellationToken);
+            return new CopartExcelProcessingResult(false, registration.IsDuplicate, false, reason, 0, 0, 0, 0, 0, 0, finishedAt - startedAt, null, new Dictionary<string, int>(), new Dictionary<string, int>(), [reason]);
         }
+
+        var executionRunId = await snapshotStore.StartSyncRunAsync(
+            new InventorySyncRunStart(
+                Provider: "copart-excel",
+                Platform: InventorySourcePolicy.CopartExcelSource,
+                State: "all",
+                PagesRequested: 1,
+                PageSize: _options.ProcessingBatchSize,
+                StartedAt: startedAt,
+                RunId: registration.RunId),
+            cancellationToken);
 
         var state = new ProcessingState();
         var batch = new List<AuctionVehicle>(_options.ProcessingBatchSize);
@@ -92,21 +121,31 @@ public sealed class CopartExcelSnapshotProcessor(
             else
                 logger.LogWarning("Copart snapshot {FileName} will not reconcile because it was not fully processed: observed {Observed} of {Expected}, errors {Errors}.", snapshot.FileName, state.Observed, validation.RowCount, state.Errors);
 
+            var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteCopartSnapshotAsync(registration.RunId!.Value,
-                new CopartSnapshotCompletion(DateTimeOffset.UtcNow, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, isComplete, state.Failures),
+                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, isComplete, state.Failures),
+                cancellationToken);
+            await snapshotStore.CompleteSyncRunAsync(
+                executionRunId,
+                new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
                 cancellationToken);
 
-            return new CopartExcelProcessingResult(true, false, isComplete, null, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, DateTimeOffset.UtcNow - startedAt, reconciliation, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures);
+            return new CopartExcelProcessingResult(true, false, isComplete, null, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, reconciliation, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             state.Errors++;
             state.Failures.Add($"processing: {exception.Message}");
+            var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteCopartSnapshotAsync(registration.RunId!.Value,
-                new CopartSnapshotCompletion(DateTimeOffset.UtcNow, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, false, state.Failures),
+                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, false, state.Failures),
+                cancellationToken);
+            await snapshotStore.CompleteSyncRunAsync(
+                executionRunId,
+                new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
                 cancellationToken);
             logger.LogError(exception, "Copart snapshot {FileName} failed after {Observed} observed rows.", snapshot.FileName, state.Observed);
-            return new CopartExcelProcessingResult(false, false, false, "Copart processing failed; reconciliation was blocked.", state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, DateTimeOffset.UtcNow - startedAt, null, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures);
+            return new CopartExcelProcessingResult(false, false, false, "Copart processing failed; reconciliation was blocked.", state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, null, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures);
         }
     }
 

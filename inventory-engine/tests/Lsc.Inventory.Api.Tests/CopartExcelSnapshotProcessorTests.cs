@@ -45,6 +45,16 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal(4, persisted.Count);
         Assert.True(duplicateResult.IsDuplicate);
         Assert.False(duplicateResult.Processed);
+
+        var runs = store.SyncRuns.Values.OrderBy(run => run.Start.StartedAt).ToArray();
+        Assert.Equal(2, runs.Length);
+        Assert.Equal("copart-excel", runs[0].Start.Provider);
+        Assert.Equal("copart", runs[0].Start.Platform);
+        Assert.Equal("all", runs[0].Start.State);
+        Assert.Equal(result.Observed, runs[0].Completion!.VehiclesObserved);
+        Assert.Equal("duplicate", runs[1].Start.State);
+        Assert.Equal(4, runs[1].Completion!.VehiclesObserved);
+        Assert.Empty(runs[1].Completion!.Failures);
     }
 
     [Fact]

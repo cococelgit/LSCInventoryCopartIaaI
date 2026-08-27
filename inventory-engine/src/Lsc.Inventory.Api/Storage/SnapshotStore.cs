@@ -27,7 +27,8 @@ public sealed record InventorySyncRunStart(
     string State,
     int PagesRequested,
     int PageSize,
-    DateTimeOffset StartedAt);
+    DateTimeOffset StartedAt,
+    Guid? RunId = null);
 
 public sealed record InventorySyncRunCompletion(
     DateTimeOffset FinishedAt,
@@ -159,16 +160,25 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     private readonly ConcurrentDictionary<string, CopartSnapshotReceipt> _copartSnapshots = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _copartSnapshotStatuses = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _copartRuns = new();
+    private readonly ConcurrentDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> _syncRuns = new();
+
+    public IReadOnlyDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> SyncRuns => _syncRuns;
 
     public Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(Guid.NewGuid());
+        var runId = start.RunId ?? Guid.NewGuid();
+        _syncRuns[runId] = (start, null);
+        return Task.FromResult(runId);
     }
 
     public Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _syncRuns.AddOrUpdate(
+            runId,
+            _ => (new InventorySyncRunStart("unknown", "unknown", "unknown", 0, 0, completion.FinishedAt, runId), completion),
+            (_, existing) => (existing.Start, completion));
         return Task.CompletedTask;
     }
 
