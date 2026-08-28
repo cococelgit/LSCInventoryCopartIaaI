@@ -15,7 +15,7 @@ Un **intento** agrupa observaciones del mismo `lot_key` que comparten la misma f
 | Resultado | Regla de evidencia | Confianza |
 |---|---|---|
 | `scheduled` | La fecha/hora de subasta aún no vence y el lote está presente. | Alta |
-| `sold_confirmed` | Copart reporta un precio de venta positivo o un estado explícito de venta incluido en la lista controlada. | Alta |
+| `sold_confirmed` | Copart reporta un precio de venta positivo en el listado. | Alta |
 | `relisted_inferred` | Un intento anterior venció y el mismo lote reaparece en un snapshot completo posterior con una fecha de subasta posterior. | Media-alta |
 | `unknown` | El lote deja de verse, no hay resultado explícito de venta y no hay reaparición posterior verificable. | Baja/indeterminada |
 

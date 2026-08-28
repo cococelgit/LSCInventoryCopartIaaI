@@ -660,8 +660,10 @@ public sealed class PostgresSnapshotStore(
                        case when score >= 60 then 'high' when score >= 35 then 'medium' when score > 0 then 'watch' else 'none' end,
                        first_attempt_at, last_attempt_at, last_bid_usd, historical_maximum_bid_usd,
                        jsonb_build_object('relisted_inferred_count', relisted_count, 'attempt_count', attempt_count,
-                          'sale_confirmed', sold_confirmed, 'last_bid_below_historical_maximum',
-                          coalesce(last_bid_usd < historical_maximum_bid_usd, false),
+                          'relisting_evidence_present', relisted_count > 0, 'sale_confirmed', sold_confirmed,
+                          'three_or_more_attempts', attempt_count >= 3,
+                          'first_attempt_at_least_14_days', first_attempt_at <= @finalized_at - interval '14 days',
+                          'last_bid_below_historical_maximum', coalesce(last_bid_usd < historical_maximum_bid_usd, false),
                           'bidding_within_two_percent', coalesce(historical_minimum_bid_usd is not null and historical_maximum_bid_usd > 0
                               and (historical_maximum_bid_usd - historical_minimum_bid_usd) / historical_maximum_bid_usd <= 0.02, false),
                           'model_version', 'copart-auction-history-v1')
