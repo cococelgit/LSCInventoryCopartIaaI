@@ -435,6 +435,8 @@ if (args.Contains("--copart-title-backfill", StringComparer.OrdinalIgnoreCase))
     var result = await processor.RunAsync(CancellationToken.None);
     Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
     if (!result.Processed || result.Failed > 0) Environment.ExitCode = 1;
+    var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
+    await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
     return;
 }
 
