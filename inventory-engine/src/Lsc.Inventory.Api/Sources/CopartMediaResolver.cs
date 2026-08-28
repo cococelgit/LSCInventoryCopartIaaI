@@ -106,8 +106,12 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
         var value = candidate.GetString()?.Trim();
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
             (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)) ||
-            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment) || !string.IsNullOrEmpty(uri.Query)) return false;
-        url = uri.ToString();
+            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment)) return false;
+
+        // Copart's image catalog may attach cache/size query parameters. Persist only the canonical HTTPS path,
+        // so the portal does not expose query values while still retaining the direct image resource.
+        var canonical = new UriBuilder(uri) { Query = string.Empty, Fragment = string.Empty }.Uri;
+        url = canonical.GetLeftPart(UriPartial.Path);
         return true;
     }
 
