@@ -1,0 +1,53 @@
+name: Copart Azure Media Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Media job operation
+        required: true
+        default: pause
+        type: choice
+        options:
+          - pause
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  COPART_MEDIA_JOB_NAME: job-lsc-copart-media-prod
+
+jobs:
+  pause-media-job:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Pause only Copart media enrichment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if az containerapp job show --name "$COPART_MEDIA_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp job delete \
+              --name "$COPART_MEDIA_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --yes \
+              --only-show-errors
+            echo "Deleted scheduled Copart media Job. Inventory, Blob snapshots, IAAI, and Copart ingest Jobs were not modified."
+          else
+            echo "Copart media Job is already absent."
+          fi
