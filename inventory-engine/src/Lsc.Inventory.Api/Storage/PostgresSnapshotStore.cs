@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Azure;
 using Azure.Core;
 using Azure.Identity;
 using Azure.Storage.Blobs;
@@ -1743,7 +1744,15 @@ public sealed class PostgresSnapshotStore(
         var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
         var blobClient = containerClient.GetBlobClient(blobName);
 
-        await blobClient.UploadAsync(BinaryData.FromString(rawJson), overwrite: false, cancellationToken: cancellationToken);
+        try
+        {
+            await blobClient.UploadAsync(BinaryData.FromString(rawJson), overwrite: false, cancellationToken: cancellationToken);
+        }
+        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status409Conflict ||
+                                                    string.Equals(exception.ErrorCode, "BlobAlreadyExists", StringComparison.OrdinalIgnoreCase))
+        {
+            // Content-addressed payloads are immutable. A retry that produces the same hash already has the audit blob.
+        }
     }
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
