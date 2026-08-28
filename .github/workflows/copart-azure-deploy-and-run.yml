@@ -77,15 +77,15 @@ jobs:
           set -euo pipefail
           image="${ACR_SERVER}/${IMAGE_NAME}:copart-${GITHUB_SHA}"
           case "${{ inputs.run_mode }}" in
-            normal) job_arg="--copart-excel-run"; allow_interrupted_retry=false ;;
-            diagnostics) job_arg="--copart-excel-diagnostics"; allow_interrupted_retry=false ;;
-            publication_report) job_arg="--copart-publication-report"; allow_interrupted_retry=false ;;
-            storage_diagnostics) job_arg="--storage-diagnostics"; allow_interrupted_retry=false ;;
-            media_probe) job_arg="--copart-media-probe"; allow_interrupted_retry=false ;;
-            media_enrich) job_arg="--copart-media-enrich"; allow_interrupted_retry=false ;;
-            lot_media_diagnostics) job_arg="--copart-lot-media-diagnostics 48826366"; allow_interrupted_retry=false ;;
-            title_backfill) job_arg="--copart-title-backfill"; allow_interrupted_retry=false ;;
-            recover) job_arg="--copart-excel-run"; allow_interrupted_retry=true ;;
+            normal) job_args=("--copart-excel-run"); allow_interrupted_retry=false ;;
+            diagnostics) job_args=("--copart-excel-diagnostics"); allow_interrupted_retry=false ;;
+            publication_report) job_args=("--copart-publication-report"); allow_interrupted_retry=false ;;
+            storage_diagnostics) job_args=("--storage-diagnostics"); allow_interrupted_retry=false ;;
+            media_probe) job_args=("--copart-media-probe"); allow_interrupted_retry=false ;;
+            media_enrich) job_args=("--copart-media-enrich"); allow_interrupted_retry=false ;;
+            lot_media_diagnostics) job_args=("--copart-lot-media-diagnostics" "48826366"); allow_interrupted_retry=false ;;
+            title_backfill) job_args=("--copart-title-backfill"); allow_interrupted_retry=false ;;
+            recover) job_args=("--copart-excel-run"); allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
           esac
           source_job="$(az containerapp job show --name "$SOURCE_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
@@ -123,7 +123,7 @@ jobs:
               --resource-group "$RESOURCE_GROUP" \
               --image "$image" \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args="$job_arg" \
+              --args "${job_args[@]}" \
               --replace-env-vars "${env_args[@]}" \
               --replica-timeout 3600 \
               --replica-retry-limit 0 \
@@ -140,7 +140,7 @@ jobs:
               --cpu 1.0 \
               --memory 2Gi \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args="$job_arg" \
+              --args "${job_args[@]}" \
               --env-vars "${env_args[@]}" \
               --replica-timeout 3600 \
               --replica-retry-limit 0 \

@@ -47,6 +47,17 @@ jobs:
         run: |
           set -euo pipefail
           execution="${{ inputs.execution }}"
+          if [ "$execution" = "latest" ]; then
+            execution="$(az containerapp job execution list \
+              --name "$COPART_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query '[0].name' -o tsv)"
+          fi
+          if [ -z "$execution" ] || [ "$execution" = "None" ]; then
+            echo "No target Copart execution was found." >&2
+            exit 2
+          fi
+          echo "Target Copart execution: $execution"
           echo "Current scheduler configuration (read-only)."
           az containerapp job show \
             --name "$SOURCE_JOB_NAME" \
