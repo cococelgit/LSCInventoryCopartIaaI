@@ -18,6 +18,7 @@ on:
           - lot_media_diagnostics
           - title_backfill
           - auction_history_backfill
+          - auction_history_report
           - recover
 
 permissions:
@@ -96,6 +97,7 @@ jobs:
             lot_media_diagnostics) job_args=("--copart-lot-media-diagnostics=48826366"); allow_interrupted_retry=false ;;
             title_backfill) job_args=("--copart-title-backfill"); allow_interrupted_retry=false ;;
             auction_history_backfill) job_args=("--copart-auction-history-backfill"); allow_interrupted_retry=false ;;
+            auction_history_report) job_args=("--copart-auction-history-report"); allow_interrupted_retry=false ;;
             recover) job_args=("--copart-excel-run"); allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
           esac
@@ -150,7 +152,7 @@ jobs:
           echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
 
       - name: Capture live Copart diagnostic output
-        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' || inputs.run_mode == 'lot_media_diagnostics' || inputs.run_mode == 'title_backfill' || inputs.run_mode == 'auction_history_backfill' }}
+        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' || inputs.run_mode == 'lot_media_diagnostics' || inputs.run_mode == 'title_backfill' || inputs.run_mode == 'auction_history_backfill' || inputs.run_mode == 'auction_history_report' }}
         shell: bash
         run: |
           set -euo pipefail

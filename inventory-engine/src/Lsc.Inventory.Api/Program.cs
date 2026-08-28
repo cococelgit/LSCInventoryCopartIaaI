@@ -559,6 +559,14 @@ if (args.Contains("--copart-auction-history-backfill", StringComparer.OrdinalIgn
     return;
 }
 
+if (args.Contains("--copart-auction-history-report", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await store.GetCopartAuctionHistoryReportAsync(CancellationToken.None)));
+    return;
+}
+
 if (args.Contains("--copart-title-backfill", StringComparer.OrdinalIgnoreCase))
 {
     try

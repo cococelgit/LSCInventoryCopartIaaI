@@ -24,6 +24,7 @@ public interface IInventorySnapshotStore
     Task<int> RecordCopartAuctionObservationsAsync(IReadOnlyList<CopartAuctionObservation> observations, CancellationToken cancellationToken);
     Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken);
+    Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken);
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
     Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken);
@@ -104,6 +105,18 @@ public sealed record CopartAuctionHistoryBackfillResult(
     int Failed,
     TimeSpan Duration,
     IReadOnlyList<string> Failures);
+
+/// <summary>
+/// Aggregate-only, internal verification report. It intentionally carries no VIN, seller, URL or raw payload data.
+/// </summary>
+public sealed record CopartAuctionHistoryReport(
+    long Observations,
+    long DistinctSnapshots,
+    long Attempts,
+    long Signals,
+    IReadOnlyDictionary<string, long> AttemptsByOutcome,
+    IReadOnlyDictionary<string, long> AttemptsByEvidenceLevel,
+    IReadOnlyDictionary<string, long> SignalsByLevel);
 
 public sealed record InventoryBrowseQuery(
     string? Platform,
@@ -410,6 +423,19 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         foreach (var observation in observations)
             if (_copartAuctionObservations.TryAdd($"{observation.SnapshotSha256}:{observation.LotKey}", observation)) inserted++;
         return Task.FromResult(inserted);
+    }
+
+    public Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new CopartAuctionHistoryReport(
+            _copartAuctionObservations.Count,
+            _copartAuctionObservations.Keys.Select(key => key[..key.IndexOf(':')]).Distinct(StringComparer.OrdinalIgnoreCase).LongCount(),
+            0,
+            0,
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)));
     }
 
     public Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken)

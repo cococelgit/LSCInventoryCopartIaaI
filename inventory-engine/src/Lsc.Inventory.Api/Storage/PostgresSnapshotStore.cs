@@ -775,6 +775,43 @@ public sealed class PostgresSnapshotStore(
         return new CopartAuctionHistoryBackfillResult(true, candidates, inserted, attemptsDerived, failed, DateTimeOffset.UtcNow - startedAt, failures);
     }
 
+    public async Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken)
+    {
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select
+                (select count(*) from copart_lot_observations) as observations,
+                (select count(distinct snapshot_sha256) from copart_lot_observations) as distinct_snapshots,
+                (select count(*) from copart_auction_attempts) as attempts,
+                (select count(*) from copart_lot_motivation_signals) as signals,
+                (select coalesce(jsonb_object_agg(outcome, total), '{}'::jsonb)
+                 from (select outcome, count(*)::bigint as total from copart_auction_attempts group by outcome) outcomes) as attempts_by_outcome,
+                (select coalesce(jsonb_object_agg(evidence_level, total), '{}'::jsonb)
+                 from (select evidence_level, count(*)::bigint as total from copart_auction_attempts group by evidence_level) evidence) as attempts_by_evidence,
+                (select coalesce(jsonb_object_agg(level, total), '{}'::jsonb)
+                 from (select level, count(*)::bigint as total from copart_lot_motivation_signals group by level) signal_levels) as signals_by_level;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            throw new InvalidOperationException("Copart auction-history report did not return aggregate counts.");
+
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        static IReadOnlyDictionary<string, long> ReadCounts(string raw, JsonSerializerOptions options) =>
+            JsonSerializer.Deserialize<Dictionary<string, long>>(raw, options) ?? new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        return new CopartAuctionHistoryReport(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            ReadCounts(reader.GetString(4), jsonOptions),
+            ReadCounts(reader.GetString(5), jsonOptions),
+            ReadCounts(reader.GetString(6), jsonOptions));
+    }
+
     private async Task<int> CountCopartAuctionAttemptsAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
