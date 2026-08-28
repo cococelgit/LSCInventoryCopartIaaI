@@ -1132,6 +1132,81 @@ public sealed class PostgresSnapshotStore(
         return JsonSerializer.Serialize(lots);
     }
 
+    public async Task<string> GetCopartLotMediaDiagnosticsAsync(string lotNumber, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(lotNumber)) throw new ArgumentException("Lot number is required.", nameof(lotNumber));
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lots.lot_key, lots.lot_number, lots.media_photos_count, lots.updated_at, latest.payload::text
+            from auction_lots lots
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) latest on true
+            where lots.platform = 'copart'
+              and lots.lot_number = @lot_number
+            limit 1;
+            """;
+        AddParameter(command, "lot_number", lotNumber.Trim());
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return JsonSerializer.Serialize(new { Found = false, LotNumber = lotNumber.Trim() });
+
+        var lotKey = reader.GetString(0);
+        var storedPhotoCount = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+        var updatedAt = reader.GetFieldValue<DateTimeOffset>(3);
+        using var payload = JsonDocument.Parse(reader.GetString(4));
+        var root = payload.RootElement;
+        var photos = root.TryGetProperty("media", out var media) && media.ValueKind == JsonValueKind.Object &&
+                     media.TryGetProperty("thumbs", out var thumbs) && thumbs.ValueKind == JsonValueKind.Array
+            ? thumbs.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Cast<string>()
+                .ToArray()
+            : [];
+        var photoHosts = photos
+            .Select(value => Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri.Host : null)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var catalogUrl = root.TryGetProperty("_raw_source", out var raw) && raw.ValueKind == JsonValueKind.Object &&
+                         raw.TryGetProperty("Image URL", out var catalog) && catalog.ValueKind == JsonValueKind.String
+            ? catalog.GetString()
+            : null;
+        var catalogHost = Uri.TryCreate(catalogUrl, UriKind.Absolute, out var catalogUri) ? catalogUri.Host : null;
+        var resolution = root.TryGetProperty("copart_media_resolution", out var status) && status.ValueKind == JsonValueKind.String
+            ? status.GetString()
+            : null;
+
+        return JsonSerializer.Serialize(new
+        {
+            Found = true,
+            LotKey = lotKey,
+            LotNumber = reader.GetString(1),
+            UpdatedAt = updatedAt,
+            StoredPhotoCount = storedPhotoCount,
+            PayloadPhotoCount = photos.Length,
+            GalleryResolved = photos.Length > 1,
+            PhotoHosts = photoHosts,
+            PhotosWithQueryString = photos.Count(value => Uri.TryCreate(value, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Query)),
+            CatalogUrlPresent = !string.IsNullOrWhiteSpace(catalogUrl),
+            CatalogHost = catalogHost,
+            ResolutionStatus = resolution,
+            HasMaskedVin = root.TryGetProperty("vin", out var vin) && vin.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(vin.GetString()),
+            HasSeller = root.TryGetProperty("seller", out var seller) && seller.ValueKind == JsonValueKind.Object && seller.TryGetProperty("name", out var sellerName) && sellerName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(sellerName.GetString())
+        });
+    }
+
     public async Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);

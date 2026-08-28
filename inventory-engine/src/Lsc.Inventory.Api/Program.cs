@@ -395,6 +395,23 @@ if (args.Contains("--storage-diagnostics", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+var lotMediaDiagnosticIndex = Array.FindIndex(args, argument => string.Equals(argument, "--copart-lot-media-diagnostics", StringComparison.OrdinalIgnoreCase));
+if (lotMediaDiagnosticIndex >= 0)
+{
+    if (lotMediaDiagnosticIndex + 1 >= args.Length || string.IsNullOrWhiteSpace(args[lotMediaDiagnosticIndex + 1]))
+        throw new ArgumentException("--copart-lot-media-diagnostics requires a Copart lot number.");
+
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+        throw new InvalidOperationException("Copart lot media diagnostics require Persistence:Provider=Postgres.");
+
+    Console.Error.WriteLine(await postgresStore.GetCopartLotMediaDiagnosticsAsync(args[lotMediaDiagnosticIndex + 1], CancellationToken.None));
+    var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
+    await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
+    return;
+}
+
 if (args.Contains("--media-diagnostic", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

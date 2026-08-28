@@ -15,6 +15,7 @@ on:
           - storage_diagnostics
           - media_probe
           - media_enrich
+          - lot_media_diagnostics
           - title_backfill
           - recover
 
@@ -82,6 +83,7 @@ jobs:
             storage_diagnostics) job_arg="--storage-diagnostics"; allow_interrupted_retry=false ;;
             media_probe) job_arg="--copart-media-probe"; allow_interrupted_retry=false ;;
             media_enrich) job_arg="--copart-media-enrich"; allow_interrupted_retry=false ;;
+            lot_media_diagnostics) job_arg="--copart-lot-media-diagnostics 48826366"; allow_interrupted_retry=false ;;
             title_backfill) job_arg="--copart-title-backfill"; allow_interrupted_retry=false ;;
             recover) job_arg="--copart-excel-run"; allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
@@ -164,7 +166,7 @@ jobs:
           echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
 
       - name: Capture live Copart diagnostic output
-        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' || inputs.run_mode == 'title_backfill' }}
+        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' || inputs.run_mode == 'lot_media_diagnostics' || inputs.run_mode == 'title_backfill' }}
         shell: bash
         run: |
           set -euo pipefail
