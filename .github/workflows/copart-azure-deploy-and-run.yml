@@ -123,7 +123,7 @@ jobs:
               --resource-group "$RESOURCE_GROUP" \
               --image "$image" \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args "${job_args[@]}" \
+              --args="${job_args[*]}" \
               --replace-env-vars "${env_args[@]}" \
               --replica-timeout 3600 \
               --replica-retry-limit 0 \
@@ -140,7 +140,7 @@ jobs:
               --cpu 1.0 \
               --memory 2Gi \
               --command dotnet Lsc.Inventory.Api.dll \
-              --args "${job_args[@]}" \
+              --args="${job_args[*]}" \
               --env-vars "${env_args[@]}" \
               --replica-timeout 3600 \
               --replica-retry-limit 0 \
