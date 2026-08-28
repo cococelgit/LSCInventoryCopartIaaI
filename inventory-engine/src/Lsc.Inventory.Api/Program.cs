@@ -134,9 +134,28 @@ static bool? RawYesNo(AuctionVehicle vehicle, string field) => RawText(vehicle, 
     _ => null
 };
 
+static string? RawTitleCode(AuctionVehicle vehicle)
+{
+    var fromRaw = RawText(vehicle, "Sale Title Type");
+    if (!string.IsNullOrWhiteSpace(fromRaw)) return fromRaw;
+    if (vehicle.AdditionalData is not null && vehicle.AdditionalData.TryGetValue("source_title_type_code", out var code) && code.ValueKind == System.Text.Json.JsonValueKind.String)
+        return code.GetString()?.Trim();
+    if (vehicle.TitleNotes is { ValueKind: System.Text.Json.JsonValueKind.Object } notes && notes.TryGetProperty("sale_title_type_code", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
+        return value.GetString()?.Trim();
+    return null;
+}
+
+static CopartTitleDefinition? ResolveCopartTitle(AuctionVehicle vehicle)
+{
+    if (!string.Equals(vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)) return null;
+    return CopartTitleCatalog.TryGet(RawTitleCode(vehicle), out var definition) ? definition : null;
+}
+
 static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot)
 {
     var vehicle = snapshot.Vehicle;
+    var copartTitle = ResolveCopartTitle(vehicle);
+    var titleCode = RawTitleCode(vehicle);
     var photos = (vehicle.Media?.Photos ?? Array.Empty<string>())
         .Select(SafePhotoUrl)
         .Where(url => url is not null)
@@ -164,7 +183,10 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot)
         vehicle.Pricing?.BuyNowUsd,
         vehicle.Location?.Display,
         vehicle.Location?.State,
-        vehicle.SaleDocument?.Name ?? vehicle.Title,
+        copartTitle?.EnglishDescription ?? vehicle.SaleDocument?.Name ?? vehicle.Title,
+        titleCode,
+        copartTitle?.SpanishDescription,
+        string.IsNullOrWhiteSpace(titleCode) || !string.Equals(vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase) ? null : copartTitle is null ? "unmapped" : "mapped",
         vehicle.SaleDocument?.State ?? RawText(vehicle, "Sale Title State"),
         vehicle.Location?.FacilityId,
         MaskVin(vehicle.Vin ?? RawText(vehicle, "VIN")),

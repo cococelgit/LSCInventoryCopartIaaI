@@ -143,8 +143,8 @@ public static partial class AuctionEligibilityEvaluator
         }
         if (titleNotes is null && specialNote is null && announcements is null)
             dataQualityNotes.Add("El proveedor no informó notas o anuncios de título; D10 se evaluó solo con el documento disponible.");
-        if (vehicle.Platform?.Equals("copart", StringComparison.OrdinalIgnoreCase) == true && IsMissing(titleLabel))
-            flags.Add(Reason("M02", "Código de título sin mapa", "El título Copart no tiene una equivalencia oficial aprobada.", ["sale_title_type_label"], ("sale_title_type_label", titleLabel)));
+        if (vehicle.Platform?.Equals("copart", StringComparison.OrdinalIgnoreCase) == true && IsCopartTitleUnmapped(vehicle))
+            flags.Add(Reason("M02", "Código de título sin mapa", "El código de título Copart no tiene una equivalencia oficial aprobada; el lote no se descarta por ello.", ["source_title_type_code", "title_mapping_status"], ("source_title_type_code", CopartTitleCode(vehicle)), ("title_mapping_status", "unmapped")));
         if (vehicle.Condition?.HasKey == false)
             flags.Add(Reason("M03", "Sin llaves", "La subasta declara que el vehículo no tiene llaves.", ["condition.has_key"], ("condition.has_key", false)));
 
@@ -181,6 +181,27 @@ public static partial class AuctionEligibilityEvaluator
 
     private static EligibilityReason Reason(string code, string name, string explanation, IReadOnlyList<string> sourceFields, params (string Name, object? Value)[] values) =>
         new(code, name, explanation, sourceFields, values.ToDictionary(value => value.Name, value => value.Value));
+
+    private static string? CopartTitleCode(AuctionVehicle vehicle)
+    {
+        if (vehicle.AdditionalData is not null && vehicle.AdditionalData.TryGetValue("source_title_type_code", out var code) && code.ValueKind == JsonValueKind.String)
+            return Original(code.GetString());
+        return JsonProperty(vehicle.TitleNotes, "sale_title_type_code") ?? JsonProperty(vehicle.TitleNotes, "sale_title_type");
+    }
+
+    private static bool IsCopartTitleUnmapped(AuctionVehicle vehicle)
+    {
+        if (vehicle.AdditionalData is not null && vehicle.AdditionalData.TryGetValue("source_title_mapping", out var status) && status.ValueKind == JsonValueKind.String)
+            return string.Equals(status.GetString(), "unmapped", StringComparison.OrdinalIgnoreCase);
+        return IsMissing(CopartTitleCode(vehicle));
+    }
+
+    private static string? JsonProperty(JsonElement? value, string name)
+    {
+        if (value is not { ValueKind: JsonValueKind.Object } objectValue || !objectValue.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String)
+            return null;
+        return Original(property.GetString());
+    }
 
     private static string? Original(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 

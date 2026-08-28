@@ -22,6 +22,9 @@ export type AzureVehicle = {
   location: string | null;
   state: string | null;
   titleType: string | null;
+  titleCode: string | null;
+  titleDescriptionEs: string | null;
+  titleMappingStatus: string | null;
   titleState: string | null;
   facilityId: string | null;
   vinMasked: string | null;

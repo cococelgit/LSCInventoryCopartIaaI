@@ -1,0 +1,186 @@
+Código   Típo de Título                               Significado                                                           Procesar
+AC       Salvage Certificate                          Certificado de Salvamento                                             si
+AD       Certificate of Destruction                   Certificado de Destrucción                                            no
+AL       Salvage Title                                Título de Salvamento                                                  si
+AM       Parts Only                                   Solo para Piezas                                                      no
+AN       Non-repairable Certificate                   Certificado No Reparado                                               no
+AQ       Clear Title                                  Título Limpio                                                         si
+AR       Rebuilt Title                                Título Reconstruido                                                   si
+AT       Scrap Title                                  Título de Chatarra                                                    no
+AV       Clean Title                                  Título Limpio                                                         si
+AY       Flood Title                                  Título de Inundación                                                  si
+B1       Variante de Salvage/Rebuilt Title            Variante de título de salvamento o reconstruidos dependiendo del estado
+                                                                                                                            si específico
+B2       Variante de Salvage/Rebuilt Title            Variante de título de salvamento o reconstruidos dependiendo del estado
+                                                                                                                            si específico
+B3       Variante de Salvage/Rebuilt Title            Variante de título de salvamento o reconstruidos dependiendo del estado
+                                                                                                                            si específico
+BB       Bill of Sale                                 Factura de Venta                                                      si
+BC       Junk Title                                   Título de Basura                                                      no
+BE       Export Only                                  Solo para Exportación                                                 si
+BF       Salvage Certificate                          Certificado de Salvamento                                             si
+BI       Salvage Certificate - Theft                  Certificado de Salvamento - Robo                                      si
+BL       Salvage Certificate - Water Damage           Certificado de Salvamento - Daño por Agua                             si
+BP       Salvage Title - Parts Only                   Título de Salvamento - Solo para Piezas                               si
+BR       Salvage Certificate - Rebuilt                Certificado de Salvamento - Reconstruido                              si
+BS       Salvage Certificate - Fire Damage            Certificado de Salvamento - Daño por Fuego                            si
+BT       Salvage Certificate - Vandalism              Certificado de Salvamento - Vandalismo                                si
+BV       Salvage Certificate - Hail Damage            Certificado de Salvamento - Daño por Granizo                          si
+C0       Certificate of Origin                        Certificado de Origen                                                 si
+C1       Variante de Salvage Certificate              Variante de certificado de salvamento o destrucción según el estado   si
+C4       Variante de Salvage Certificate              Variante de certificado de salvamento o destrucción según el estado   si
+CA       Salvage Certificate - Airbags Deployed       Certificado de Salvamento - Airbags Desplegados                       si
+CC       Certificate of Clean Title                   Certificado de Título Limpio                                          si
+CD       Clean Title - Rebuilt                        Título Limpio - Reconstruido                                          si
+CE       Certificate of Emissions                     Certificado de Emisiones                                              si
+CF       Clean Title - Fleet Vehicle                  Título Limpio - Vehículo de Flota                                     si
+CH       Salvage Certificate - Total Loss             Certificado de Salvamento - Pérdida Total                             si
+CI       Salvage Certificate - Insurance Claim        Certificado de Salvamento - Reclamo de Seguro                         si
+CL       Certificate of Liability                     Certificado de Responsabilidad                                        si
+CM       Salvage Certificate - Manufacturer Buyback   Certificado de Salvamento - Recompra del Fabricante                   si
+CO       Certificate of Ownership                     Certificado de Propiedad                                              si
+CQ       Clean Title - Non-Repairable                 Título Limpio - No Reparado                                           si
+CR       Clean Title - Rebuildable                    Título Limpio - Reconstruible                                         si
+CS       Salvage Certificate - Structural Damage      Certificado de Salvamento - Daño Estructural                          si
+CT       Clean Title - Theft Recovery                 Título Limpio - Recuperación de Robo                                  si
+CV       Salvage Certificate - Mechanical Damage      Certificado de Salvamento - Daño Mecánico                             si
+CW       Clean Title - Water Damage                   Título Limpio - Daño por Agua                                         si
+CZ       Salvage Certificate - Collision Damage       Certificado de Salvamento - Daño por Colisión                         si
+D1       Variante de Salvage Certificate              Variante de certificado de salvamento según el estado                 si
+D2       Variante de Salvage Certificate              Variante de certificado de salvamento según el estado                 si
+DA       Salvage Certificate - Dealer Only            Certificado de Salvamento - Solo para Distribuidores                  si
+DC       Salvage Certificate - Cosmetic Damage        Certificado de Salvamento - Daño Cosmético                            si
+DE       Salvage Certificate - Electrical Damage      Certificado de Salvamento - Daño Eléctrico                            si
+DL       Salvage Certificate - Dealer Loss            Certificado de Salvamento - Pérdida del Distribuidor                  si
+DM       Salvage Certificate - Mechanical             Certificado de Salvamento - Mecánico                                  si
+DN       Salvage Certificate - Not Actual Mileage     Certificado de Salvamento - Kilometraje No Real                       si
+DP       Salvage Certificate - Parts Only             Certificado de Salvamento - Solo para Piezas                          si
+DQ       Salvage Certificate - Quarter Panel Damage   Certificado de Salvamento - Daño en el Panel Trasero                  si
+DR       Salvage Certificate - Rebuildable            Certificado de Salvamento - Reconstruible                             si
+DS       Salvage Certificate - Structural             Certificado de Salvamento - Estructural                               si
+DT       Salvage Certificate - Theft                  Certificado de Salvamento - Robo                                      si
+DU       Salvage Certificate - Undercarriage Damage   Certificado de Salvamento - Daño en el Chasis                         si
+DV       Salvage Certificate - Vandalism              Certificado de Salvamento - Vandalismo                                si
+DY       Salvage Certificate - Water/Flood            Certificado de Salvamento - Agua/Inundación                           si
+DZ   Salvage Certificate - Wind Damage                  Certificado de Salvamento - Daño por Viento                      si
+EN   Salvage Certificate - Engine Damage                Certificado de Salvamento - Daño en el Motor                     si
+ET   Salvage Certificate - Theft                        Certificado de Salvamento - Robo                                 si
+EU   Salvage Certificate - Unibody Damage               Certificado de Salvamento - Daño en el Unibody                   si
+F1   Salvage Certificate - Frame Damage                 Certificado de Salvamento - Daño en el Marco                     si
+FC   Salvage Certificate - Fire                         Certificado de Salvamento - Fuego                                si
+FL   Salvage Certificate - Flood                        Certificado de Salvamento - Inundación                           si
+FN   Salvage Certificate - Front End Damage             Certificado de Salvamento - Daño en la Parte Delantera           si
+FR   Salvage Certificate - Rear End Damage              Certificado de Salvamento - Daño en la Parte Trasera             si
+FS   Salvage Certificate - Side Damage                  Certificado de Salvamento - Daño en el Lado                      si
+FT   Salvage Certificate - Theft Recovery               Certificado de Salvamento - Recuperación de Robo                 si
+FV   Salvage Certificate - Vandalism                    Certificado de Salvamento - Vandalismo                           si
+GM   Salvage Certificate - Major Damage                 Certificado de Salvamento - Daño Mayor                           si
+GS   Salvage Certificate - Storm Damage                 Certificado de Salvamento - Daño por Tormenta                    si
+HD   Salvage Certificate - Hail                         Certificado de Salvamento - Granizo                              si
+HF   Salvage Certificate - Flood                        Certificado de Salvamento - Inundación                           si
+HS   Salvage Certificate - Hail/Storm                   Certificado de Salvamento - Granizo/Tormenta                     si
+HT   Salvage Certificate - Hail/Theft                   Certificado de Salvamento - Granizo/Robo                         si
+IA   Salvage Certificate - Insurance Auction            Certificado de Salvamento - Subasta de Seguros                   si
+IC   Salvage Certificate - Collision                    Certificado de Salvamento - Colisión                             si
+IP   Salvage Certificate - Parts                        Certificado de Salvamento - Piezas                               si
+IR   Salvage Certificate - Roll Over                    Certificado de Salvamento - Vuelco                               si
+JB   Salvage Certificate - Jacked                       Certificado de Salvamento - Levantado                            si
+JC   Salvage Certificate - Collision                    Certificado de Salvamento - Colisión                             si
+JK   Salvage Certificate - Junk                         Certificado de Salvamento - Basura                               si
+JR   Salvage Certificate - Reconstructed                Certificado de Salvamento - Reconstruido                         si
+JT   Salvage Certificate - Total Loss                   Certificado de Salvamento - Pérdida Total                        si
+KC   Salvage Certificate - Crushed                      Certificado de Salvamento - Triturado                            si
+KL   Salvage Certificate - Stolen                       Certificado de Salvamento - Robado                               si
+KR   Salvage Certificate - Repossession                 Certificado de Salvamento - Reposesión                           si
+KV   Salvage Certificate - Stolen/Vandalized            Certificado de Salvamento - Robado/Vandalizado                   si
+LB   Salvage Certificate - Lemon Buyback                Certificado de Salvamento - Recompra de Vehículo Defectuoso      si
+LC   Salvage Certificate - Lemon/Manufacturer Buyback   Certificado de Salvamento - Defectuoso/Recompra del Fabricante   si
+LL   Salvage Certificate - Leased Vehicle               Certificado de Salvamento - Vehículo Arrendado                   si
+LP   Salvage Certificate - Personal Use                 Certificado de Salvamento - Uso Personal                         si
+LQ   Salvage Certificate - Lease/Rental                 Certificado de Salvamento - Arrendamiento/Alquiler               si
+LS   Salvage Certificate - Stolen/Recovered             Certificado de Salvamento - Robado/Recuperado                    si
+LU   Salvage Certificate - Unknown                      Certificado de Salvamento - Desconocido                          si
+MB   Salvage Certificate - Manufacturer Buyback         Certificado de Salvamento - Recompra del Fabricante              si
+MF   Salvage Certificate - Fire/Flood                   Certificado de Salvamento - Fuego/Inundación                     si
+MR   Salvage Certificate - Rebuilt                      Certificado de Salvamento - Reconstruido                         si
+MS   Salvage Certificate - Storm Damage                 Certificado de Salvamento - Daño por Tormenta                    si
+MT   Salvage Certificate - Mechanical/Transmission      Certificado de Salvamento - Mecánico/Transmisión                 si
+MU   Salvage Certificate - Manufacturer Warranty        Certificado de Salvamento - Garantía del Fabricante              si
+NB   Salvage Certificate - New Body                     Certificado de Salvamento - Cuerpo Nuevo                         si
+NF   Salvage Certificate - Non-Repairable               Certificado de Salvamento - No Reparado                          si
+NH   Salvage Certificate - Theft Recovery               Certificado de Salvamento - Recuperación de Robo                 si
+NQ   Salvage Certificate - Non-Repairable/Crash         Certificado de Salvamento - No Reparado/Colisión                 si
+NR   Salvage Certificate - Repairable                   Certificado de Salvamento - Reparable                            si
+NS   Salvage Certificate - Stolen                       Certificado de Salvamento - Robado                               si
+NT   Salvage Certificate - Theft/Vandalism              Certificado de Salvamento - Robo/Vandalismo                      si
+NU   Salvage Certificate - Non-Repairable/Unibody       Certificado de Salvamento - No Reparado/Unibody                  si
+NX   Salvage Certificate - Salvage/Total Loss           Certificado de Salvamento - Pérdida Total                        si
+OA   Salvage Certificate - Off-Road Vehicle             Certificado de Salvamento - Todoterreno                          si
+OH   Salvage Certificate - Overhauled                   Certificado de Salvamento - Revisado                             si
+OS   Salvage Certificate - Out of State                 Certificado de Salvamento - Fuera del Estado                     si
+OT   Salvage Certificate - Odometer Tampered            Certificado de Salvamento - Odómetro Manipulado                  si
+PB   Salvage Certificate - Police Buyback               Certificado de Salvamento - Recompra de la Policía               si
+PC   Salvage Certificate - Parts/Crushed                Certificado de Salvamento - Piezas/Triturado                     si
+PD   Salvage Certificate - Damaged/Repairable           Certificado de Salvamento - Daño/Reparable                       si
+PL   Salvage Certificate - Leased Vehicle               Certificado de Salvamento - Vehículo Arrendado                   si
+PN   Salvage Certificate - Personal                    Certificado de Salvamento - Personal                    si
+PO   Salvage Certificate - Police Auction              Certificado de Salvamento - Subasta de la Policía       si
+PP   Salvage Certificate - Parts/Project               Certificado de Salvamento - Piezas/Proyecto             si
+PS   Salvage Certificate - Parts/Scrap                 Certificado de Salvamento - Piezas/Chatarra             si
+PT   Salvage Certificate - Project                     Certificado de Salvamento - Proyecto                    si
+PV   Salvage Certificate - Parts/Valued                Certificado de Salvamento - Piezas/Valorado             si
+PX   Salvage Certificate - Parts/Unknown               Certificado de Salvamento - Piezas/Desconocido          si
+R1   Salvage Certificate - Rebuilt/Repaired            Certificado de Salvamento - Reconstruido/Reparado       si
+R2   Salvage Certificate - Restored                    Certificado de Salvamento - Restaurado                  si
+RA   Salvage Certificate - Repairable/Restorable       Certificado de Salvamento - Reparado/Restaurado         si
+RB   Salvage Certificate - Restored/Builder            Certificado de Salvamento - Restaurado/Constructor      si
+RC   Salvage Certificate - Rusty/Corroded              Certificado de Salvamento - Oxidado/Corroído            si
+RD   Salvage Certificate - Rebuilt/Damaged             Certificado de Salvamento - Reconstruido/Daño           si
+RF   Salvage Certificate - Flood/Rebuildable           Certificado de Salvamento - Inundación/Reparable        si
+RG   Salvage Certificate - Rebuilt/Good                Certificado de Salvamento - Reconstruido/Bueno          si
+RH   Salvage Certificate - Rebuilt/Hardtop             Certificado de Salvamento - Reconstruido/Techo Rígido   si
+RP   Salvage Certificate - Repaired/Reconstructed      Certificado de Salvamento - Reparado/Reconstruido       si
+RR   Salvage Certificate - Reconstructed/Rusty         Certificado de Salvamento - Reconstruido/Oxidado        si
+RS   Salvage Certificate - Restorable/Salvage          Certificado de Salvamento - Restaurado/Salvamento       si
+RT   Salvage Certificate - Rebuilt/Transmission        Certificado de Salvamento - Reconstruido/Transmisión    si
+RU   Salvage Certificate - Rusted/Unrepairable         Certificado de Salvamento - Oxidado/No Reparable        si
+RV   Salvage Certificate - Rebuilt/Valuable            Certificado de Salvamento - Reconstruido/Valioso        si
+RW   Salvage Certificate - Rebuilt/Wrecked             Certificado de Salvamento - Reconstruido/Destruido      si
+S1   Salvage Certificate                               Certificado de Salvamento                               si
+S2   Salvage Certificate                               Certificado de Salvamento                               si
+SB   Salvage Certificate - Stolen/Back                 Certificado de Salvamento - Robado/De Vuelta            si
+SC   Salvage Certificate - Stolen/Claim                Certificado de Salvamento - Robado/Reclamo              si
+SD   Salvage Certificate - Structural Damage           Certificado de Salvamento - Daño Estructural            si
+SF   Salvage Certificate - Salvage Frame               Certificado de Salvamento - Marco de Salvamento         si
+SH   Salvage Certificate - Structural/Hit              Certificado de Salvamento - Estructural/Golpeado        si
+SK   Salvage Certificate - Structural/Known            Certificado de Salvamento - Estructural/Conocido        si
+SL   Salvage Certificate - Stolen/Leased               Certificado de Salvamento - Robado/Arrendado            si
+SM   Salvage Certificate - Stolen/Missing              Certificado de Salvamento - Robado/Perdido              si
+SN   Salvage Certificate - Structural/Non-Repairable   Certificado de Salvamento - Estructural/No Reparable    si
+SP   Salvage Certificate - Structural/Parts            Certificado de Salvamento - Estructural/Piezas          si
+SQ   Salvage Certificate - Stolen/Quiet                Certificado de Salvamento - Robado/Silencioso           si
+SR   Salvage Certificate - Stolen/Recovered            Certificado de Salvamento - Robado/Recuperado           si
+SS   Salvage Certificate - Structural/Salvage          Certificado de Salvamento - Estructural/Salvamento      si
+ST   Salvage Certificate - Stolen/Totally              Certificado de Salvamento - Robado/Totalmente           si
+SV   Salvage Certificate - Salvage/Vehicle             Certificado de Salvamento - Vehículo de Salvamento      si
+SW   Salvage Certificate - Structural/Welded           Certificado de Salvamento - Estructural/Soldado         si
+TA   Salvage Certificate - Theft/Auction               Certificado de Salvamento - Robo/Subasta                si
+TB   Salvage Certificate - Theft/Broken                Certificado de Salvamento - Robo/Roto                   si
+TC   Salvage Certificate - Theft/Collision             Certificado de Salvamento - Robo/Colisión               si
+TE   Salvage Certificate - Theft/Engine                Certificado de Salvamento - Robo/Motor                  si
+TH   Salvage Certificate - Theft/Hit                   Certificado de Salvamento - Robo/Golpeado               si
+TL   Salvage Certificate - Theft/Lost                  Certificado de Salvamento - Robo/Perdido                si
+TR   Salvage Certificate - Theft/Recovered             Certificado de Salvamento - Robo/Recuperado             si
+TS   Salvage Certificate - Theft/Stolen                Certificado de Salvamento - Robo/Robado                 si
+UC   Salvage Certificate - Uncertain                   Certificado de Salvamento - Incierto                    si
+UL   Salvage Certificate - Uncertain/Lost              Certificado de Salvamento - Incierto/Perdido            si
+UN   Salvage Certificate - Uncertain/Not               Certificado de Salvamento - Incierto/No                 si
+UR   Salvage Certificate - Uncertain/Rebuilt           Certificado de Salvamento - Incierto/Reconstruido       si
+US   Salvage Certificate - Uncertain/Structural        Certificado de Salvamento - Incierto/Estructural        si
+UT   Salvage Certificate - Uncertain/Theft             Certificado de Salvamento - Incierto/Robo               si
+VD   Salvage Certificate - Vehicle/Destroyed           Certificado de Salvamento - Vehículo/Destruido          si
+WD   Salvage Certificate - Water/Damaged               Certificado de Salvamento - Agua/Daño                   si
+WF   Salvage Certificate - Water/Flood                 Certificado de Salvamento - Agua/Inundación             si
+WS   Salvage Certificate - Water/Salvage               Certificado de Salvamento - Agua/Salvamento             si
+WT   Salvage Certificate - Water/Total                 Certificado de Salvamento - Agua/Total                  si
+

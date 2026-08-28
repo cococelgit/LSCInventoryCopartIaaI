@@ -189,3 +189,11 @@
 - [x] Actualizar bridge, lista y ficha del repositorio para mostrar datos reales y eliminar textos fijos engañosos.
 - [x] Desplegar y validar la API de Azure con fallback seguro al payload raw ya auditado; el portal publicado actual permanece en un proyecto/bundle separado y debe desplegar estos cambios desde `main`.
 - [x] Validar sin afectar elegibilidad, Copart media ni IAAI: 64/64 pruebas .NET y `pnpm check` aprobados; `pnpm test` conserva 3 fallos en 5 archivos por expectativas antiguas de la UI y pruebas de feed vivo.
+
+## Mapeo de títulos Copart desde PDF
+
+- [x] Extraer el catálogo del PDF adjunto: 181 códigos con descripciones en inglés y español, más la recomendación fuente conservada como metadato.
+- [x] Comparar contra el snapshot: la referencia cubre 145,806 de 146,235 filas con código (99.71%); los códigos no presentes conservarán su código y estado `unmapped` sin descripción inventada.
+- [ ] Aplicar el catálogo al adaptador Copart y guardar código, descripción, versión y estado de mapeo de forma uniforme.
+- [ ] Exponer la descripción correcta de título al inventario, conservando el código para auditoría y filtros.
+- [ ] Reprocesar de forma segura y verificar cobertura en producción; D09 permanece desactivada y la recomendación `Procesar` del PDF no cambia elegibilidad.

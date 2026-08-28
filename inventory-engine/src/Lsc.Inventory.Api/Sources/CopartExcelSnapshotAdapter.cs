@@ -177,11 +177,18 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
         var saleDate = Get(row, "Sale Date M/D/CY");
         var saleTime = Get(row, "Sale time (HHMM)");
         var timeZone = Get(row, "Time Zone");
-        var titleType = Get(row, "Sale Title Type");
+        var titleCode = Get(row, "Sale Title Type");
+        var hasTitleMapping = CopartTitleCatalog.TryGet(titleCode, out var titleDefinition);
+        var titleDescription = hasTitleMapping ? titleDefinition.EnglishDescription : titleCode;
         var titleNotes = new Dictionary<string, string?>
         {
-            ["sale_title_type"] = titleType,
-            ["sale_title_state"] = Get(row, "Sale Title State")
+            ["sale_title_type_code"] = titleCode,
+            ["sale_title_description_en"] = titleDescription,
+            ["sale_title_description_es"] = hasTitleMapping ? titleDefinition.SpanishDescription : null,
+            ["sale_title_state"] = Get(row, "Sale Title State"),
+            ["title_mapping_version"] = CopartTitleCatalog.Version,
+            ["title_mapping_status"] = hasTitleMapping ? "mapped" : "unmapped",
+            ["source_process_recommendation"] = hasTitleMapping ? (titleDefinition.SourceProcessRecommendation ? "yes" : "no") : null
         };
         var thumbnail = SafeMediaUrl(Get(row, "Image Thumbnail"));
         var image = SafeMediaUrl(Get(row, "Image URL"));
@@ -196,7 +203,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             Platform = InventorySourcePolicy.CopartExcelSource,
             LotNumber = Get(row, "Lot number"),
             Vin = Get(row, "VIN"),
-            Title = titleType,
+            Title = titleDescription,
             Year = ParseInteger(Get(row, "Year")),
             Make = Get(row, "Make"),
             Model = FirstPresent(Get(row, "Model Detail"), Get(row, "Model Group")),
@@ -233,7 +240,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             },
             Seller = new AuctionSeller { Name = Get(row, "Seller Name"), Type = null },
             OdometerInfo = new OdometerInfo { Miles = ParseDecimal(Get(row, "Odometer")), Status = Get(row, "Odometer Brand") },
-            SaleDocument = new SaleDocument { Name = titleType, State = Get(row, "Sale Title State") },
+            SaleDocument = new SaleDocument { Name = titleDescription, State = Get(row, "Sale Title State") },
             TitleNotes = JsonSerializer.SerializeToElement(titleNotes),
             SpecialNote = ToJson(Get(row, "Special Note")),
             Announcements = ToJson(Get(row, "Announcements")),
@@ -263,8 +270,10 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             RawSource = raw,
             AdditionalData = new Dictionary<string, JsonElement>
             {
-                ["source_title_type_code"] = JsonSerializer.SerializeToElement(titleType),
-                ["source_title_mapping"] = JsonSerializer.SerializeToElement("unmapped"),
+                ["source_title_type_code"] = JsonSerializer.SerializeToElement(titleCode),
+                ["source_title_mapping"] = JsonSerializer.SerializeToElement(hasTitleMapping ? "mapped" : "unmapped"),
+                ["source_title_mapping_version"] = JsonSerializer.SerializeToElement(CopartTitleCatalog.Version),
+                ["source_title_description_es"] = JsonSerializer.SerializeToElement(hasTitleMapping ? titleDefinition.SpanishDescription : null),
                 ["source_row_kind"] = JsonSerializer.SerializeToElement("copart-csv")
             }
         };
