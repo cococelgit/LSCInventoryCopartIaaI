@@ -83,7 +83,7 @@ jobs:
             storage_diagnostics) job_args=("--storage-diagnostics"); allow_interrupted_retry=false ;;
             media_probe) job_args=("--copart-media-probe"); allow_interrupted_retry=false ;;
             media_enrich) job_args=("--copart-media-enrich"); allow_interrupted_retry=false ;;
-            lot_media_diagnostics) job_args=("--copart-lot-media-diagnostics" "48826366"); allow_interrupted_retry=false ;;
+            lot_media_diagnostics) job_args=("--copart-lot-media-diagnostics=48826366"); allow_interrupted_retry=false ;;
             title_backfill) job_args=("--copart-title-backfill"); allow_interrupted_retry=false ;;
             recover) job_args=("--copart-excel-run"); allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;

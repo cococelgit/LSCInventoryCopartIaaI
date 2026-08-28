@@ -395,10 +395,17 @@ if (args.Contains("--storage-diagnostics", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
-var lotMediaDiagnosticIndex = Array.FindIndex(args, argument => string.Equals(argument, "--copart-lot-media-diagnostics", StringComparison.OrdinalIgnoreCase));
-if (lotMediaDiagnosticIndex >= 0)
+var lotMediaDiagnosticArgument = args.FirstOrDefault(argument => argument.StartsWith("--copart-lot-media-diagnostics", StringComparison.OrdinalIgnoreCase));
+if (lotMediaDiagnosticArgument is not null)
 {
-    if (lotMediaDiagnosticIndex + 1 >= args.Length || string.IsNullOrWhiteSpace(args[lotMediaDiagnosticIndex + 1]))
+    var inlineLotNumber = lotMediaDiagnosticArgument["--copart-lot-media-diagnostics".Length..].Trim();
+    var lotMediaDiagnosticIndex = Array.FindIndex(args, argument => string.Equals(argument, "--copart-lot-media-diagnostics", StringComparison.OrdinalIgnoreCase));
+    var lotNumber = !string.IsNullOrWhiteSpace(inlineLotNumber)
+        ? inlineLotNumber
+        : lotMediaDiagnosticIndex >= 0 && lotMediaDiagnosticIndex + 1 < args.Length
+            ? args[lotMediaDiagnosticIndex + 1]
+            : null;
+    if (string.IsNullOrWhiteSpace(lotNumber))
         throw new ArgumentException("--copart-lot-media-diagnostics requires a Copart lot number.");
 
     await using var scope = app.Services.CreateAsyncScope();
@@ -406,7 +413,7 @@ if (lotMediaDiagnosticIndex >= 0)
     if (store is not PostgresSnapshotStore postgresStore)
         throw new InvalidOperationException("Copart lot media diagnostics require Persistence:Provider=Postgres.");
 
-    Console.Error.WriteLine(await postgresStore.GetCopartLotMediaDiagnosticsAsync(args[lotMediaDiagnosticIndex + 1], CancellationToken.None));
+    Console.Error.WriteLine(await postgresStore.GetCopartLotMediaDiagnosticsAsync(lotNumber, CancellationToken.None));
     var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
     await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
     return;
