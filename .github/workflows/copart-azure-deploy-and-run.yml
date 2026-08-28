@@ -221,6 +221,25 @@ jobs:
             case "$status" in
               Succeeded)
                 echo "$execution" | jq .
+                echo "Replica completion details:" >&2
+                replica_json="$(az containerapp job replica list \
+                  --name "$COPART_JOB_NAME" \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --execution "$COPART_EXECUTION_NAME" \
+                  -o json || true)"
+                echo "$replica_json" | jq . || true
+                replica="$(echo "$replica_json" | jq -r '.[0].name // empty')"
+                container="$(echo "$replica_json" | jq -r '.[0].properties.containers[0].name // empty')"
+                if [ -n "$replica" ] && [ -n "$container" ]; then
+                  az containerapp job logs show \
+                    --name "$COPART_JOB_NAME" \
+                    --resource-group "$RESOURCE_GROUP" \
+                    --execution "$COPART_EXECUTION_NAME" \
+                    --replica "$replica" \
+                    --container "$container" \
+                    --tail 300 \
+                    --format text || true
+                fi
                 exit 0
                 ;;
               Failed|Canceled)

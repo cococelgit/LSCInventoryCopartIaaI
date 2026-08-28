@@ -1017,6 +1017,36 @@ public sealed class PostgresSnapshotStore(
             }
         }
 
+        long titleMapped;
+        long titleUnmapped;
+        long titleNotBackfilled;
+        await using (var titleCoverage = connection.CreateCommand())
+        {
+            titleCoverage.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            titleCoverage.CommandText = """
+                with latest as (
+                    select distinct on (lot_key) lot_key, payload
+                    from auction_lot_versions
+                    order by lot_key, observed_at desc, id desc
+                )
+                select
+                    count(*) filter (where latest.payload ->> 'source_title_mapping_version' = @mapping_version
+                                     and latest.payload ->> 'source_title_mapping' = 'mapped')::bigint as mapped,
+                    count(*) filter (where latest.payload ->> 'source_title_mapping_version' = @mapping_version
+                                     and latest.payload ->> 'source_title_mapping' = 'unmapped')::bigint as unmapped,
+                    count(*) filter (where coalesce(latest.payload ->> 'source_title_mapping_version', '') <> @mapping_version)::bigint as not_backfilled
+                from auction_lots lots
+                join latest on latest.lot_key = lots.lot_key
+                where lots.platform = 'copart';
+                """;
+            AddParameter(titleCoverage, "mapping_version", CopartTitleCatalog.Version);
+            await using var reader = await titleCoverage.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            titleMapped = reader.GetInt64(0);
+            titleUnmapped = reader.GetInt64(1);
+            titleNotBackfilled = reader.GetInt64(2);
+        }
+
         long zeroPhotos;
         long onePhoto;
         long multiplePhotos;
@@ -1047,6 +1077,13 @@ public sealed class PostgresSnapshotStore(
             SearchPath = searchPath,
             Relations = relationList,
             RecentCopartRuns = recentCopartRuns,
+            CopartTitleMappingCoverage = new
+            {
+                CatalogVersion = CopartTitleCatalog.Version,
+                Mapped = titleMapped,
+                Unmapped = titleUnmapped,
+                NotBackfilled = titleNotBackfilled
+            },
             CopartActivePhotoCoverage = new { ZeroPhotos = zeroPhotos, OnePhoto = onePhoto, MultiplePhotos = multiplePhotos }
         });
     }
