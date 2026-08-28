@@ -430,11 +430,20 @@ if (args.Contains("--copart-media-enrich", StringComparer.OrdinalIgnoreCase))
 
 if (args.Contains("--copart-title-backfill", StringComparer.OrdinalIgnoreCase))
 {
-    await using var scope = app.Services.CreateAsyncScope();
-    var processor = scope.ServiceProvider.GetRequiredService<ICopartTitleBackfillProcessor>();
-    var result = await processor.RunAsync(CancellationToken.None);
-    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
-    if (!result.Processed || result.Failed > 0) Environment.ExitCode = 1;
+    try
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var processor = scope.ServiceProvider.GetRequiredService<ICopartTitleBackfillProcessor>();
+        var result = await processor.RunAsync(CancellationToken.None);
+        Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+        if (!result.Processed || result.Failed > 0) Environment.ExitCode = 1;
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Copart title backfill fatal error: {exception}");
+        Environment.ExitCode = 1;
+    }
+
     var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
     await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
     return;
