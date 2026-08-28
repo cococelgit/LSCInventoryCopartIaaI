@@ -24,6 +24,7 @@ env:
   RESOURCE_GROUP: rg-lsc-inventory-prod
   COPART_JOB_NAME: job-lsc-copart-excel-prod
   INVENTORY_API_APP_NAME: ca-lsc-inventory-api-prod
+  COPART_AUTO_PROCESS_JOB_NAME: job-lsc-copart-auto-prod
 
 jobs:
   diagnose:
@@ -67,6 +68,17 @@ jobs:
             --name "$COPART_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --query '{name:name,triggerType:properties.configuration.triggerType,schedule:properties.configuration.scheduleTriggerConfig,manual:properties.configuration.manualTriggerConfig,template:properties.template}' \
+            -o json
+          echo "Scheduled Copart processor configuration and recent executions (read-only)."
+          az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,image:properties.template.containers[0].image}' \
+            -o json
+          az containerapp job execution list \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime}' \
             -o json
           echo "Listing recent manual Copart processing executions."
           az containerapp job execution list \
