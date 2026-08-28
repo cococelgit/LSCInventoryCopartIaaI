@@ -44,6 +44,18 @@ public sealed class CopartTitleBackfillProcessorTests
     }
 
     [Fact]
+    public void Historical_structured_engine_deserializes_without_losing_the_title_mapping_candidate()
+    {
+        const string payload = """{"platform":"copart","lot_number":"99887766","title":"AQ","vehicle_specs":{"engine":{"value":"2.0L I4"},"cylinders":{"label":"4"}}}""";
+
+        var vehicle = System.Text.Json.JsonSerializer.Deserialize<AuctionVehicle>(payload, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        Assert.NotNull(vehicle);
+        Assert.Equal("2.0L I4", vehicle!.VehicleSpecs?.Engine);
+        Assert.Equal("4", vehicle.VehicleSpecs?.Cylinders);
+    }
+
+    [Fact]
     public async Task Backfill_never_selects_iaai_records()
     {
         var store = new InMemorySnapshotStore();

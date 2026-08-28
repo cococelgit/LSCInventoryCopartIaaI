@@ -255,9 +255,11 @@ public sealed record VehicleSpecs
     public string? BodyStyle { get; init; }
 
     [JsonPropertyName("engine")]
+    [JsonConverter(typeof(FlexibleStringJsonConverter))]
     public string? Engine { get; init; }
 
     [JsonPropertyName("cylinders")]
+    [JsonConverter(typeof(FlexibleStringJsonConverter))]
     public string? Cylinders { get; init; }
 
     [JsonPropertyName("trim")]
