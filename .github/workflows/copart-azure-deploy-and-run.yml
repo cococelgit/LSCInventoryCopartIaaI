@@ -164,7 +164,7 @@ jobs:
           echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
 
       - name: Capture live Copart diagnostic output
-        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' }}
+        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' || inputs.run_mode == 'title_backfill' }}
         shell: bash
         run: |
           set -euo pipefail
