@@ -43,6 +43,7 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal(4, result.Accepted);
         Assert.Equal(0, result.Discarded);
         Assert.Equal(4, persisted.Count);
+        Assert.Equal(4, store.CopartAuctionObservationCount);
         Assert.True(duplicateResult.IsDuplicate);
         Assert.False(duplicateResult.Processed);
 
@@ -113,6 +114,7 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.True(result.Processed);
         Assert.Equal(1, result.Discarded);
         Assert.Empty(persisted);
+        Assert.Equal(0, store.CopartAuctionObservationCount);
         Assert.Equal(1, audit.Total);
     }
 

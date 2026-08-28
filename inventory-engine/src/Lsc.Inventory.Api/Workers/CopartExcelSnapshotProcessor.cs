@@ -108,12 +108,12 @@ public sealed class CopartExcelSnapshotProcessor(
                 batch.Add(row);
                 if (batch.Count >= _options.ProcessingBatchSize)
                 {
-                    await ProcessBatchAsync(batch, observedLotKeys, state, cancellationToken);
+                    await ProcessBatchAsync(batch, observedLotKeys, state, snapshot.Sha256, snapshot.DownloadedAt, cancellationToken);
                     batch.Clear();
                 }
             }
             if (batch.Count > 0)
-                await ProcessBatchAsync(batch, observedLotKeys, state, cancellationToken);
+                await ProcessBatchAsync(batch, observedLotKeys, state, snapshot.Sha256, snapshot.DownloadedAt, cancellationToken);
 
             var isComplete = state.Errors == 0 && state.Failures.Count == 0 && state.Observed == validation.RowCount;
             if (isComplete)
@@ -125,6 +125,17 @@ public sealed class CopartExcelSnapshotProcessor(
             await snapshotStore.CompleteCopartSnapshotAsync(registration.RunId!.Value,
                 new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, isComplete, state.Failures),
                 cancellationToken);
+            if (isComplete)
+            {
+                try
+                {
+                    await snapshotStore.FinalizeCopartAuctionAttemptsAsync(snapshot.Sha256, finishedAt, cancellationToken);
+                }
+                catch (Exception historyException) when (historyException is not OperationCanceledException)
+                {
+                    logger.LogError(historyException, "Copart auction-history derivation failed after snapshot {FileName} completed; the next history backfill can recover it.", snapshot.FileName);
+                }
+            }
             await snapshotStore.CompleteSyncRunAsync(
                 executionRunId,
                 new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
@@ -149,8 +160,9 @@ public sealed class CopartExcelSnapshotProcessor(
         }
     }
 
-    private async Task ProcessBatchAsync(IReadOnlyList<AuctionVehicle> batch, ISet<string> observedLotKeys, ProcessingState state, CancellationToken cancellationToken)
+    private async Task ProcessBatchAsync(IReadOnlyList<AuctionVehicle> batch, ISet<string> observedLotKeys, ProcessingState state, string snapshotSha256, DateTimeOffset snapshotDownloadedAt, CancellationToken cancellationToken)
     {
+        var observations = new List<CopartAuctionObservation>(batch.Count);
         var concurrency = Math.Clamp(_options.PersistenceConcurrency, 1, 64);
         for (var offset = 0; offset < batch.Count; offset += concurrency)
         {
@@ -187,9 +199,15 @@ public sealed class CopartExcelSnapshotProcessor(
                 state.Accepted++;
                 if (outcome.Evaluation.Decision == "MARCAR") state.Marked++;
                 if (!string.IsNullOrWhiteSpace(outcome.Vehicle!.LotNumber))
+                {
                     observedLotKeys.Add($"{InventorySourcePolicy.CopartExcelSource}:{outcome.Vehicle.LotNumber}");
+                    var observation = CopartAuctionObservationFactory.Create(outcome.Vehicle, snapshotSha256, snapshotDownloadedAt);
+                    if (observation is not null) observations.Add(observation);
+                }
             }
         }
+
+        await snapshotStore.RecordCopartAuctionObservationsAsync(observations, cancellationToken);
     }
 
     private async Task<RowProcessingOutcome> ProcessRowAsync(AuctionVehicle row, int rowNumber, CancellationToken cancellationToken)

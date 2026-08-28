@@ -21,6 +21,9 @@ public interface IInventorySnapshotStore
     Task<bool> UpdateCopartMediaAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, string resolutionStatus, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartTitleMappingCandidatesAsync(int maximum, CancellationToken cancellationToken);
     Task<bool> UpdateCopartTitleMappingAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, CancellationToken cancellationToken);
+    Task<int> RecordCopartAuctionObservationsAsync(IReadOnlyList<CopartAuctionObservation> observations, CancellationToken cancellationToken);
+    Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken);
+    Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
     Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken);
@@ -89,6 +92,15 @@ public sealed record CopartTitleBackfillResult(
     int Mapped,
     int Unmapped,
     int Skipped,
+    int Failed,
+    TimeSpan Duration,
+    IReadOnlyList<string> Failures);
+
+public sealed record CopartAuctionHistoryBackfillResult(
+    bool Processed,
+    int Candidates,
+    int ObservationsInserted,
+    int AttemptsDerived,
     int Failed,
     TimeSpan Duration,
     IReadOnlyList<string> Failures);
@@ -186,8 +198,10 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     private readonly ConcurrentDictionary<string, string> _copartSnapshotStatuses = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _copartRuns = new();
     private readonly ConcurrentDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> _syncRuns = new();
+    private readonly ConcurrentDictionary<string, CopartAuctionObservation> _copartAuctionObservations = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> SyncRuns => _syncRuns;
+    public int CopartAuctionObservationCount => _copartAuctionObservations.Count;
 
     public Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
@@ -387,6 +401,27 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             return Task.FromResult(false);
         _snapshots[identity] = current with { Vehicle = vehicle, RawJson = JsonSerializer.Serialize(vehicle) };
         return Task.FromResult(true);
+    }
+
+    public Task<int> RecordCopartAuctionObservationsAsync(IReadOnlyList<CopartAuctionObservation> observations, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var inserted = 0;
+        foreach (var observation in observations)
+            if (_copartAuctionObservations.TryAdd($"{observation.SnapshotSha256}:{observation.LotKey}", observation)) inserted++;
+        return Task.FromResult(inserted);
+    }
+
+    public Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new CopartAuctionHistoryBackfillResult(true, 0, 0, 0, 0, TimeSpan.Zero, []));
     }
 
     public Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)

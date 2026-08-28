@@ -49,4 +49,7 @@ public sealed class CopartExcelOptions
 
     [Range(1, 32)]
     public int TitleBackfillConcurrency { get; init; } = 16;
+
+    [Range(1, 250000)]
+    public int AuctionHistoryBackfillBatchSize { get; init; } = 100000;
 }

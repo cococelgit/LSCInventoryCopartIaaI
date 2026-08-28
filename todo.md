@@ -204,3 +204,13 @@
 - [x] Crear una operación Copart-only que actualice título, documento de venta y metadatos de mapeo sin re-elegibilidad, reconciliación, media ni lifecycle.
 - [x] Ejecutar el backfill de todos los lotes Copart existentes con control de concurrencia, versiones y sesión en el Centro de Ejecuciones.
 - [x] Verificar la persistencia en producción: 73,199 títulos mapeados, 453 no mapeados y 0 pendientes de backfill. Los códigos sin referencia conservan su código crudo y estado `unmapped` para revisión.
+
+## Historial de intentos y señal de oportunidad Copart
+
+- [ ] Definir observaciones inmutables por snapshot completo, intentos de subasta derivados y resultados con niveles explícitos de evidencia.
+- [ ] Registrar una observación Copart por lote y snapshot sin alterar elegibilidad, inventario, lifecycle ni IAAI.
+- [ ] Derivar intentos por fecha de subasta y marcar `relisted_inferred` solo ante reaparición posterior verificable; no inferir no-venta por desaparición.
+- [ ] Calcular un score explicable de oportunidad con evidencia, sin afirmar que un vendedor está obligado a vender.
+- [ ] Añadir pruebas de relistado, venta confirmada, ausencia desconocida, cambios de puja y aislamiento de fuentes.
+- [ ] Ejecutar un backfill seguro desde versiones Copart preservadas y documentar su menor nivel de evidencia frente a observaciones futuras por snapshot.
+- [ ] Crear handoff para que el agente del UI consuma las nuevas tablas y métricas sin cambiar API, Jobs ni fuentes.

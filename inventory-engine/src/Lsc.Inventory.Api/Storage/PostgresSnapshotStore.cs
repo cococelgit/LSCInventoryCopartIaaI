@@ -22,10 +22,12 @@ public sealed class PostgresSnapshotStore(
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static readonly SemaphoreSlim CopartSchemaLock = new(1, 1);
+    private static readonly SemaphoreSlim CopartAuctionHistorySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim EligibilitySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
     private static bool _schemaInitialized;
     private static bool _copartSchemaInitialized;
+    private static bool _copartAuctionHistorySchemaInitialized;
     private static bool _eligibilitySchemaInitialized;
     private static bool _lifecycleSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
@@ -466,6 +468,320 @@ public sealed class PostgresSnapshotStore(
 
         _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
         return true;
+    }
+
+    public async Task<int> RecordCopartAuctionObservationsAsync(IReadOnlyList<CopartAuctionObservation> observations, CancellationToken cancellationToken)
+    {
+        if (observations.Count == 0) return 0;
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+
+        var values = new List<string>(observations.Count);
+        for (var index = 0; index < observations.Count; index++)
+        {
+            var observation = observations[index];
+            values.Add($"(@snapshot_sha{index}, @downloaded_at{index}, @lot_key{index}, @lot_number{index}, @auction_at{index}, @current_bid{index}, @buy_now{index}, @sale_price{index}, @lot_status{index}, @lot_sub_status{index}, @payload_hash{index})");
+            AddParameter(command, $"snapshot_sha{index}", observation.SnapshotSha256);
+            AddParameter(command, $"downloaded_at{index}", observation.SnapshotDownloadedAt.ToUniversalTime());
+            AddParameter(command, $"lot_key{index}", observation.LotKey);
+            AddParameter(command, $"lot_number{index}", observation.LotNumber);
+            AddParameter(command, $"auction_at{index}", observation.AuctionAt?.ToUniversalTime());
+            AddParameter(command, $"current_bid{index}", observation.CurrentBidUsd);
+            AddParameter(command, $"buy_now{index}", observation.BuyNowUsd);
+            AddParameter(command, $"sale_price{index}", observation.SalePriceUsd);
+            AddParameter(command, $"lot_status{index}", observation.LotStatus);
+            AddParameter(command, $"lot_sub_status{index}", observation.LotSubStatus);
+            AddParameter(command, $"payload_hash{index}", observation.PayloadHash);
+        }
+
+        command.CommandText = $"""
+            insert into copart_lot_observations (
+                snapshot_sha256, snapshot_downloaded_at, lot_key, lot_number, auction_at,
+                current_bid_usd, buy_now_usd, sale_price_usd, lot_status, lot_sub_status, payload_hash)
+            values {string.Join(",", values)}
+            on conflict (snapshot_sha256, lot_key) do nothing;
+            """;
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken)
+    {
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var allSources = string.Equals(snapshotSha256, "*", StringComparison.Ordinal);
+
+        await using (var derive = connection.CreateCommand())
+        {
+            derive.Transaction = transaction;
+            derive.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            derive.CommandText = """
+                with source as (
+                    select lot_key,
+                           auction_at,
+                           min(snapshot_downloaded_at) as first_observed_at,
+                           max(snapshot_downloaded_at) as last_observed_at,
+                           (array_agg(current_bid_usd order by snapshot_downloaded_at asc))[1] as first_bid_usd,
+                           (array_agg(current_bid_usd order by snapshot_downloaded_at desc))[1] as last_bid_usd,
+                           max(current_bid_usd) as maximum_bid_usd,
+                           (array_agg(buy_now_usd order by snapshot_downloaded_at desc))[1] as buy_now_usd,
+                           max(sale_price_usd) as sale_price_usd,
+                           (array_agg(lot_status order by snapshot_downloaded_at desc))[1] as lot_status,
+                           (array_agg(lot_sub_status order by snapshot_downloaded_at desc))[1] as lot_sub_status,
+                           count(*)::integer as observation_count
+                    from copart_lot_observations
+                    where auction_at is not null
+                      and (@all_sources or snapshot_sha256 = @snapshot_sha256)
+                    group by lot_key, auction_at
+                )
+                insert into copart_auction_attempts (
+                    lot_key, attempt_number, auction_at, first_observed_at, last_observed_at,
+                    first_bid_usd, last_bid_usd, maximum_bid_usd, buy_now_usd, sale_price_usd,
+                    outcome, evidence_level, outcome_evidence, observation_count)
+                select
+                    lot_key, 0, auction_at, first_observed_at, last_observed_at,
+                    first_bid_usd, last_bid_usd, maximum_bid_usd, buy_now_usd, sale_price_usd,
+                    case when coalesce(sale_price_usd, 0) > 0 then 'sold_confirmed' else 'scheduled' end,
+                    case when coalesce(sale_price_usd, 0) > 0 then 'source_confirmed' else 'source_observed' end,
+                    case when coalesce(sale_price_usd, 0) > 0 then 'Copart reported a positive sale price.' else null end,
+                    observation_count
+                from source
+                on conflict (lot_key, auction_at) do update set
+                    first_observed_at = least(copart_auction_attempts.first_observed_at, excluded.first_observed_at),
+                    last_observed_at = greatest(copart_auction_attempts.last_observed_at, excluded.last_observed_at),
+                    last_bid_usd = excluded.last_bid_usd,
+                    maximum_bid_usd = greatest(copart_auction_attempts.maximum_bid_usd, excluded.maximum_bid_usd),
+                    buy_now_usd = coalesce(excluded.buy_now_usd, copart_auction_attempts.buy_now_usd),
+                    sale_price_usd = coalesce(excluded.sale_price_usd, copart_auction_attempts.sale_price_usd),
+                    outcome = case when coalesce(excluded.sale_price_usd, 0) > 0 then 'sold_confirmed' else copart_auction_attempts.outcome end,
+                    evidence_level = case when coalesce(excluded.sale_price_usd, 0) > 0 then 'source_confirmed' else copart_auction_attempts.evidence_level end,
+                    outcome_evidence = case when coalesce(excluded.sale_price_usd, 0) > 0 then 'Copart reported a positive sale price.' else copart_auction_attempts.outcome_evidence end,
+                    observation_count = case when @all_sources then excluded.observation_count else copart_auction_attempts.observation_count + excluded.observation_count end,
+                    updated_at = now();
+                """;
+            AddParameter(derive, "snapshot_sha256", snapshotSha256);
+            AddParameter(derive, "all_sources", allSources);
+            await derive.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var outcomes = connection.CreateCommand())
+        {
+            outcomes.Transaction = transaction;
+            outcomes.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            outcomes.CommandText = """
+                with relisted as (
+                    select distinct on (prior.id) prior.id
+                    from copart_auction_attempts prior
+                    join copart_auction_attempts later
+                      on later.lot_key = prior.lot_key
+                     and later.auction_at > prior.auction_at
+                     and later.first_observed_at >= prior.auction_at
+                    where prior.outcome <> 'sold_confirmed'
+                    order by prior.id, later.auction_at
+                )
+                update copart_auction_attempts attempts
+                set outcome = 'relisted_inferred',
+                    evidence_level = 'inferred_from_reappearance',
+                    outcome_evidence = 'Same Copart lot reappeared after this auction date with a later auction date.',
+                    updated_at = now()
+                from relisted
+                where attempts.id = relisted.id;
+
+                update copart_auction_attempts
+                set outcome = 'unknown',
+                    evidence_level = 'insufficient_evidence',
+                    outcome_evidence = 'Auction date passed without an explicit sale result or later reappearance yet.',
+                    updated_at = now()
+                where auction_at < @finalized_at
+                  and outcome = 'scheduled';
+                """;
+            AddParameter(outcomes, "finalized_at", finalizedAt.ToUniversalTime());
+            await outcomes.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var renumber = connection.CreateCommand())
+        {
+            renumber.Transaction = transaction;
+            renumber.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            renumber.CommandText = """
+                with numbered as (
+                    select id, row_number() over (partition by lot_key order by auction_at)::integer as attempt_number
+                    from copart_auction_attempts
+                )
+                update copart_auction_attempts attempts
+                set attempt_number = numbered.attempt_number, updated_at = now()
+                from numbered
+                where attempts.id = numbered.id
+                  and attempts.attempt_number <> numbered.attempt_number;
+                """;
+            await renumber.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var signals = connection.CreateCommand())
+        {
+            signals.Transaction = transaction;
+            signals.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            signals.CommandText = """
+                with selected_lots as (
+                    select distinct lot_key
+                    from copart_lot_observations
+                    where @all_sources or snapshot_sha256 = @snapshot_sha256
+                ), facts as (
+                    select attempts.lot_key,
+                           count(*)::integer as attempt_count,
+                           count(*) filter (where attempts.outcome = 'relisted_inferred')::integer as relisted_count,
+                           min(attempts.auction_at) as first_attempt_at,
+                           max(attempts.auction_at) as last_attempt_at,
+                           (array_agg(attempts.last_bid_usd order by attempts.auction_at desc))[1] as last_bid_usd,
+                           min(attempts.maximum_bid_usd) as historical_minimum_bid_usd,
+                           max(attempts.maximum_bid_usd) as historical_maximum_bid_usd,
+                           bool_or(attempts.outcome = 'sold_confirmed') as sold_confirmed
+                    from copart_auction_attempts attempts
+                    join selected_lots on selected_lots.lot_key = attempts.lot_key
+                    group by attempts.lot_key
+                ), scored as (
+                    select *,
+                           case when sold_confirmed or relisted_count = 0 then 0 else
+                               least(relisted_count, 3) * 25 +
+                               case when attempt_count >= 3 then 20 else 0 end +
+                               case when first_attempt_at <= @finalized_at - interval '14 days' then 15 else 0 end +
+                               case when last_bid_usd is not null and historical_maximum_bid_usd is not null and last_bid_usd < historical_maximum_bid_usd then 15 else 0 end +
+                               case when historical_minimum_bid_usd is not null and historical_maximum_bid_usd > 0
+                                      and (historical_maximum_bid_usd - historical_minimum_bid_usd) / historical_maximum_bid_usd <= 0.02 then 10 else 0 end
+                           end as score
+                    from facts
+                )
+                insert into copart_lot_motivation_signals (
+                    lot_key, attempt_count, relisted_inferred_count, score, level, first_attempt_at,
+                    last_attempt_at, last_bid_usd, historical_maximum_bid_usd, score_components)
+                select lot_key, attempt_count, relisted_count, score,
+                       case when score >= 60 then 'high' when score >= 35 then 'medium' when score > 0 then 'watch' else 'none' end,
+                       first_attempt_at, last_attempt_at, last_bid_usd, historical_maximum_bid_usd,
+                       jsonb_build_object('relisted_inferred_count', relisted_count, 'attempt_count', attempt_count,
+                          'sale_confirmed', sold_confirmed, 'last_bid_below_historical_maximum',
+                          coalesce(last_bid_usd < historical_maximum_bid_usd, false),
+                          'bidding_within_two_percent', coalesce(historical_minimum_bid_usd is not null and historical_maximum_bid_usd > 0
+                              and (historical_maximum_bid_usd - historical_minimum_bid_usd) / historical_maximum_bid_usd <= 0.02, false),
+                          'model_version', 'copart-auction-history-v1')
+                from scored
+                on conflict (lot_key) do update set
+                    attempt_count = excluded.attempt_count,
+                    relisted_inferred_count = excluded.relisted_inferred_count,
+                    score = excluded.score,
+                    level = excluded.level,
+                    first_attempt_at = excluded.first_attempt_at,
+                    last_attempt_at = excluded.last_attempt_at,
+                    last_bid_usd = excluded.last_bid_usd,
+                    historical_maximum_bid_usd = excluded.historical_maximum_bid_usd,
+                    score_components = excluded.score_components,
+                    updated_at = now();
+                """;
+            AddParameter(signals, "snapshot_sha256", snapshotSha256);
+            AddParameter(signals, "all_sources", allSources);
+            AddParameter(signals, "finalized_at", finalizedAt.ToUniversalTime());
+            await signals.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        var limit = Math.Clamp(maximum, 1, 250_000);
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await EnsureSchemaAsync(cancellationToken);
+
+        var candidates = 0;
+        var inserted = 0;
+        var failed = 0;
+        var failures = new List<string>();
+        var pending = new List<CopartAuctionObservation>(1_000);
+        const int batchSize = 1_000;
+
+        void RecordFailure(string message)
+        {
+            failed++;
+            if (failures.Count < 100) failures.Add(message);
+        }
+
+        async Task FlushPendingAsync()
+        {
+            if (pending.Count == 0) return;
+            inserted += await RecordCopartAuctionObservationsAsync(pending, cancellationToken);
+            pending.Clear();
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select versions.id, versions.observed_at, versions.payload_hash, versions.lot_key, versions.payload::text
+            from auction_lot_versions versions
+            join auction_lots lots on lots.lot_key = versions.lot_key
+            where lots.platform = 'copart'
+              and not exists (
+                  select 1 from copart_lot_observations observed
+                  where observed.snapshot_sha256 = concat('legacy-version-', versions.id)
+                    and observed.lot_key = versions.lot_key)
+            order by versions.id
+            limit @limit;
+            """;
+        AddParameter(command, "limit", limit);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                candidates++;
+                var versionId = reader.GetInt64(0);
+                var observedAt = reader.GetFieldValue<DateTimeOffset>(1);
+                var payloadHash = reader.GetString(2);
+                var lotKey = reader.GetString(3);
+                var rawJson = reader.GetString(4);
+                var lotNumber = lotKey.StartsWith("copart:", StringComparison.OrdinalIgnoreCase) ? lotKey["copart:".Length..] : lotKey;
+                CopartAuctionObservation? observation = null;
+
+                try
+                {
+                    var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+                    observation = vehicle is null ? null : CopartAuctionObservationFactory.Create(vehicle, $"legacy-version-{versionId}", observedAt);
+                    if (observation is null)
+                        RecordFailure($"version {versionId}: payload could not produce a Copart auction observation; retained as an idempotent placeholder.");
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    RecordFailure($"version {versionId}: {exception.Message}");
+                }
+
+                // A placeholder prevents a malformed legacy payload from being selected and retried forever.
+                // It contains no inferred auction date, bid, sale or seller data, so it cannot create an attempt or signal.
+                pending.Add(observation is null
+                    ? new CopartAuctionObservation($"legacy-version-{versionId}", observedAt, lotKey, lotNumber, null, null, null, null, null, null, payloadHash)
+                    : observation with { LotKey = lotKey, LotNumber = lotNumber, PayloadHash = payloadHash });
+
+                if (pending.Count >= batchSize) await FlushPendingAsync();
+            }
+        }
+
+        await FlushPendingAsync();
+        var finalizedAt = DateTimeOffset.UtcNow;
+        await FinalizeCopartAuctionAttemptsAsync("*", finalizedAt, cancellationToken);
+        var attemptsDerived = await CountCopartAuctionAttemptsAsync(cancellationToken);
+        if (failed > failures.Count)
+            failures.Add($"{failed - failures.Count} additional legacy payload conversion failure(s) omitted from this summary.");
+        return new CopartAuctionHistoryBackfillResult(true, candidates, inserted, attemptsDerived, failed, DateTimeOffset.UtcNow - startedAt, failures);
+    }
+
+    private async Task<int> CountCopartAuctionAttemptsAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = "select count(*) from copart_auction_attempts;";
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
     }
 
     public async Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
@@ -1651,7 +1967,90 @@ public sealed class PostgresSnapshotStore(
         }
     }
 
+    private async Task EnsureCopartAuctionHistorySchemaAsync(CancellationToken cancellationToken)
+    {
+        if (_copartAuctionHistorySchemaInitialized) return;
+        await CopartAuctionHistorySchemaLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_copartAuctionHistorySchemaInitialized) return;
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+            create table if not exists copart_lot_observations (
+                snapshot_sha256 text not null,
+                snapshot_downloaded_at timestamptz not null,
+                lot_key text not null,
+                lot_number text not null,
+                auction_at timestamptz,
+                current_bid_usd numeric,
+                buy_now_usd numeric,
+                sale_price_usd numeric,
+                lot_status text,
+                lot_sub_status text,
+                payload_hash text not null,
+                created_at timestamptz not null default now(),
+                primary key (snapshot_sha256, lot_key)
+            );
+            create index if not exists ix_copart_lot_observations_lot_auction
+                on copart_lot_observations (lot_key, auction_at, snapshot_downloaded_at);
+            create index if not exists ix_copart_lot_observations_snapshot
+                on copart_lot_observations (snapshot_sha256, snapshot_downloaded_at);
+
+            create table if not exists copart_auction_attempts (
+                id bigserial primary key,
+                lot_key text not null,
+                attempt_number integer not null default 0,
+                auction_at timestamptz not null,
+                first_observed_at timestamptz not null,
+                last_observed_at timestamptz not null,
+                first_bid_usd numeric,
+                last_bid_usd numeric,
+                maximum_bid_usd numeric,
+                buy_now_usd numeric,
+                sale_price_usd numeric,
+                outcome text not null,
+                evidence_level text not null,
+                outcome_evidence text,
+                observation_count integer not null default 1,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                unique (lot_key, auction_at)
+            );
+            create index if not exists ix_copart_auction_attempts_lot_date
+                on copart_auction_attempts (lot_key, auction_at);
+            create index if not exists ix_copart_auction_attempts_outcome_date
+                on copart_auction_attempts (outcome, auction_at desc);
+
+            create table if not exists copart_lot_motivation_signals (
+                lot_key text primary key,
+                attempt_count integer not null,
+                relisted_inferred_count integer not null,
+                score integer not null,
+                level text not null,
+                first_attempt_at timestamptz,
+                last_attempt_at timestamptz,
+                last_bid_usd numeric,
+                historical_maximum_bid_usd numeric,
+                score_components jsonb not null default '{}'::jsonb,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now()
+            );
+            create index if not exists ix_copart_lot_motivation_signals_score
+                on copart_lot_motivation_signals (score desc, last_attempt_at desc);
+            """;
+                    await command.ExecuteNonQueryAsync(cancellationToken);
+            _copartAuctionHistorySchemaInitialized = true;
+        }
+        finally
+        {
+            CopartAuctionHistorySchemaLock.Release();
+        }
+    }
+
     private async Task EnsureCopartSchemaAsync(CancellationToken cancellationToken)
+
     {
         if (_copartSchemaInitialized) return;
         await CopartSchemaLock.WaitAsync(cancellationToken);
