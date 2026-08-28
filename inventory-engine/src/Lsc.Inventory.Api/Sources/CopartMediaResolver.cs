@@ -38,9 +38,14 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
                 return new CopartMediaResolution(vehicle, false, 0, 0, "Copart media catalog did not return JSON.");
 
             using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
-            var resolved = ResolveGallery(document.RootElement);
+            var resolved = ResolveGallery(document.RootElement, out var rejectedHosts);
             if (resolved.Photos.Count == 0)
-                return new CopartMediaResolution(vehicle, false, 0, 0, "Copart media catalog contained no safe direct image links.");
+            {
+                var hostSuffix = rejectedHosts.Count == 0
+                    ? string.Empty
+                    : $" Rejected HTTPS hosts: {string.Join(",", rejectedHosts)}.";
+                return new CopartMediaResolution(vehicle, false, 0, 0, $"Copart media catalog contained no approved direct image links.{hostSuffix}");
+            }
 
             var media = new MediaInfo
             {
@@ -56,8 +61,10 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
         }
     }
 
-    private static (IReadOnlyList<string> Photos, int HdImages) ResolveGallery(JsonElement root)
+    private static (IReadOnlyList<string> Photos, int HdImages) ResolveGallery(JsonElement root, out IReadOnlyList<string> rejectedHosts)
     {
+        var rejected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        rejectedHosts = Array.Empty<string>();
         if (!root.TryGetProperty("lotImages", out var lotImages) || lotImages.ValueKind != JsonValueKind.Array)
             return (Array.Empty<string>(), 0);
 
@@ -76,7 +83,7 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
             string? thumbnail = null;
             foreach (var link in links.EnumerateArray())
             {
-                if (!TryReadImageLink(link, out var url, out var isThumbnail, out var isHd)) continue;
+                if (!TryReadImageLink(link, rejected, out var url, out var isThumbnail, out var isHd)) continue;
                 if (isHd && hd is null) hd = url;
                 else if (!isThumbnail && standard is null) standard = url;
                 else if (thumbnail is null) thumbnail = url;
@@ -94,10 +101,11 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
             photos.Add(selected);
             if (sequence.Hd == selected) hdImages++;
         }
+        rejectedHosts = rejected.OrderBy(host => host, StringComparer.OrdinalIgnoreCase).Take(10).ToArray();
         return (photos, hdImages);
     }
 
-    private static bool TryReadImageLink(JsonElement link, out string url, out bool isThumbnail, out bool isHd)
+    private static bool TryReadImageLink(JsonElement link, ISet<string> rejectedHosts, out string url, out bool isThumbnail, out bool isHd)
     {
         url = string.Empty;
         isThumbnail = link.TryGetProperty("isThumbNail", out var thumbnail) && thumbnail.ValueKind == JsonValueKind.True;
@@ -105,8 +113,12 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
         if (!link.TryGetProperty("url", out var candidate) || candidate.ValueKind != JsonValueKind.String) return false;
         var value = candidate.GetString()?.Trim();
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
-            (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)) ||
             !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment)) return false;
+        if (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase))
+        {
+            rejectedHosts.Add(uri.Host);
+            return false;
+        }
 
         // Keep the original approved HTTPS URL only inside the private vehicle payload. The public API replaces it
         // with a signed first-party proxy URL, so query values never reach the browser.

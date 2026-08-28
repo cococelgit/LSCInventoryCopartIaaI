@@ -494,6 +494,22 @@ if (lotMediaDiagnosticArgument is not null)
         throw new InvalidOperationException("Copart lot media diagnostics require Persistence:Provider=Postgres.");
 
     Console.Error.WriteLine(await postgresStore.GetCopartLotMediaDiagnosticsAsync(lotNumber, CancellationToken.None));
+    var storedLot = await store.GetByPlatformAndLotAsync(InventorySourcePolicy.CopartExcelSource, lotNumber, CancellationToken.None);
+    if (storedLot is not null)
+    {
+        var resolver = scope.ServiceProvider.GetRequiredService<ICopartMediaResolver>();
+        var resolution = await resolver.ResolveAsync(storedLot.Vehicle, CancellationToken.None);
+        Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            CatalogResolution = new
+            {
+                resolution.Resolved,
+                resolution.GalleryImages,
+                resolution.HdImages,
+                resolution.Failure
+            }
+        }));
+    }
     var holdSeconds = Math.Clamp(builder.Configuration.GetValue<int?>("CopartExcel:DiagnosticHoldSeconds") ?? 60, 30, 120);
     await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
     return;
