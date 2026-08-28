@@ -207,10 +207,11 @@
 
 ## Historial de intentos y señal de oportunidad Copart
 
-- [ ] Definir observaciones inmutables por snapshot completo, intentos de subasta derivados y resultados con niveles explícitos de evidencia.
-- [ ] Registrar una observación Copart por lote y snapshot sin alterar elegibilidad, inventario, lifecycle ni IAAI.
-- [ ] Derivar intentos por fecha de subasta y marcar `relisted_inferred` solo ante reaparición posterior verificable; no inferir no-venta por desaparición.
-- [ ] Calcular un score explicable de oportunidad con evidencia, sin afirmar que un vendedor está obligado a vender.
-- [ ] Añadir pruebas de relistado, venta confirmada, ausencia desconocida, cambios de puja y aislamiento de fuentes.
-- [ ] Ejecutar un backfill seguro desde versiones Copart preservadas y documentar su menor nivel de evidencia frente a observaciones futuras por snapshot.
-- [ ] Crear handoff para que el agente del UI consuma las nuevas tablas y métricas sin cambiar API, Jobs ni fuentes.
+- [x] Definir observaciones inmutables por snapshot completo, intentos de subasta derivados y resultados con niveles explícitos de evidencia; contrato en `inventory-engine/notes/copart_auction_attempt_history_v1.md`.
+- [x] Registrar una observación Copart por lote y snapshot sin alterar elegibilidad, inventario, lifecycle ni IAAI.
+- [x] Derivar intentos por fecha de subasta y marcar `relisted_inferred` solo ante reaparición posterior verificable; no inferir no-venta por desaparición.
+- [x] Calcular un score explicable de oportunidad con evidencia, sin afirmar que un vendedor está obligado a vender; sin re-listado inferido el score se mantiene en 0.
+- [x] Añadir pruebas de relistado, venta confirmada, ausencia desconocida, cambios de puja y aislamiento de fuentes; `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 73/73.
+- [x] Ejecutar y verificar dos bloques manuales de backfill desde versiones Copart preservadas: 200,000 observaciones, 64,823 intentos, 1,525 re-listados inferidos y 0 conversiones fallidas. La cobertura histórica completa no se declara terminada; los bloques futuros se procesan con el mismo modo idempotente.
+- [x] Crear el handoff para UI/API en `notes/HANDOFF_PORTAL_AGENT_COPART_AUCTION_HISTORY.md`, sin añadir endpoint público ni cambiar IAAI, fuentes, API o jobs automáticos.
+- [x] Verificar después de cada ejecución que la imagen de `ca-lsc-inventory-api-prod` permaneció en `acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r20-active-summary`.

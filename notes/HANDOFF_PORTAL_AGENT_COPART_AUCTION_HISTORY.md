@@ -130,9 +130,9 @@ order by attempts.auction_at asc;
 
 El backfill inicial usa `auction_lot_versions` ya preservadas. Esas versiones representan cambios de payload, no una prueba de presencia en cada antiguo archivo Copart. Por eso, una línea de tiempo histórica derivada del backfill tiene menor cobertura que la historia futura; los nuevos snapshots completos guardan una observación por cada lote aceptado presente.
 
-Los resultados verificados el **28 de agosto de 2026** corresponden al primer bloque de hasta 100,000 versiones históricas: 100,000 observaciones sembradas, 61,255 intentos derivados, 625 re-listados inferidos y 0 conversiones fallidas. La distribución fue 33,482 `unknown`, 27,148 `scheduled`, 625 `relisted_inferred` y ninguna venta confirmada dentro de ese bloque. Se generaron 60,531 señales: 56 `watch`, 569 `medium`, 0 `high` y 59,906 `none`. Estos conteos son una foto de ese momento y pueden cambiar con nuevos snapshots completos o nuevos lotes observados.
+Los resultados acumulados verificados el **28 de agosto de 2026** corresponden a dos ejecuciones manuales consecutivas, cada una con un bloque de hasta 100,000 versiones históricas aún no sembradas: **200,000 observaciones** y **200,000 snapshots legados distintos** en total, con 0 conversiones fallidas. Se derivaron 64,823 intentos: 33,308 `unknown`, 29,990 `scheduled`, 1,525 `relisted_inferred` y 0 `sold_confirmed` en la cobertura procesada. Se generaron 63,035 señales: 92 `watch`, 1,433 `medium`, 0 `high` y 61,510 `none`. Estos conteos son una foto de ese momento; pueden cambiar con bloques legados posteriores o nuevos snapshots completos.
 
-> No presentes la ausencia de `sold_confirmed` en este backfill como evidencia de que los lotes no fueron vendidos. Simplemente no hubo precio de venta positivo en las versiones procesadas.
+> No presentes la ausencia de `sold_confirmed` en esta cobertura histórica como evidencia de que los lotes no fueron vendidos. Simplemente no hubo precio de venta positivo en las versiones procesadas.
 
 ## 7. Límites de despliegue y próximos pasos del agente UI/API
 
