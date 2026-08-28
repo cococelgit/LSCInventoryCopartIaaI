@@ -201,6 +201,6 @@
 ## Backfill de títulos Copart existentes
 
 - [x] Confirmar que la API puede mostrar títulos existentes mediante fallback, pero que se requiere persistencia para no depender de esa inferencia.
-- [ ] Crear una operación Copart-only que actualice título, documento de venta y metadatos de mapeo sin re-elegibilidad, reconciliación, media ni lifecycle.
-- [ ] Ejecutar el backfill de todos los lotes Copart existentes con control de concurrencia, versiones y sesión en el Centro de Ejecuciones.
-- [ ] Verificar el número de títulos mapeados/no mapeados persistidos y dejar los 37 códigos sin referencia visibles para revisión.
+- [x] Crear una operación Copart-only que actualice título, documento de venta y metadatos de mapeo sin re-elegibilidad, reconciliación, media ni lifecycle.
+- [x] Ejecutar el backfill de todos los lotes Copart existentes con control de concurrencia, versiones y sesión en el Centro de Ejecuciones.
+- [x] Verificar la persistencia en producción: 73,199 títulos mapeados, 453 no mapeados y 0 pendientes de backfill. Los códigos sin referencia conservan su código crudo y estado `unmapped` para revisión.
