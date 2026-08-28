@@ -26,6 +26,7 @@ env:
   SOURCE_JOB_NAME: job-lsc-inventory-ingestion-prod
   COPART_DOWNLOAD_JOB_NAME: job-lsc-copart-download-prod
   COPART_AUTO_PROCESS_JOB_NAME: job-lsc-copart-auto-prod
+  INVENTORY_API_APP_NAME: ca-lsc-inventory-api-prod
 
 jobs:
   diagnose:
@@ -58,6 +59,12 @@ jobs:
             exit 2
           fi
           echo "Target Copart execution: $execution"
+          echo "Protected Inventory API image baseline (read-only; no deployment action)."
+          az containerapp show \
+            --name "$INVENTORY_API_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '{name:name,latestRevision:properties.latestRevisionName,image:properties.template.containers[0].image}' \
+            -o json
           echo "Current scheduler configuration (read-only)."
           az containerapp job show \
             --name "$SOURCE_JOB_NAME" \
