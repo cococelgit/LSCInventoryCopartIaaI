@@ -289,7 +289,7 @@ public sealed class PostgresSnapshotStore(
                     and resolved.payload #>> '{_raw_source,Image URL}' = versions.payload #>> '{_raw_source,Image URL}'
                     and coalesce(jsonb_array_length(resolved.payload #> '{media,thumbs}'), 0) > 1
               )
-            order by lots.observed_at desc, lots.lot_key
+            order by lots.updated_at asc, lots.lot_key
             limit @limit;
             """;
         AddParameter(command, "limit", limit);
