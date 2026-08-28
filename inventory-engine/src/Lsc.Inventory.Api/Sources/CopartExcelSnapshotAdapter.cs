@@ -198,7 +198,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
         var saleStatus = Get(row, "Sale Status");
         var raw = JsonSerializer.SerializeToElement(row);
 
-        return new AuctionVehicle
+        return CopartTitleMapper.Apply(new AuctionVehicle
         {
             Platform = InventorySourcePolicy.CopartExcelSource,
             LotNumber = Get(row, "Lot number"),
@@ -276,7 +276,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
                 ["source_title_description_es"] = JsonSerializer.SerializeToElement(hasTitleMapping ? titleDefinition.SpanishDescription : null),
                 ["source_row_kind"] = JsonSerializer.SerializeToElement("copart-csv")
             }
-        };
+        });
     }
 
     private static async Task<string> ComputeHashAsync(Stream content, CancellationToken cancellationToken)

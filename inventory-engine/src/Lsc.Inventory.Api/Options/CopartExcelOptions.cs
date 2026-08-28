@@ -43,4 +43,10 @@ public sealed class CopartExcelOptions
 
     [Range(1, 32)]
     public int MediaResolutionConcurrency { get; init; } = 8;
+
+    [Range(1, 10000)]
+    public int TitleBackfillBatchSize { get; init; } = 10_000;
+
+    [Range(1, 32)]
+    public int TitleBackfillConcurrency { get; init; } = 16;
 }

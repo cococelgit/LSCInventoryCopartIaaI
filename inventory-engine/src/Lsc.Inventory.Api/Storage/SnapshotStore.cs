@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
+using Lsc.Inventory.Api.Sources;
 
 namespace Lsc.Inventory.Api.Storage;
 
@@ -18,6 +19,8 @@ public interface IInventorySnapshotStore
     Task PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken);
     Task<bool> UpdateCopartMediaAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, string resolutionStatus, CancellationToken cancellationToken);
+    Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartTitleMappingCandidatesAsync(int maximum, CancellationToken cancellationToken);
+    Task<bool> UpdateCopartTitleMappingAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken);
     Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken);
@@ -75,6 +78,16 @@ public sealed record CopartMediaEnrichmentResult(
     int Candidates,
     int Resolved,
     int AlreadyComplete,
+    int Failed,
+    TimeSpan Duration,
+    IReadOnlyList<string> Failures);
+
+public sealed record CopartTitleBackfillResult(
+    bool Processed,
+    int Candidates,
+    int Mapped,
+    int Unmapped,
+    int Skipped,
     int Failed,
     TimeSpan Duration,
     IReadOnlyList<string> Failures);
@@ -347,6 +360,31 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         additional["copart_media_resolution"] = JsonSerializer.SerializeToElement(resolutionStatus);
         var enriched = vehicle with { AdditionalData = additional };
         _snapshots[identity] = snapshot with { Vehicle = enriched, RawJson = JsonSerializer.Serialize(enriched) };
+        return Task.FromResult(true);
+    }
+
+    public Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartTitleMappingCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var candidates = _snapshots.Values
+            .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
+            .Where(snapshot => snapshot.Vehicle.AdditionalData is null ||
+                !snapshot.Vehicle.AdditionalData.TryGetValue("source_title_mapping_version", out var version) ||
+                version.ValueKind != JsonValueKind.String ||
+                !string.Equals(version.GetString(), CopartTitleCatalog.Version, StringComparison.Ordinal))
+            .OrderBy(snapshot => snapshot.Identity, StringComparer.Ordinal)
+            .Take(Math.Clamp(maximum, 1, 10_000))
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<StoredVehicleSnapshot>>(candidates);
+    }
+
+    public Task<bool> UpdateCopartTitleMappingAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase) ||
+            !_snapshots.TryGetValue(identity, out var current) || current.ObservedAt != expectedObservedAt)
+            return Task.FromResult(false);
+        _snapshots[identity] = current with { Vehicle = vehicle, RawJson = JsonSerializer.Serialize(vehicle) };
         return Task.FromResult(true);
     }
 

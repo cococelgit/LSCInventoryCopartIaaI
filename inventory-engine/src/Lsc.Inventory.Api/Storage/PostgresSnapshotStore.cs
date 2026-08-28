@@ -8,6 +8,7 @@ using Azure.Storage.Blobs;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
+using Lsc.Inventory.Api.Sources;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -368,6 +369,101 @@ public sealed class PostgresSnapshotStore(
         }
         _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, enriched, rawJson);
         logger.LogInformation("Resolved Copart media for inventory lot {LotKey} with {PhotoCount} photos.", identity, enriched.Media?.Photos?.Count ?? 0);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartTitleMappingCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        var limit = Math.Clamp(maximum, 1, 10_000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lots.lot_key, lots.observed_at, versions.payload::text
+            from auction_lots lots
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) versions on true
+            where lots.platform = 'copart'
+              and coalesce(versions.payload ->> 'source_title_mapping_version', '') <> @mapping_version
+            order by lots.lot_key
+            limit @limit;
+            """;
+        AddParameter(command, "mapping_version", CopartTitleCatalog.Version);
+        AddParameter(command, "limit", limit);
+        var result = new List<StoredVehicleSnapshot>(limit);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var identity = reader.GetString(0);
+            var observedAt = reader.GetFieldValue<DateTimeOffset>(1);
+            var rawJson = reader.GetString(2);
+            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (vehicle is not null) result.Add(new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson));
+        }
+        return result;
+    }
+
+    public async Task<bool> UpdateCopartTitleMappingAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Copart title mapping can only update Copart inventory.");
+
+        var observedAtUtc = expectedObservedAt.ToUniversalTime();
+        var rawJson = JsonSerializer.Serialize(vehicle);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        await EnsureSchemaAsync(cancellationToken);
+        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using (var update = connection.CreateCommand())
+        {
+            update.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            update.CommandText = """
+                update auction_lots
+                set title = @title,
+                    updated_at = now()
+                where lot_key = @lot_key
+                  and platform = 'copart'
+                  and observed_at = @observed_at;
+                """;
+            AddParameter(update, "title", vehicle.Title);
+            AddParameter(update, "lot_key", identity);
+            AddParameter(update, "observed_at", observedAtUtc);
+            if (await update.ExecuteNonQueryAsync(cancellationToken) != 1) return false;
+        }
+
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            insert.CommandText = """
+                insert into auction_lot_versions (
+                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    sale_price_usd, lot_status, lot_sub_status, payload)
+                values (
+                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
+                on conflict (lot_key, payload_hash) do nothing;
+                """;
+            AddParameter(insert, "lot_key", identity);
+            AddParameter(insert, "observed_at", observedAtUtc);
+            AddParameter(insert, "payload_hash", payloadHash);
+            AddParameter(insert, "raw_blob_name", blobName);
+            AddParameter(insert, "current_bid_usd", vehicle.Pricing?.CurrentBidUsd);
+            AddParameter(insert, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
+            AddParameter(insert, "lot_status", vehicle.Auction?.LotStatus);
+            AddParameter(insert, "lot_sub_status", vehicle.Auction?.LotSubStatus);
+            AddParameter(insert, "payload", rawJson);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
         return true;
     }
 

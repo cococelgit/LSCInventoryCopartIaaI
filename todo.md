@@ -197,3 +197,10 @@
 - [x] Aplicar el catálogo al adaptador Copart y guardar código, descripción, versión y estado de mapeo de forma uniforme.
 - [x] Exponer la descripción correcta de título al inventario, conservando el código para auditoría y filtros.
 - [x] Desplegar el catálogo en API y Jobs Copart; el mapeo cubre 99.71% de las filas codificadas de referencia. D09 permanece desactivada y la recomendación `Procesar` del PDF es solo metadato, no una regla de elegibilidad.
+
+## Backfill de títulos Copart existentes
+
+- [x] Confirmar que la API puede mostrar títulos existentes mediante fallback, pero que se requiere persistencia para no depender de esa inferencia.
+- [ ] Crear una operación Copart-only que actualice título, documento de venta y metadatos de mapeo sin re-elegibilidad, reconciliación, media ni lifecycle.
+- [ ] Ejecutar el backfill de todos los lotes Copart existentes con control de concurrencia, versiones y sesión en el Centro de Ejecuciones.
+- [ ] Verificar el número de títulos mapeados/no mapeados persistidos y dejar los 37 códigos sin referencia visibles para revisión.
