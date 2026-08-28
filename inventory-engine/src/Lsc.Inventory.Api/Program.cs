@@ -398,7 +398,7 @@ if (args.Contains("--storage-diagnostics", StringComparer.OrdinalIgnoreCase))
 var lotMediaDiagnosticArgument = args.FirstOrDefault(argument => argument.StartsWith("--copart-lot-media-diagnostics", StringComparison.OrdinalIgnoreCase));
 if (lotMediaDiagnosticArgument is not null)
 {
-    var inlineLotNumber = lotMediaDiagnosticArgument["--copart-lot-media-diagnostics".Length..].Trim();
+    var inlineLotNumber = lotMediaDiagnosticArgument["--copart-lot-media-diagnostics".Length..].Trim().TrimStart('=');
     var lotMediaDiagnosticIndex = Array.FindIndex(args, argument => string.Equals(argument, "--copart-lot-media-diagnostics", StringComparison.OrdinalIgnoreCase));
     var lotNumber = !string.IsNullOrWhiteSpace(inlineLotNumber)
         ? inlineLotNumber
