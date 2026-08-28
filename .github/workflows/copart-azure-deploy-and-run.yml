@@ -225,6 +225,12 @@ jobs:
                 ;;
               Failed|Canceled)
                 echo "$execution" | jq .
+                echo "Replica termination details:" >&2
+                az containerapp job replica list \
+                  --name "$COPART_JOB_NAME" \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --execution "$COPART_EXECUTION_NAME" \
+                  -o json || true
                 exit 1
                 ;;
             esac
