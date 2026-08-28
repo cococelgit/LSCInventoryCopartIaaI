@@ -194,6 +194,6 @@
 
 - [x] Extraer el catálogo del PDF adjunto: 181 códigos con descripciones en inglés y español, más la recomendación fuente conservada como metadato.
 - [x] Comparar contra el snapshot: la referencia cubre 145,806 de 146,235 filas con código (99.71%); los códigos no presentes conservarán su código y estado `unmapped` sin descripción inventada.
-- [ ] Aplicar el catálogo al adaptador Copart y guardar código, descripción, versión y estado de mapeo de forma uniforme.
-- [ ] Exponer la descripción correcta de título al inventario, conservando el código para auditoría y filtros.
-- [ ] Reprocesar de forma segura y verificar cobertura en producción; D09 permanece desactivada y la recomendación `Procesar` del PDF no cambia elegibilidad.
+- [x] Aplicar el catálogo al adaptador Copart y guardar código, descripción, versión y estado de mapeo de forma uniforme.
+- [x] Exponer la descripción correcta de título al inventario, conservando el código para auditoría y filtros.
+- [x] Desplegar el catálogo en API y Jobs Copart; el mapeo cubre 99.71% de las filas codificadas de referencia. D09 permanece desactivada y la recomendación `Procesar` del PDF es solo metadato, no una regla de elegibilidad.
