@@ -22,6 +22,7 @@ public interface IInventorySnapshotStore
     Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartTitleMappingCandidatesAsync(int maximum, CancellationToken cancellationToken);
     Task<bool> UpdateCopartTitleMappingAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, CancellationToken cancellationToken);
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
+    Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
     Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken);
     Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken);
 }
@@ -397,6 +398,16 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             .Take(Math.Clamp(maximum, 1, 5000))
             .ToArray();
         return Task.FromResult(result);
+    }
+
+    public Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = _snapshots.Values.FirstOrDefault(item =>
+            string.Equals(item.Vehicle.Platform, platform, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.Vehicle.LotNumber, lotNumber, StringComparison.OrdinalIgnoreCase) &&
+            (!_lifecycle.TryGetValue(item.Identity, out var lifecycle) || lifecycle.Active));
+        return Task.FromResult(snapshot);
     }
 
     public Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken)

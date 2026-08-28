@@ -9,7 +9,7 @@ namespace Lsc.Inventory.Api.Tests;
 public sealed class CopartMediaResolverTests
 {
     [Fact]
-    public async Task Resolver_canonicalizes_copart_hd_urls_with_query_parameters()
+    public async Task Resolver_preserves_approved_copart_hd_urls_for_private_proxy_delivery()
     {
         const string catalog = """
             {
@@ -37,8 +37,8 @@ public sealed class CopartMediaResolverTests
         Assert.True(result.Resolved);
         Assert.Equal(2, result.GalleryImages);
         Assert.Equal(2, result.HdImages);
-        Assert.All(result.Vehicle.Media!.Photos!, image => Assert.DoesNotContain("?", image));
-        Assert.Equal("https://cs.copart.com/v1/A/hd-1.jpg", result.Vehicle.Media!.Photos![0]);
+        Assert.Equal("https://cs.copart.com/v1/A/hd-1.jpg?width=2048&token=opaque", result.Vehicle.Media!.Photos![0]);
+        Assert.Equal("https://cs.copart.com/v1/A/hd-2.jpg?width=2048", result.Vehicle.Media!.Photos![1]);
     }
 
     private sealed class StaticJsonHandler(string body) : HttpMessageHandler

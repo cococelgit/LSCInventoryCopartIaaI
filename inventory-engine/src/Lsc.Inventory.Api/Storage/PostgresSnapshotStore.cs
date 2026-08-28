@@ -1208,6 +1208,41 @@ public sealed class PostgresSnapshotStore(
         });
     }
 
+    public async Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(platform)) throw new ArgumentException("Platform is required.", nameof(platform));
+        if (string.IsNullOrWhiteSpace(lotNumber)) throw new ArgumentException("Lot number is required.", nameof(lotNumber));
+
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lots.lot_key, lots.observed_at, versions.payload::text
+            from auction_lots lots
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) versions on true
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+            where lots.platform = @platform
+              and lots.lot_number = @lot_number
+              and coalesce(lifecycle.is_active, true)
+            limit 1;
+            """;
+        AddParameter(command, "platform", platform.Trim().ToLowerInvariant());
+        AddParameter(command, "lot_number", lotNumber.Trim());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        var rawJson = reader.GetString(2);
+        var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
+        return vehicle is null ? null : new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson);
+    }
+
     public async Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);

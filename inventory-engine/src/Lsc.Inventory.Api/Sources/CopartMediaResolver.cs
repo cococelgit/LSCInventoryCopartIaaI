@@ -108,10 +108,9 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
             (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)) ||
             !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment)) return false;
 
-        // Copart's image catalog may attach cache/size query parameters. Persist only the canonical HTTPS path,
-        // so the portal does not expose query values while still retaining the direct image resource.
-        var canonical = new UriBuilder(uri) { Query = string.Empty, Fragment = string.Empty }.Uri;
-        url = canonical.GetLeftPart(UriPartial.Path);
+        // Keep the original approved HTTPS URL only inside the private vehicle payload. The public API replaces it
+        // with a signed first-party proxy URL, so query values never reach the browser.
+        url = uri.ToString();
         return true;
     }
 

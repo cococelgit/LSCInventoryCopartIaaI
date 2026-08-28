@@ -59,6 +59,10 @@ builder.Services.AddHttpClient<ICopartMediaResolver, CopartMediaResolver>(client
 {
     client.Timeout = TimeSpan.FromSeconds(20);
 });
+builder.Services.AddHttpClient("copart-media-proxy", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
 var persistenceProvider = builder.Configuration.GetValue<string>($"{PersistenceOptions.SectionName}:Provider") ?? "InMemory";
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
@@ -107,6 +111,29 @@ static string? SafePhotoUrl(string? candidate)
     return uri.ToString();
 }
 
+static bool IsApprovedCopartMediaUrl(string? candidate)
+{
+    if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri)) return false;
+    return uri.Scheme == Uri.UriSchemeHttps &&
+           (uri.Host.Equals("copart.com", StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)) &&
+           string.IsNullOrEmpty(uri.UserInfo) &&
+           string.IsNullOrEmpty(uri.Fragment);
+}
+
+static string CreateCopartMediaSignature(string platform, string lot, int photoIndex, long expiresAtUnix, string token)
+{
+    var payload = $"{platform.ToLowerInvariant()}|{lot}|{photoIndex}|{expiresAtUnix}";
+    using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(token));
+    return WebEncoders.Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(payload)));
+}
+
+static bool HasValidCopartMediaSignature(string platform, string lot, int photoIndex, long expiresAtUnix, string? signature, string? token)
+{
+    if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(signature) || expiresAtUnix < DateTimeOffset.UtcNow.ToUnixTimeSeconds()) return false;
+    var expected = CreateCopartMediaSignature(platform, lot, photoIndex, expiresAtUnix, token);
+    return CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(signature), Encoding.UTF8.GetBytes(expected));
+}
+
 static string? MaskVin(string? vin)
 {
     var normalized = new string((vin ?? string.Empty).Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
@@ -152,20 +179,34 @@ static CopartTitleDefinition? ResolveCopartTitle(AuctionVehicle vehicle)
     return CopartTitleCatalog.TryGet(RawTitleCode(vehicle), out var definition) ? definition : null;
 }
 
-static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot)
+static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot, Uri requestBaseUri, string? mediaSigningToken)
 {
     var vehicle = snapshot.Vehicle;
+    var platform = vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown";
+    var lot = vehicle.LotNumber ?? snapshot.Identity;
     var copartTitle = ResolveCopartTitle(vehicle);
     var titleCode = RawTitleCode(vehicle);
-    var photos = (vehicle.Media?.Photos ?? Array.Empty<string>())
-        .Select(SafePhotoUrl)
-        .Where(url => url is not null)
-        .Cast<string>()
-        .Distinct(StringComparer.Ordinal)
-        .ToArray();
+    var sourcePhotos = vehicle.Media?.Photos ?? Array.Empty<string>();
+    var photos = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)
+        ? sourcePhotos
+            .Select((source, index) => new { source, index })
+            .Where(item => IsApprovedCopartMediaUrl(item.source) && !string.IsNullOrWhiteSpace(mediaSigningToken))
+            .Select(item =>
+            {
+                var expires = DateTimeOffset.UtcNow.AddHours(24).ToUnixTimeSeconds();
+                var signature = CreateCopartMediaSignature(platform, lot, item.index, expires, mediaSigningToken!);
+                return new Uri(requestBaseUri, $"/api/v1/inventory/media/{Uri.EscapeDataString(platform)}/{Uri.EscapeDataString(lot)}/{item.index}?expires={expires}&sig={Uri.EscapeDataString(signature)}").ToString();
+            })
+            .ToArray()
+        : sourcePhotos
+            .Select(SafePhotoUrl)
+            .Where(url => url is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     return new PublicInventoryVehicle(
-        vehicle.LotNumber ?? snapshot.Identity,
-        vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
+        lot,
+        platform,
         snapshot.ObservedAt,
         vehicle.Title,
         vehicle.Year,
@@ -226,7 +267,8 @@ app.MapGet("/api/v1/inventory/recent", async (HttpContext context, IInventorySna
         .Where(snapshot => AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle).LoadToSystem)
         .Take(limit)
         .ToArray();
-    var vehicles = snapshots.Select(ToPublicVehicle).ToArray();
+    var requestBaseUri = new Uri($"{context.Request.Scheme}://{context.Request.Host}");
+    var vehicles = snapshots.Select(snapshot => ToPublicVehicle(snapshot, requestBaseUri, inventoryReadToken)).ToArray();
     var generatedAt = snapshots.Length > 0 ? snapshots.Max(snapshot => snapshot.ObservedAt) : DateTimeOffset.UtcNow;
     return Results.Ok(new PublicInventoryResponse("lsc-inventory-postgres", generatedAt, vehicles));
 });
@@ -293,7 +335,8 @@ app.MapGet("/api/v1/inventory/browse", async (
         estimatedTotalFrom,
         estimatedTotalTo);
     var result = await store.GetPageAsync(requested, cancellationToken);
-    var vehicles = result.Vehicles.Select(ToPublicVehicle).ToArray();
+    var requestBaseUri = new Uri($"{context.Request.Scheme}://{context.Request.Host}");
+    var vehicles = result.Vehicles.Select(snapshot => ToPublicVehicle(snapshot, requestBaseUri, inventoryReadToken)).ToArray();
     var generatedAt = result.Vehicles.Count > 0 ? result.Vehicles.Max(snapshot => snapshot.ObservedAt) : DateTimeOffset.UtcNow;
     return Results.Ok(new PublicInventoryPageResponse("lsc-inventory-postgres", generatedAt, result.Page, result.PageSize, result.Total, result.TotalPages, vehicles));
 });
@@ -304,7 +347,44 @@ app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInven
     var snapshot = (await store.GetRecentAsync(5000, cancellationToken))
         .FirstOrDefault(item => string.Equals(item.Vehicle.LotNumber, lot, StringComparison.OrdinalIgnoreCase) &&
             AuctionEligibilityEvaluator.Evaluate(item.Vehicle).LoadToSystem);
-    return snapshot is null ? Results.NotFound() : Results.Ok(ToPublicVehicle(snapshot));
+    var requestBaseUri = new Uri($"{context.Request.Scheme}://{context.Request.Host}");
+    return snapshot is null ? Results.NotFound() : Results.Ok(ToPublicVehicle(snapshot, requestBaseUri, inventoryReadToken));
+});
+
+app.MapGet("/api/v1/inventory/media/{platform}/{lot}/{photoIndex:int}", async (
+    HttpContext context,
+    IInventorySnapshotStore store,
+    IHttpClientFactory httpClientFactory,
+    string platform,
+    string lot,
+    int photoIndex,
+    long expires,
+    string? sig,
+    CancellationToken cancellationToken) =>
+{
+    if (!string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase) ||
+        photoIndex < 0 ||
+        !HasValidCopartMediaSignature(platform, lot, photoIndex, expires, sig, inventoryReadToken))
+    {
+        return Results.NotFound();
+    }
+
+    var snapshot = await store.GetByPlatformAndLotAsync(platform, lot, cancellationToken);
+    if (snapshot is null || !AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle).LoadToSystem) return Results.NotFound();
+    var sourceUrl = snapshot.Vehicle.Media?.Photos?.ElementAtOrDefault(photoIndex);
+    if (!IsApprovedCopartMediaUrl(sourceUrl)) return Results.NotFound();
+
+    using var request = new HttpRequestMessage(HttpMethod.Get, sourceUrl);
+    using var response = await httpClientFactory.CreateClient("copart-media-proxy").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+    if (!response.IsSuccessStatusCode) return Results.StatusCode(StatusCodes.Status502BadGateway);
+    var contentType = response.Content.Headers.ContentType?.MediaType;
+    if (string.IsNullOrWhiteSpace(contentType) || !contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return Results.StatusCode(StatusCodes.Status502BadGateway);
+    const int maximumBytes = 12 * 1024 * 1024;
+    if (response.Content.Headers.ContentLength is long length && length > maximumBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+    if (bytes.Length > maximumBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    context.Response.Headers.CacheControl = "public,max-age=86400,stale-while-revalidate=604800";
+    return Results.File(bytes, contentType);
 });
 
 app.MapGet("/internal/eligibility/discarded", async (
