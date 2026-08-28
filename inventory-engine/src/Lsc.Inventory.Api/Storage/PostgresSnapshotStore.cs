@@ -1141,7 +1141,8 @@ public sealed class PostgresSnapshotStore(
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
-            select lots.lot_key, lots.lot_number, lots.media_photos_count, lots.updated_at, latest.payload::text
+            select lots.lot_key, lots.lot_number, lots.media_photos_count, lots.updated_at, latest.payload::text,
+                   coalesce(lifecycle.is_active, true), coalesce(lifecycle.consecutive_misses, 0)
             from auction_lots lots
             join lateral (
                 select payload
@@ -1150,6 +1151,7 @@ public sealed class PostgresSnapshotStore(
                 order by observed_at desc, id desc
                 limit 1
             ) latest on true
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
             where lots.platform = 'copart'
               and lots.lot_number = @lot_number
             limit 1;
@@ -1203,6 +1205,8 @@ public sealed class PostgresSnapshotStore(
             CatalogUrlPresent = !string.IsNullOrWhiteSpace(catalogUrl),
             CatalogHost = catalogHost,
             ResolutionStatus = resolution,
+            IsActive = reader.GetBoolean(5),
+            ConsecutiveMisses = reader.GetInt32(6),
             HasMaskedVin = root.TryGetProperty("vin", out var vin) && vin.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(vin.GetString()),
             HasSeller = root.TryGetProperty("seller", out var seller) && seller.ValueKind == JsonValueKind.Object && seller.TryGetProperty("name", out var sellerName) && sellerName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(sellerName.GetString())
         });
