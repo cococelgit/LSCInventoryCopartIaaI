@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Sources;
 using Microsoft.Extensions.Options;
@@ -28,6 +29,42 @@ public sealed class CopartExcelSnapshotAdapterTests
         Assert.Equal("FL", vehicles[0].Location!.State);
         Assert.Equal("Good Seller", vehicles[0].Seller!.Name);
         Assert.NotNull(vehicles[0].RawSource);
+    }
+
+    [Fact]
+    public async Task Maps_official_title_code_to_descriptions_without_changing_eligibility()
+    {
+        var csv = BuildCsv(1).Replace(",Salvage,none", ",AQ,none", StringComparison.Ordinal);
+        var snapshot = CreateSnapshot(csv);
+        var adapter = CreateAdapter();
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
+
+        var mappedVehicle = Assert.Single(vehicles);
+        Assert.Equal("Clear Title", mappedVehicle.Title);
+        Assert.Equal("Clear Title", mappedVehicle.SaleDocument!.Name);
+        Assert.Equal("AQ", mappedVehicle.AdditionalData!["source_title_type_code"].GetString());
+        Assert.Equal("mapped", mappedVehicle.AdditionalData["source_title_mapping"].GetString());
+        Assert.True(AuctionEligibilityEvaluator.Evaluate(mappedVehicle, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).LoadToSystem);
+    }
+
+    [Fact]
+    public async Task Preserves_unknown_title_code_as_visible_unmapped_mark_without_discarding()
+    {
+        var csv = BuildCsv(1).Replace(",Salvage,none", ",M02,none", StringComparison.Ordinal);
+        var snapshot = CreateSnapshot(csv);
+        var adapter = CreateAdapter();
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
+
+        var unmappedVehicle = Assert.Single(vehicles);
+        var evaluation = AuctionEligibilityEvaluator.Evaluate(unmappedVehicle, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        Assert.Equal("M02", unmappedVehicle.Title);
+        Assert.Equal("unmapped", unmappedVehicle.AdditionalData!["source_title_mapping"].GetString());
+        Assert.True(evaluation.LoadToSystem);
+        Assert.Contains(evaluation.Flags, flag => flag.Code == "M02");
     }
 
     [Fact]
