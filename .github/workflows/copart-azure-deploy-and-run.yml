@@ -36,7 +36,6 @@ env:
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
   IMAGE_NAME: lsc-inventory-engine
   ENVIRONMENT_NAME: cae-lsc-inventory-prod
-  SOURCE_JOB_NAME: job-lsc-inventory-ingestion-prod
   COPART_JOB_NAME: job-lsc-copart-excel-prod
   INVENTORY_API_APP_NAME: ca-lsc-inventory-api-prod
   RUNTIME_IDENTITY: /subscriptions/99edf3d1-a651-4d2d-af8e-d44a3360f584/resourceGroups/rg-lsc-inventory-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-lsc-inventory-db-runtime-prod
@@ -98,16 +97,6 @@ jobs:
             recover) job_args=("--copart-excel-run"); allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
           esac
-          source_job="$(az containerapp job show --name "$SOURCE_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
-
-          mapfile -t inherited_env < <(
-            echo "$source_job" | jq -r '
-              .properties.template.containers[0].env[]
-              | select(.name | startswith("Persistence__") or startswith("BlobAudit__"))
-              | select(.value != null)
-              | "\(.name)=\(.value)"'
-          )
-
           env_args=(
             "CopartExcel__AccountUrl=https://stlscinvprodeus2.blob.core.windows.net"
             "CopartExcel__ContainerName=copart-raw"
@@ -124,43 +113,25 @@ jobs:
             "CopartExcel__PublicationReportHoldSeconds=60"
             "CopartExcel__AllowInterruptedSnapshotRetry=${allow_interrupted_retry}"
           )
-          env_args+=("${inherited_env[@]}")
           env_args+=("Persistence__RunMigrations=false")
 
-          if az containerapp job show --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
-            az containerapp job update \
-              --name "$COPART_JOB_NAME" \
-              --resource-group "$RESOURCE_GROUP" \
-              --image "$image" \
-              --command dotnet Lsc.Inventory.Api.dll \
-              --args="${job_args[*]}" \
-              --replace-env-vars "${env_args[@]}" \
-              --replica-timeout 3600 \
-              --replica-retry-limit 0 \
-              --parallelism 1 \
-              --replica-completion-count 1 \
-              --only-show-errors
-          else
-            az containerapp job create \
-              --name "$COPART_JOB_NAME" \
-              --resource-group "$RESOURCE_GROUP" \
-              --environment "$ENVIRONMENT_NAME" \
-              --trigger-type Manual \
-              --image "$image" \
-              --cpu 1.0 \
-              --memory 2Gi \
-              --command dotnet Lsc.Inventory.Api.dll \
-              --args="${job_args[*]}" \
-              --env-vars "${env_args[@]}" \
-              --replica-timeout 3600 \
-              --replica-retry-limit 0 \
-              --parallelism 1 \
-              --replica-completion-count 1 \
-              --mi-user-assigned "$RUNTIME_IDENTITY" \
-              --registry-server "$ACR_SERVER" \
-              --registry-identity "$RUNTIME_IDENTITY" \
-              --only-show-errors
+          if ! az containerapp job show --name "$COPART_JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+            echo "The dedicated Copart Job $COPART_JOB_NAME must already exist; this workflow will not create any resource." >&2
+            exit 2
           fi
+
+          az containerapp job update \
+            --name "$COPART_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$image" \
+            --command dotnet Lsc.Inventory.Api.dll \
+            --args="${job_args[*]}" \
+            --set-env-vars "${env_args[@]}" \
+            --replica-timeout 3600 \
+            --replica-retry-limit 0 \
+            --parallelism 1 \
+            --replica-completion-count 1 \
+            --only-show-errors
 
       - name: Start the complete Copart snapshot run
         shell: bash

@@ -4,7 +4,7 @@
 
 Las automatizaciones de esta tarea solo pueden construir imágenes con etiqueta `copart-<commit>` y crear o actualizar el Job manual `job-lsc-copart-excel-prod`.
 
-No pueden ejecutar `az containerapp update`, modificar `ca-lsc-inventory-api-prod`, construir ni publicar etiquetas `api-*`, ni actualizar Jobs programados de Copart o el Job IAAI.
+No pueden ejecutar `az containerapp update`, modificar `ca-lsc-inventory-api-prod`, construir ni publicar etiquetas `api-*`, modificar `job-lsc-iaai-pilot-prod`, ni reactivar o modificar `job-lsc-inventory-ingestion-prod`. Tampoco pueden actualizar Jobs programados de Copart desde esta tarea.
 
 ## Verificación obligatoria
 
