@@ -286,11 +286,60 @@ public sealed record VehicleCondition
 
 public sealed record RunConditionInfo
 {
+    private string? _normalized;
+    private string? _raw;
+
+    [JsonPropertyName("run_condition")]
+    public string? Normalized
+    {
+        get => _normalized;
+        init => _normalized = value;
+    }
+
+    [JsonPropertyName("run_condition_raw")]
+    public string? Raw
+    {
+        get => _raw;
+        init => _raw = value;
+    }
+
+    // Backward-compatible C# aliases. They are intentionally excluded from serialized payloads.
+    [JsonIgnore]
+    public string? Value
+    {
+        get => _normalized;
+        init => _normalized = value;
+    }
+
+    [JsonIgnore]
+    public string? Label
+    {
+        get => _raw;
+        init => _raw = value;
+    }
+
+    // Accept legacy nested payloads from existing sources while serializing only the explicit contract above.
     [JsonPropertyName("value")]
-    public string? Value { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyValue
+    {
+        get => null;
+        init
+        {
+            if (_normalized is null) _normalized = value;
+        }
+    }
 
     [JsonPropertyName("label")]
-    public string? Label { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyLabel
+    {
+        get => null;
+        init
+        {
+            if (_raw is null) _raw = value;
+        }
+    }
 }
 
 public sealed record OdometerInfo

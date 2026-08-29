@@ -39,6 +39,7 @@ public sealed record PublicInventoryVehicle(
     [property: JsonPropertyName("repairCostUsd")] decimal? RepairCostUsd,
     [property: JsonPropertyName("lotConditionCode")] string? LotConditionCode,
     [property: JsonPropertyName("runCondition")] string? RunCondition,
+    [property: JsonPropertyName("runConditionRaw")] string? RunConditionRaw,
     [property: JsonPropertyName("hasKeys")] bool? HasKeys,
     [property: JsonPropertyName("photos")] IReadOnlyList<string> Photos);
 

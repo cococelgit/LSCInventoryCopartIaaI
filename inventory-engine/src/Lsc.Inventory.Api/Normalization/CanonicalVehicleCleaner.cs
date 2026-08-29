@@ -51,8 +51,8 @@ public static partial class CanonicalVehicleCleaner
                 SecondaryDamage = TitleCase(vehicle.Condition.SecondaryDamage),
                 RunCondition = vehicle.Condition.RunCondition is null ? null : vehicle.Condition.RunCondition with
                 {
-                    Value = Upper(vehicle.Condition.RunCondition.Value),
-                    Label = Compact(vehicle.Condition.RunCondition.Label)
+                    Normalized = Upper(vehicle.Condition.RunCondition.Normalized),
+                    Raw = Compact(vehicle.Condition.RunCondition.Raw)
                 }
             },
             Seller = vehicle.Seller is null ? null : vehicle.Seller with { Name = Compact(vehicle.Seller.Name), Type = Lower(vehicle.Seller.Type) },

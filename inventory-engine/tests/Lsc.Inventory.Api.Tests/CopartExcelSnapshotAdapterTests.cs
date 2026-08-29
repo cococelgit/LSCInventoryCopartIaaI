@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Sources;
@@ -111,6 +112,93 @@ public sealed class CopartExcelSnapshotAdapterTests
     }
 
     [Fact]
+    public async Task Missing_runs_drives_column_is_accepted_as_unverified_and_raw_is_absent()
+    {
+        var csv = BuildCsv(1)
+            .Replace("Runs/Drives,", string.Empty, StringComparison.Ordinal)
+            .Replace(",Runs and Drives,", ",", StringComparison.Ordinal);
+        var adapter = CreateAdapter();
+        var snapshot = CreateSnapshot(csv);
+
+        var validation = await adapter.ValidateAsync(snapshot, CancellationToken.None);
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+        await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
+
+        var condition = Assert.Single(vehicles).Condition!.RunCondition!;
+        Assert.True(validation.IsComplete);
+        Assert.Equal("UNVERIFIED", condition.Normalized);
+        Assert.Null(condition.Raw);
+    }
+
+    [Fact]
+    public async Task Empty_runs_drives_value_is_unverified_and_raw_is_absent()
+    {
+        var adapter = CreateAdapter();
+        var snapshot = CreateSnapshot(BuildCsv(1, string.Empty));
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
+
+        var condition = Assert.Single(vehicles).Condition!.RunCondition!;
+        Assert.Equal("UNVERIFIED", condition.Normalized);
+        Assert.Null(condition.Raw);
+    }
+
+    [Theory]
+    [InlineData("RUN & DRIVE", "RUNS_AND_DRIVES")]
+    [InlineData("Runs and Drives", "RUNS_AND_DRIVES")]
+    [InlineData("rUn & dRiVe", "RUNS_AND_DRIVES")]
+    [InlineData("STARTS", "STARTS")]
+    [InlineData("engine start program", "STARTS")]
+    [InlineData("STATIONARY", "STATIONARY")]
+    [InlineData("No Information", "UNVERIFIED")]
+    [InlineData("unknown", "UNVERIFIED")]
+    [InlineData("Inspected only", "UNVERIFIED")]
+    public async Task Runs_drives_maps_only_explicit_values_and_preserves_raw_text(string rawValue, string expectedNormalized)
+    {
+        var adapter = CreateAdapter();
+        var snapshot = CreateSnapshot(BuildCsv(1, rawValue));
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
+
+        var condition = Assert.Single(vehicles).Condition!.RunCondition!;
+        Assert.Equal(expectedNormalized, condition.Normalized);
+        Assert.Equal(rawValue, condition.Raw);
+        Assert.Equal("FRONT WHEEL DRIVE", Assert.Single(vehicles).DriveType);
+    }
+
+    [Fact]
+    public async Task Run_condition_payload_uses_explicit_raw_and_normalized_field_names()
+    {
+        var adapter = CreateAdapter();
+        var snapshot = CreateSnapshot(BuildCsv(1, "Run & Drive"));
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
+
+        var payload = JsonSerializer.Serialize(Assert.Single(vehicles).Condition!.RunCondition);
+        using var document = JsonDocument.Parse(payload);
+        Assert.Equal("RUNS_AND_DRIVES", document.RootElement.GetProperty("run_condition").GetString());
+        Assert.Equal("Run & Drive", document.RootElement.GetProperty("run_condition_raw").GetString());
+        Assert.False(document.RootElement.TryGetProperty("value", out _));
+        Assert.False(document.RootElement.TryGetProperty("label", out _));
+    }
+
+    [Fact]
+    public void Legacy_run_condition_payload_remains_readable_without_reemitting_legacy_fields()
+    {
+        var condition = JsonSerializer.Deserialize<Lsc.Inventory.Api.Contracts.RunConditionInfo>("{\"value\":\"RUNS AND DRIVES\",\"label\":\"Runs and Drives\"}");
+
+        Assert.NotNull(condition);
+        Assert.Equal("RUNS AND DRIVES", condition.Normalized);
+        Assert.Equal("Runs and Drives", condition.Raw);
+        var reserialized = JsonSerializer.Serialize(condition);
+        Assert.False(reserialized.Contains("\"value\"", StringComparison.Ordinal));
+        Assert.False(reserialized.Contains("\"label\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Hash_mismatch_is_rejected()
     {
         var snapshot = new CopartSnapshotEnvelope("salesdata.csv", new string('0', 64), DateTimeOffset.UtcNow, new MemoryStream(Encoding.UTF8.GetBytes(BuildCsv(1))));
@@ -138,13 +226,13 @@ public sealed class CopartExcelSnapshotAdapterTests
         return new CopartSnapshotEnvelope("salesdata.csv", hash, DateTimeOffset.UtcNow, new MemoryStream(bytes));
     }
 
-    private static string BuildCsv(int rows)
+    private static string BuildCsv(int rows, string runDrives = "Runs and Drives")
     {
-        const string header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail\n";
+        const string header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Drive,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail\n";
         var builder = new StringBuilder(header);
         for (var index = 0; index < rows; index++)
         {
-            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,Runs and Drives,10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
+            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,FRONT WHEEL DRIVE,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
         }
         return builder.ToString();
     }

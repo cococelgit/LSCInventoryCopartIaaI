@@ -37,6 +37,7 @@ export type AzureVehicle = {
   repairCostUsd: number | null;
   lotConditionCode: string | null;
   runCondition: string | null;
+  runConditionRaw: string | null;
   hasKeys: boolean | null;
   photos: string[];
 };

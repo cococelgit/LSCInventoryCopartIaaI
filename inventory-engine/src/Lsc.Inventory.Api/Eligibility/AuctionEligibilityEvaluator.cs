@@ -148,8 +148,9 @@ public static partial class AuctionEligibilityEvaluator
         if (vehicle.Condition?.HasKey == false)
             flags.Add(Reason("M03", "Sin llaves", "La subasta declara que el vehículo no tiene llaves.", ["condition.has_key"], ("condition.has_key", false)));
 
-        var runCondition = Original(vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label);
-        if (!ContainsPhrase(Normalize(runCondition), "RUNS AND DRIVES"))
+        var runCondition = Original(vehicle.Condition?.RunCondition?.Normalized ?? vehicle.Condition?.RunCondition?.Raw);
+        if (!string.Equals(runCondition, "RUNS_AND_DRIVES", StringComparison.Ordinal) &&
+            !string.Equals(runCondition, "RUNS AND DRIVES", StringComparison.Ordinal))
             flags.Add(Reason("M04", "Marcha no verificada", "La fuente no declara Runs and Drives.", ["condition.run_condition"], ("condition.run_condition", runCondition)));
         if (vehicle.Odometer is null or <= 0 || ContainsPhrase(Normalize(vehicle.OdometerInfo?.Status), "NOT ACTUAL"))
             flags.Add(Reason("M05", "Odómetro no verificado", "El odómetro está ausente, es cero o no está declarado como actual.", ["odometer.mi", "odometer.status"], ("odometer.mi", vehicle.Odometer), ("odometer.status", vehicle.OdometerInfo?.Status)));

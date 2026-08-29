@@ -187,8 +187,9 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot, Ur
     var lot = vehicle.LotNumber ?? snapshot.Identity;
     var copartTitle = ResolveCopartTitle(vehicle);
     var titleCode = RawTitleCode(vehicle);
+    var isCopart = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase);
     var sourcePhotos = vehicle.Media?.Photos ?? Array.Empty<string>();
-    var photos = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)
+    var photos = isCopart
         ? sourcePhotos
             .Select((source, index) => new { source, index })
             .Where(item => IsApprovedCopartMediaUrl(item.source) && !string.IsNullOrWhiteSpace(mediaSigningToken))
@@ -241,7 +242,8 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot, Ur
         vehicle.Pricing?.EstimatedRetailValueUsd ?? RawDecimal(vehicle, "Est. Retail Value"),
         vehicle.Pricing?.RepairCostUsd ?? RawDecimal(vehicle, "Repair cost"),
         vehicle.Condition?.LotConditionCode ?? RawText(vehicle, "Lot Cond. Code"),
-        vehicle.Condition?.RunCondition?.Label ?? RawText(vehicle, "Runs/Drives"),
+        isCopart ? vehicle.Condition?.RunCondition?.Normalized ?? "UNVERIFIED" : vehicle.Condition?.RunCondition?.Label,
+        isCopart ? vehicle.Condition?.RunCondition?.Raw ?? RawText(vehicle, "Runs/Drives") : null,
         vehicle.Condition?.HasKey ?? RawYesNo(vehicle, "Has Keys-Yes or No"),
         photos);
 }

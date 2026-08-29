@@ -215,3 +215,11 @@
 - [x] Ejecutar y verificar dos bloques manuales de backfill desde versiones Copart preservadas: 200,000 observaciones, 64,823 intentos, 1,525 re-listados inferidos y 0 conversiones fallidas. La cobertura histórica completa no se declara terminada; los bloques futuros se procesan con el mismo modo idempotente.
 - [x] Crear el handoff para UI/API en `notes/HANDOFF_PORTAL_AGENT_COPART_AUCTION_HISTORY.md`, sin añadir endpoint público ni cambiar IAAI, fuentes, API o jobs automáticos.
 - [x] Verificar después de cada ejecución que la imagen de `ca-lsc-inventory-api-prod` permaneció en `acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r20-active-summary`.
+
+## Run & Drive desde Excel Copart
+
+- [x] Mapear exclusivamente la columna `Runs/Drives` a texto original y normalización operativa conservadora, sin usar `Drive`/`DriveType`.
+- [x] Propagar `run_condition_raw` y `run_condition` por `VehicleCondition.RunCondition`, snapshot/payload, persistencia JSON y contrato público compartido.
+- [x] Mantener IAAI/Apibara sin cambios funcionales y no inferir condición desde llaves, daños, título o scoring.
+- [x] Cubrir columna ausente, valores explícitos, casing, valor desconocido y preservación raw mediante pruebas deterministas.
+- [x] Validar localmente y entregar los nombres finales y ejemplo JSON sanitizado, sin despliegue ni ejecución de jobs. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 87/87 y `pnpm check` aprobó.

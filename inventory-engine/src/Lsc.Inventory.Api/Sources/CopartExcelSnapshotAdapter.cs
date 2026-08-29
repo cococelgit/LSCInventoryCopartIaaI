@@ -29,7 +29,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
         "Lot number", "VIN", "Year", "Make", "Model Group", "Model Detail", "Vehicle Type",
         "Sale Date M/D/CY", "Sale time (HHMM)", "Time Zone", "Damage Description", "Secondary Damage",
         "Sale Title Type", "Special Note", "Announcements", "Location state", "Location city", "Location ZIP",
-        "Yard number", "Yard name", "Seller Name", "Has Keys-Yes or No", "Runs/Drives", "Odometer",
+        "Yard number", "Yard name", "Seller Name", "Has Keys-Yes or No", "Odometer",
         "Odometer Brand", "Sale Status", "High Bid =non-vix,Sealed=Vix", "Buy-It-Now Price", "Image Thumbnail"
     ];
 
@@ -196,6 +196,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
         var primaryDamage = Get(row, "Damage Description");
         var secondaryDamage = Get(row, "Secondary Damage");
         var saleStatus = Get(row, "Sale Status");
+        var runConditionRaw = Get(row, "Runs/Drives");
         var raw = JsonSerializer.SerializeToElement(row);
 
         return CopartTitleMapper.Apply(new AuctionVehicle
@@ -228,7 +229,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
                 PrimaryDamage = primaryDamage,
                 SecondaryDamage = secondaryDamage,
                 HasKey = ParseYesNo(Get(row, "Has Keys-Yes or No")),
-                RunCondition = new RunConditionInfo { Value = NormalizeRunCondition(Get(row, "Runs/Drives")), Label = Get(row, "Runs/Drives") },
+                RunCondition = new RunConditionInfo { Normalized = NormalizeRunCondition(runConditionRaw), Raw = runConditionRaw },
                 LotConditionCode = Get(row, "Lot Cond. Code")
             },
             Facility = new AuctionFacility
@@ -327,13 +328,18 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             : null;
     }
 
-    private static string? NormalizeRunCondition(string? value)
+    private static string NormalizeRunCondition(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var normalized = value.Trim().ToUpperInvariant();
-        return normalized.Contains("RUN & DRIVE", StringComparison.Ordinal) || normalized.Contains("RUNS AND DRIVES", StringComparison.Ordinal)
-            ? "RUNS AND DRIVES"
-            : value.Trim();
+        if (string.IsNullOrWhiteSpace(value)) return "UNVERIFIED";
+        var normalized = string.Join(' ', value.Trim().ToUpperInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized switch
+        {
+            "RUN & DRIVE" or "RUNS AND DRIVES" => "RUNS_AND_DRIVES",
+            "STARTS" or "ENGINE START PROGRAM" => "STARTS",
+            "STATIONARY" => "STATIONARY",
+            "NO INFORMATION" => "UNVERIFIED",
+            _ => "UNVERIFIED"
+        };
     }
 
     private static string? BuildLocationDisplay(string? city, string? state) =>
