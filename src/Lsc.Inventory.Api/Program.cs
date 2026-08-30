@@ -152,8 +152,14 @@ static bool HasValidCopartMediaSignature(string platform, string lot, int photoI
     return CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(signature), Encoding.UTF8.GetBytes(expected));
 }
 
-static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot, Uri? requestBaseUri = null, string? mediaSigningToken = null, LscVehicleScoringResult? fullScoring = null)
+static PublicInventoryVehicle ToPublicVehicle(
+    StoredVehicleSnapshot snapshot,
+    Uri? requestBaseUri = null,
+    string? mediaSigningToken = null,
+    LscVehicleScoringResult? fullScoring = null,
+    int maxMediaItems = 20)
 {
+    var publicMediaLimit = Math.Clamp(maxMediaItems, 1, 20);
     var vehicle = snapshot.Vehicle;
     var platform = vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown";
     var lot = vehicle.LotNumber ?? snapshot.Identity;
@@ -162,7 +168,7 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot, Ur
         .Where(item => item.Url is not null)
         .Select(item => new PublicMediaItem(item.Url!, item.Type))
         .DistinctBy(item => item.Url)
-        .Take(20)
+        .Take(publicMediaLimit)
         .ToArray();
     var photos = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase) && requestBaseUri is not null && !string.IsNullOrWhiteSpace(mediaSigningToken)
         ? (vehicle.Media?.Photos ?? Array.Empty<string>())
@@ -174,7 +180,7 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot, Ur
                 var signature = CreateCopartMediaSignature(platform, lot, item.index, expires, mediaSigningToken!);
                 return new Uri(requestBaseUri, $"/api/v1/inventory/media/{Uri.EscapeDataString(platform)}/{Uri.EscapeDataString(lot)}/{item.index}?expires={expires}&sig={Uri.EscapeDataString(signature)}").ToString();
             })
-            .Take(20)
+            .Take(publicMediaLimit)
             .ToArray()
         : media.Select(item => item.Url)
             .Concat(vehicle.Media?.Photos ?? Array.Empty<string>())
@@ -182,7 +188,7 @@ static PublicInventoryVehicle ToPublicVehicle(StoredVehicleSnapshot snapshot, Ur
             .Where(url => url is not null)
             .Cast<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(20)
+            .Take(publicMediaLimit)
             .ToArray();
     var publicMedia = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)
         ? photos.Select(url => new PublicMediaItem(url, "image")).ToArray()
@@ -450,6 +456,7 @@ app.MapGet("/api/v1/inventory/search", async (
     decimal? engineSizeTo,
     decimal? horsepowerFrom,
     decimal? horsepowerTo,
+    bool? listView,
     CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
@@ -519,7 +526,11 @@ app.MapGet("/api/v1/inventory/search", async (
         result.Page,
         result.PageSize,
         result.Total,
-        result.Items.Select(snapshot => ToPublicVehicle(snapshot, PublicRequestUriResolver.Resolve(context.Request), inventoryReadToken)).ToArray()));
+        result.Items.Select(snapshot => ToPublicVehicle(
+            snapshot,
+            PublicRequestUriResolver.Resolve(context.Request),
+            inventoryReadToken,
+            maxMediaItems: listView == true ? 1 : 20)).ToArray()));
 });
 
 app.MapGet("/api/v1/inventory/summary", async (HttpContext context, IInventorySnapshotStore store, string[]? makes, CancellationToken cancellationToken) =>
