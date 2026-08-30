@@ -16,7 +16,7 @@ readonly EXPECTED_API_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:invent
 readonly EXPECTED_IAAI_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:iaai-cursor-recovery-r14"
 readonly EXPECTED_IAAI_CRON="15,45 * * * *"
 readonly EXPECTED_COPART_AUTO_ARGS='["--copart-excel-run"]'
-readonly SOURCE_CONTEXT_URL="https://github.com/cococelgit/LSCInventoryCopartIaaI.git#fc7f8aaa5f890d0ca73e001e32827f40b25a5fbb"
+readonly SOURCE_CONTEXT_URL="https://github.com/cococelgit/LSCInventoryCopartIaaI.git#e4d2dc820997d955d09e5425bcfd9f809157c83d"
 
 fail() { printf 'API_R32_SEARCH_CORRECT_SOURCE_ERROR: %s\n' "$*" >&2; exit 1; }
 app_field() { az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_NAME" --query "$1" --output tsv; }
