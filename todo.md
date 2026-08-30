@@ -223,3 +223,11 @@
 - [x] Mantener IAAI/Apibara sin cambios funcionales y no inferir condición desde llaves, daños, título o scoring.
 - [x] Cubrir columna ausente, valores explícitos, casing, valor desconocido y preservación raw mediante pruebas deterministas.
 - [x] Validar localmente y entregar los nombres finales y ejemplo JSON sanitizado, sin despliegue ni ejecución de jobs. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 87/87 y `pnpm check` aprobó.
+
+## Taxonomía normalizada de títulos Copart
+
+- [x] Añadir catálogo explícito y versionado de categorías, banderas y estado de revisión por código Copart.
+- [x] Persistir los campos derivados solo en payload/metadatos Copart, conservando código, descripciones y recomendación fuente.
+- [x] Mantener D09 desactivada y no crear descartes automáticos a partir de categorías normalizadas.
+- [x] Cubrir títulos clean, branded, salvage, rebuilt, no reparable, export, documento, variante estatal, desconocido e IAAI sin modificación.
+- [x] Redactar handoff técnico para que el API exponga los campos sin recalcular taxonomía. Validación local: `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 105/105 y `pnpm check` aprobó; no se ejecutó job ni despliegue.

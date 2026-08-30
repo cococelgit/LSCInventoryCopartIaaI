@@ -29,7 +29,7 @@ La siguiente tabla usa una categoría primaria única. Las variantes y riesgos s
 | Código de categoría | Etiqueta visible sugerida | Cuándo aplica | Filas del snapshot | Política comercial sugerida |
 |---|---|---|---:|---|
 | `CLEAN` | Título limpio | Clear/Clean/Certificate of Clean Title sin marca adicional | 101 (0.07%) | Mostrar normal; nunca prometer que está libre de daños o gravámenes. |
-| `CLEAN_BRANDED` | Título limpio con marca | Clean/Clear con marca explícita, por ejemplo water, theft recovery, fleet o rebuildable | 27,367 (18.71%) | Mostrar la marca como alerta obligatoria; no presentarlo como equivalente a título limpio ordinario. |
+| `BRANDED_TITLE` | Título con marca | Título con marca explícita, por ejemplo water/flood, theft recovery, fleet o rebuildable | 27,367 (18.71%) | Mostrar la marca como alerta obligatoria; no presentarlo como equivalente a título limpio ordinario. |
 | `SALVAGE` | Salvage / Salvamento | Salvage Title o Salvage Certificate reparable, genérico o con causa declarada | 109,216 (74.67%) | Categoría principal de inventario de subasta; divulgar toda bandera aplicable. |
 | `REBUILT_RECONSTRUCTED` | Reconstruido / Rebuilt | Rebuilt, reconstructed, repaired, restored u overhauled | 6,143 (4.20%) | Divulgar que el documento trae antecedente de reconstrucción; no inferir condición mecánica actual. |
 | `NON_REPAIRABLE_PARTS_SCRAP` | No reparable / piezas / chatarra | Certificate of Destruction, Non-repairable, Parts Only, Junk, Scrap o Crushed | 2,926 (2.00%) | No comercializar como vehículo de uso en carretera. Requiere revisión manual antes de cualquier proceso de compra/exportación. |
@@ -88,7 +88,8 @@ Tercero, resolver conflictos por severidad con una precedencia explícita. Por e
 | 3. Asesor/UI | Filtro por `title_category`, badges por `title_flags`, y aviso de revisión | Bajo | Menos confusión sin ocultar información material. |
 | 4. Política | Decidir qué categorías se muestran por defecto y qué rutas necesitan asesor | Medio | Reglas comerciales explícitas, no inferencias técnicas. |
 
-**Mi recomendación concreta:** implementar las nueve categorías anteriores, habilitar filtros por `title_category`, y mostrar las banderas en la tarjeta/ficha. El selector por defecto debe incluir `CLEAN`, `CLEAN_BRANDED`, `SALVAGE` y `REBUILT_RECONSTRUCTED`; las cinco categorías restantes deben poder verse, pero con aviso y ruta de revisión. No bloquear ni eliminar por categoría hasta que se defina una política comercial separada.
+**Mi recomendación concreta:** implementar las nueve categorías anteriores, habilitar filtros por `title_category`, y mostrar las banderas en la tarjeta/ficha. El selector por defecto debe incluir `CLEAN`, `BRANDED_TITLE`, `SALVAGE` y `REBUILT_RECONSTRUCTED`; las cinco categorías restantes deben poder verse, pero con aviso y ruta de revisión.
+ No bloquear ni eliminar por categoría hasta que se defina una política comercial separada.
 
 ## Archivos de soporte
 

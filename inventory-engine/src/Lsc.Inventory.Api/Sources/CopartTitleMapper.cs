@@ -17,6 +17,7 @@ public static class CopartTitleMapper
         var code = ReadCode(vehicle);
         var mapped = CopartTitleCatalog.TryGet(code, out var definition);
         var title = mapped ? definition.EnglishDescription : code ?? vehicle.SaleDocument?.Name ?? vehicle.Title;
+        var taxonomy = CopartTitleTaxonomy.Resolve(code, mapped);
         var notes = ReadObject(vehicle.TitleNotes);
         notes["sale_title_type_code"] = code;
         notes["sale_title_description_en"] = title;
@@ -24,6 +25,10 @@ public static class CopartTitleMapper
         notes["title_mapping_version"] = CopartTitleCatalog.Version;
         notes["title_mapping_status"] = mapped ? "mapped" : "unmapped";
         notes["source_process_recommendation"] = mapped ? (definition.SourceProcessRecommendation ? "yes" : "no") : null;
+        notes["title_category"] = taxonomy.Category;
+        notes["title_flags"] = string.Join("|", taxonomy.Flags);
+        notes["title_review_status"] = taxonomy.ReviewStatus;
+        notes["title_taxonomy_version"] = CopartTitleTaxonomy.Version;
 
         var additional = vehicle.AdditionalData is null
             ? new Dictionary<string, JsonElement>()
@@ -32,6 +37,10 @@ public static class CopartTitleMapper
         additional["source_title_mapping"] = JsonSerializer.SerializeToElement(mapped ? "mapped" : "unmapped");
         additional["source_title_mapping_version"] = JsonSerializer.SerializeToElement(CopartTitleCatalog.Version);
         additional["source_title_description_es"] = JsonSerializer.SerializeToElement(mapped ? definition.SpanishDescription : null);
+        additional["title_category"] = JsonSerializer.SerializeToElement(taxonomy.Category);
+        additional["title_flags"] = JsonSerializer.SerializeToElement(taxonomy.Flags);
+        additional["title_review_status"] = JsonSerializer.SerializeToElement(taxonomy.ReviewStatus);
+        additional["title_taxonomy_version"] = JsonSerializer.SerializeToElement(CopartTitleTaxonomy.Version);
 
         return vehicle with
         {

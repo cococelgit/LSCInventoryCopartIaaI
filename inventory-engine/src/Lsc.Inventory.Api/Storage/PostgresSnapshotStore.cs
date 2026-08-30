@@ -393,11 +393,15 @@ public sealed class PostgresSnapshotStore(
                 limit 1
             ) versions on true
             where lots.platform = 'copart'
-              and coalesce(versions.payload ->> 'source_title_mapping_version', '') <> @mapping_version
+              and (
+                  coalesce(versions.payload ->> 'source_title_mapping_version', '') <> @mapping_version
+                  or coalesce(versions.payload ->> 'title_taxonomy_version', '') <> @taxonomy_version
+              )
             order by lots.lot_key
             limit @limit;
             """;
         AddParameter(command, "mapping_version", CopartTitleCatalog.Version);
+        AddParameter(command, "taxonomy_version", CopartTitleTaxonomy.Version);
         AddParameter(command, "limit", limit);
         var result = new List<StoredVehicleSnapshot>(limit);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };

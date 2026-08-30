@@ -10,7 +10,7 @@ AR,Rebuilt Title,REBUILT_RECONSTRUCTED,,true,8,true
 AS,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,11,false
 AT,Scrap Title,NON_REPAIRABLE_PARTS_SCRAP,,false,1,true
 AV,Clean Title,CLEAN,,true,1,true
-AY,Flood Title,OTHER_UNVERIFIED,WATER_FLOOD,true,0,true
+AY,Flood Title,BRANDED_TITLE,WATER_FLOOD,true,0,true
 B1,Salvage/Rebuilt Title Variant,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,34,true
 B2,Salvage/Rebuilt Title Variant,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,5,true
 B3,Salvage/Rebuilt Title Variant,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,19,true
@@ -37,18 +37,18 @@ CB,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,148,false
 CC,Certificate of Clean Title,CLEAN,,true,26,true
 CD,Clean Title - Rebuilt,REBUILT_RECONSTRUCTED,,true,1406,true
 CE,Certificate of Emissions,DOCUMENT_ONLY,,true,7,true
-CF,Clean Title - Fleet Vehicle,CLEAN_BRANDED,,true,51,true
+CF,Clean Title - Fleet Vehicle,BRANDED_TITLE,,true,51,true
 CH,Salvage Certificate - Total Loss,SALVAGE,,true,3,true
 CI,Salvage Certificate - Insurance Claim,SALVAGE,,true,4,true
 CL,Certificate of Liability,DOCUMENT_ONLY,,true,3,true
 CM,Salvage Certificate - Manufacturer Buyback,SALVAGE,LEMON_MANUFACTURER_BUYBACK,true,0,true
 CO,Certificate of Ownership,DOCUMENT_ONLY,,true,2,true
 CQ,Clean Title - Non-Repairable,NON_REPAIRABLE_PARTS_SCRAP,,true,13,true
-CR,Clean Title - Rebuildable,CLEAN_BRANDED,,true,31,true
+CR,Clean Title - Rebuildable,BRANDED_TITLE,,true,31,true
 CS,Salvage Certificate - Structural Damage,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,1,true
-CT,Clean Title - Theft Recovery,CLEAN_BRANDED,THEFT,true,27284,true
+CT,Clean Title - Theft Recovery,BRANDED_TITLE,THEFT,true,27284,true
 CV,Salvage Certificate - Mechanical Damage,SALVAGE,MECHANICAL,true,5,true
-CW,Clean Title - Water Damage,CLEAN_BRANDED,WATER_FLOOD,true,1,true
+CW,Clean Title - Water Damage,BRANDED_TITLE,WATER_FLOOD,true,1,true
 CY,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,7,false
 CZ,Salvage Certificate - Collision Damage,SALVAGE,,true,1325,true
 D1,Variante de Salvage Certificate,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,1,true

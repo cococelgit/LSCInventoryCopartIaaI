@@ -397,9 +397,12 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         var candidates = _snapshots.Values
             .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
             .Where(snapshot => snapshot.Vehicle.AdditionalData is null ||
-                !snapshot.Vehicle.AdditionalData.TryGetValue("source_title_mapping_version", out var version) ||
-                version.ValueKind != JsonValueKind.String ||
-                !string.Equals(version.GetString(), CopartTitleCatalog.Version, StringComparison.Ordinal))
+                !snapshot.Vehicle.AdditionalData.TryGetValue("source_title_mapping_version", out var mappingVersion) ||
+                mappingVersion.ValueKind != JsonValueKind.String ||
+                !string.Equals(mappingVersion.GetString(), CopartTitleCatalog.Version, StringComparison.Ordinal) ||
+                !snapshot.Vehicle.AdditionalData.TryGetValue("title_taxonomy_version", out var taxonomyVersion) ||
+                taxonomyVersion.ValueKind != JsonValueKind.String ||
+                !string.Equals(taxonomyVersion.GetString(), CopartTitleTaxonomy.Version, StringComparison.Ordinal))
             .OrderBy(snapshot => snapshot.Identity, StringComparer.Ordinal)
             .Take(Math.Clamp(maximum, 1, 10_000))
             .ToArray();
