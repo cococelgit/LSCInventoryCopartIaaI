@@ -19,7 +19,9 @@ public sealed class TitleTaxonomyGateContractTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var candidate = directory.EnumerateFiles(fileName, SearchOption.AllDirectories).FirstOrDefault(file => file.FullName.Contains("inventory-engine", StringComparison.OrdinalIgnoreCase));
+            var candidate = directory.EnumerateFiles(fileName, SearchOption.AllDirectories).FirstOrDefault(file =>
+                file.FullName.EndsWith($"{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}Lsc.Inventory.Api{Path.DirectorySeparatorChar}{fileName}", StringComparison.OrdinalIgnoreCase) &&
+                !file.FullName.Contains($"{Path.DirectorySeparatorChar}inventory-engine{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
             if (candidate is not null) return candidate.FullName;
             directory = directory.Parent;
         }
