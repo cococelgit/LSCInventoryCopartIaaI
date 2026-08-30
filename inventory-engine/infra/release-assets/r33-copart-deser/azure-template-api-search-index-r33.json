@@ -27,7 +27,7 @@
         }
       },
       "properties": {
-        "forceUpdateTag": "api-search-index-r33-20260830-copart-deser-v1",
+        "forceUpdateTag": "api-search-index-r33-20260830-copart-deser-v2",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT30M",
@@ -75,7 +75,7 @@
     },
     "scriptSha256": {
       "type": "string",
-      "value": "495d75242b09e4f969b53b54c763cb46bf945dbac89a0707efebf97e7d70238a"
+      "value": "3322489d6912c5916eef50867124b83378a2bcea7e89660dc84c31f51318864e"
     }
   }
 }
