@@ -1,0 +1,10 @@
+.git
+.gitignore
+**/bin
+**/obj
+**/*.user
+**/*.suo
+**/.vs
+**/appsettings.Development.json
+.env
+*.log

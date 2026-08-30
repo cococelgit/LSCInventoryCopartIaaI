@@ -1,39 +1,60 @@
-# La Subasta Cubana — Inventory Platform
+# LSC Inventory Engine
 
-Repositorio único del sistema de inventario de **La Subasta Cubana**.
+Servicio de inventario para **La Subasta Cubana**. Esta primera entrega consulta Apibara con scopes controlados, normaliza la respuesta y deja preparada la operación como API interna y job de ingesta en Azure Container Apps.
 
-| Directorio | Responsabilidad |
-|---|---|
-| `/client`, `/server`, `/shared` | Inventory UI React/tRPC, buscador, filtros, carrusel, paginación y auditoría interna. |
-| `/inventory-engine` | API y jobs .NET 8, persistencia PostgreSQL/Blob, elegibilidad, normalización, reconciliación e integración IAAI. |
-| `/scripts` | Validaciones reproducibles de producción y del proveedor. |
-| `/drizzle` | Esquema del servicio web de Manus. |
+## Estado de la entrega
 
-## Política de fuentes
+| Componente | Estado | Decisión |
+|---|---:|---|
+| Cliente Apibara | Implementado | Autenticación por `X-API-Key`, paginación por cursor, límite de 20 lotes por página y resiliencia HTTP. |
+| Worker de ingesta | Implementado | Un scope por plataforma/estado, sin ejecuciones solapadas. |
+| API interna | Implementada | Health, readiness, uso de API, snapshots de bootstrap y ejecución manual de sincronización. |
+| Persistencia de bootstrap | Implementada | Memoria únicamente; evita escribir datos de negocio hasta contar con PostgreSQL. |
+| Blob Storage | Preparado | Contenedores privados para payloads crudos, media, análisis y exports. |
+| PostgreSQL | Pendiente | Bloqueado por el proveedor Azure; no se habilita polling productivo antes de resolverlo. |
+| Despliegue Azure | Preparado | Dockerfile y manifiestos internos para Container App y Container App Job. |
 
-| Fuente | Entrada autorizada |
-|---|---|
-| IAAI | Apibara, exclusivamente desde el Inventory Engine. |
-| Copart | Snapshot Excel descargado al servidor, exclusivamente mediante `ICopartExcelSnapshotAdapter`. |
+## Rutas internas
 
-El cliente Apibara rechaza cualquier plataforma distinta de `iaai`. Copart no debe reactivarse en los manifests Apibara.
+| Ruta | Propósito | Seguridad prevista |
+|---|---|---|
+| `GET /healthz` | Liveness de plataforma | Interna. |
+| `GET /readyz` | Estado de componentes | Interna. |
+| `GET /api/v1/inventory/recent` | Ver snapshots de bootstrap | Interna; sustituir por lectura PostgreSQL. |
+| `GET /api/v1/usage` | Consultar uso de Apibara | Interna; no expone la clave. |
+| `POST /internal/sync/run` | Ejecutar un scope bajo demanda | Interna; se protegerá por identidad de servicio al activar el API. |
 
-## Validación
+## Configuración
 
-```bash
-# UI y bridge
-pnpm install
-pnpm check
-pnpm test
+La clave de Apibara **nunca** se almacena en `appsettings.json`, el repositorio ni el frontend. El despliegue de Azure consume el secreto desde Key Vault mediante la identidad administrada `id-lsc-inventory-runtime-prod`.
 
-# Inventory Engine
-dotnet test inventory-engine/Lsc.Inventory.sln -c Release
+```text
+Apibara__ApiKey              Referencia de secreto Key Vault
+Apibara__BaseUrl             https://apibara.tech/api/v1/vehicle-auction/
+Apibara__PageSize            20
+Sync__Platforms__0           copart
+Sync__States__0              FL
+Sync__PagesPerScope          1
+Sync__Enabled                false hasta activar PostgreSQL
 ```
 
-## Seguridad
+## Validación local
 
-No se versionan archivos `.env`, tokens, llaves, connection strings ni credenciales. Azure consume secretos desde Key Vault mediante identidad administrada; el UI usa el token de inventario únicamente en el bridge server-side.
+```bash
+cd /home/ubuntu/lsc-inventory-engine
+dotnet build Lsc.Inventory.sln -c Release
 
-## Integración Copart Excel
+ASPNETCORE_URLS=http://127.0.0.1:8090 \
+ASPNETCORE_ENVIRONMENT=Production \
+Apibara__ApiKey=bootstrap-placeholder \
+Sync__Enabled=false \
+dotnet run --project src/Lsc.Inventory.Api/Lsc.Inventory.Api.csproj --no-launch-profile -c Release
+```
 
-La siguiente tarea debe comenzar en [`COPART_EXCEL_HANDOFF.md`](./COPART_EXCEL_HANDOFF.md). El contrato ya existe en `inventory-engine/src/Lsc.Inventory.Api/Sources/InventorySourcePolicy.cs`; no debe duplicarse ni conectarse Copart a Apibara.
+Después, consulta `http://127.0.0.1:8090/healthz`.
+
+## Activación de producción
+
+La activación requiere cuatro condiciones. Primero, Azure debe permitir provisionar PostgreSQL Flexible Server. Segundo, se debe rotar la clave que fue compartida anteriormente y guardar la nueva versión en Key Vault como `apibara-api-key`. Tercero, se implementará el adaptador PostgreSQL y las migraciones. Por último, se publica una imagen versionada en ACR y se despliegan los manifiestos de `infra/` con la identidad administrada existente.
+
+> No se activa la sincronización recurrente ni se ejecuta un job de ingesta sobre producción antes de que el adaptador PostgreSQL, la auditoría de snapshots y los límites de cuota estén conectados.

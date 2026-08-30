@@ -1,0 +1,103 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2021-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "imageTag": { "type": "string" },
+    "managedIdentityResourceId": { "type": "string" },
+    "managedEnvironmentResourceId": { "type": "string" },
+    "keyVaultSecretUri": { "type": "string" },
+    "apibaraApiKey": { "type": "secureString" },
+    "applicationInsightsConnectionString": { "type": "secureString" },
+    "inventoryApiToken": { "type": "secureString" },
+    "postgresqlHost": { "type": "string" },
+    "databaseName": { "type": "string" },
+    "managedIdentityClientId": { "type": "string" },
+    "runtimePrincipalObjectId": { "type": "string" },
+    "blobAccountUrl": { "type": "string" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "ca-lsc-inventory-api-prod",
+      "location": "eastus2",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[parameters('managedIdentityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[parameters('managedEnvironmentResourceId')]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "allowInsecure": false
+          },
+          "registries": [
+            {
+              "server": "acrlscinvprodeus2.azurecr.io",
+              "identity": "[parameters('managedIdentityResourceId')]"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "apibara-api-key",
+              "value": "[parameters('apibaraApiKey')]"
+            },
+            {
+              "name": "inventory-api-token",
+              "value": "[parameters('inventoryApiToken')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "inventory-api",
+              "image": "[format('acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:{0}', parameters('imageTag'))]",
+              "resources": {
+                "cpu": 1,
+                "memory": "2Gi"
+              },
+              "env": [
+                { "name": "Apibara__ApiKey", "secretRef": "apibara-api-key" },
+                { "name": "Apibara__BaseUrl", "value": "https://apibara.tech/api/v1/vehicle-auction/" },
+                { "name": "Apibara__PageSize", "value": "20" },
+                { "name": "Sync__Enabled", "value": "false" },
+                { "name": "Persistence__Provider", "value": "Postgres" },
+                { "name": "Persistence__PostgreSqlHost", "value": "[parameters('postgresqlHost')]" },
+                { "name": "Persistence__Database", "value": "[parameters('databaseName')]" },
+                { "name": "Persistence__ManagedIdentityClientId", "value": "[parameters('managedIdentityClientId')]" },
+                { "name": "Persistence__DatabaseUser", "value": "id-lsc-inventory-db-runtime-prod" },
+                { "name": "Persistence__RuntimePrincipalName", "value": "id-lsc-inventory-db-runtime-prod" },
+                { "name": "Persistence__RuntimePrincipalObjectId", "value": "[parameters('runtimePrincipalObjectId')]" },
+                { "name": "BlobAudit__AccountUrl", "value": "[parameters('blobAccountUrl')]" },
+                { "name": "BlobAudit__ContainerName", "value": "raw-apibara" },
+                { "name": "InventoryApi__Token", "secretRef": "inventory-api-token" },
+                { "name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "value": "[parameters('applicationInsightsConnectionString')]" }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 2,
+            "maxReplicas": 4,
+            "rules": [
+              {
+                "name": "http-scale",
+                "http": {
+                  "metadata": {
+                    "concurrentRequests": "30"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

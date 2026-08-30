@@ -1,0 +1,77 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "deploy-iaai-national-schema-r13-20260828",
+    "scriptUri": "https://lsc-inv-revi-zyn4tlbw.manus.space/manus-storage/federated-deploy-iaai-national-schema-r13_381bd1a4.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "forceUpdateTag": "iaai-national-schema-r13-20260828-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT45M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "apiLegacySyncEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "iaaiJobImage": {
+      "type": "string",
+      "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:iaai-national-schema-r13"
+    },
+    "iaaiJobExecutionStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "nationalSchemaInitializer": {
+      "type": "string",
+      "value": "isolated-create-if-not-exists"
+    },
+    "copartApibaraEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "migrationsEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "sourceSha256": {
+      "type": "string",
+      "value": "fada14dcda38724284d2bf1111a08363e2fb36935612ae403795ba6bbd05e9a7"
+    },
+    "scriptSha256": {
+      "type": "string",
+      "value": "7f32e59c96c203023516d04876659fe003c38748afbc11f3aebecc326fbdb813"
+    }
+  }
+}

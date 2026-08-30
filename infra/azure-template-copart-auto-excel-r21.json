@@ -1,0 +1,81 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "reconfigure-copart-auto-excel-r21-20260828",
+    "scriptUri": "https://lsc-inv-revi-zyn4tlbw.manus.space/manus-storage/federated-reconfigure-copart-auto-excel-r21_3b46f509.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "forceUpdateTag": "copart-auto-excel-only-r21-20260828-v2",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT20M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "copartAutoJob": {
+      "type": "string",
+      "value": "job-lsc-copart-auto-prod"
+    },
+    "copartAutoMode": {
+      "type": "string",
+      "value": "copart-excel-only"
+    },
+    "legacyFloridaSyncEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "apiChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "nationalIaaiJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "manualCopartExcelJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "genericJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "jobExecutionStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "migrationsEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "scriptSha256": {
+      "type": "string",
+      "value": "dc5113d28f1eb342b0db4c9fec596891cb2c4a53f0ad76d16b960f857d428b88"
+    }
+  }
+}
