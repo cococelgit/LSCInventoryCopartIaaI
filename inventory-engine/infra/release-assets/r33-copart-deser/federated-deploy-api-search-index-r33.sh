@@ -12,7 +12,7 @@ readonly IAAI_JOB_NAME="job-lsc-iaai-pilot-prod"
 readonly COPART_JOB_NAME="job-lsc-copart-excel-prod"
 readonly COPART_AUTO_JOB_NAME="job-lsc-copart-auto-prod"
 readonly GENERIC_JOB_NAME="job-lsc-inventory-ingestion-prod"
-readonly EXPECTED_API_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:inventory-api-integrated-r31-search-index-git-context"
+readonly EXPECTED_API_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:inventory-api-integrated-r32-search-index-correct-source"
 readonly EXPECTED_IAAI_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:iaai-cursor-recovery-r14"
 readonly EXPECTED_IAAI_CRON="15,45 * * * *"
 readonly EXPECTED_COPART_AUTO_ARGS='["--copart-excel-run"]'
@@ -64,7 +64,7 @@ generic_template_before="$(fingerprint_job "$GENERIC_JOB_NAME" properties.templa
 generic_configuration_before="$(fingerprint_job "$GENERIC_JOB_NAME" properties.configuration)"
 generic_identity_before="$(fingerprint_job "$GENERIC_JOB_NAME" identity)"
 
-[[ "$api_image_before" == "$EXPECTED_API_IMAGE" ]] || fail "Expected current r31 API image; found: ${api_image_before:-empty}"
+[[ "$api_image_before" == "$EXPECTED_API_IMAGE" ]] || fail "Expected current r32 API image; found: ${api_image_before:-empty}"
 [[ "$api_mode_before" == "Single" ]] || fail "Expected API Single revision mode; found: ${api_mode_before:-empty}"
 [[ "$api_sync_before" == "false" ]] || fail "Expected Sync__Enabled=false; found: ${api_sync_before:-empty}"
 [[ "$api_migrations_before" == "false" ]] || fail "Expected Persistence__RunMigrations=false; found: ${api_migrations_before:-empty}"
