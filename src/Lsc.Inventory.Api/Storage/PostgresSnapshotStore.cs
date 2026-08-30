@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Azure.Core;
@@ -1673,7 +1675,7 @@ public sealed partial class PostgresSnapshotStore(
         "pregrade-asc" => "score.pre_grade asc nulls last",
         "pregrade-desc" => "score.pre_grade desc nulls last",
         "auction-desc" => "latest.auction_at desc nulls last",
-        _ => "latest.auction_at asc nulls last",
+        _ => "score.pre_grade desc nulls last",
     };
 
     public async Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken)
@@ -2108,7 +2110,7 @@ public sealed partial class PostgresSnapshotStore(
         "odometer-asc" => "latest.odometer asc nulls last",
         "odometer-desc" => "latest.odometer desc nulls last",
         "auction-desc" => "latest.auction_at desc nulls last",
-        _ => "latest.auction_at asc nulls last",
+        _ => "score.pre_grade desc nulls last",
     };
 
     private static string? ReadOptionalString(NpgsqlDataReader reader, string column)
@@ -2144,15 +2146,20 @@ public sealed partial class PostgresSnapshotStore(
     private static string? PreferPersisted(string? persisted, string? payload) =>
         string.IsNullOrWhiteSpace(persisted) ? payload : persisted;
 
-    private static async Task<List<StoredVehicleSnapshot>> ReadStoredSnapshotsAsync(NpgsqlCommand command, CancellationToken cancellationToken)
+    private async Task<List<StoredVehicleSnapshot>> ReadStoredSnapshotsAsync(NpgsqlCommand command, CancellationToken cancellationToken)
     {
         var snapshots = new List<StoredVehicleSnapshot>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            PropertyNameCaseInsensitive = true,
+            NumberHandling = JsonNumberHandling.AllowReadingFromString
+        };
         while (await reader.ReadAsync(cancellationToken))
         {
             var rawJson = reader.GetString(2);
-            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            var lotKey = reader.GetString(0);
+            var vehicle = DeserializeStoredVehicle(rawJson, lotKey, jsonOptions);
             if (vehicle is not null)
             {
                 vehicle = vehicle with
@@ -2176,11 +2183,96 @@ public sealed partial class PostgresSnapshotStore(
                         ReadOptionalString(reader, "score_policy_version") ?? "unknown",
                         ReadOptionalDateTimeOffset(reader, "score_scored_at") ?? DateTimeOffset.MinValue);
                 }
-                snapshots.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson, scoring));
+                snapshots.Add(new StoredVehicleSnapshot(lotKey, reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson, scoring));
             }
         }
         return snapshots;
     }
+
+    private AuctionVehicle? DeserializeStoredVehicle(string rawJson, string lotKey, JsonSerializerOptions jsonOptions)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+        }
+        catch (JsonException firstException)
+        {
+            JsonNode? sanitized;
+            try
+            {
+                sanitized = JsonNode.Parse(rawJson);
+            }
+            catch (JsonException)
+            {
+                throw;
+            }
+
+            var removedPaths = new List<string>();
+            var currentException = firstException;
+            for (var attempt = 0; attempt < 8 && sanitized is not null; attempt++)
+            {
+                var path = currentException.Path;
+                if (!TryRemoveIncompatibleJsonValue(sanitized, path)) break;
+                removedPaths.Add(path ?? "$unknown");
+
+                try
+                {
+                    var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(sanitized.ToJsonString(), jsonOptions);
+                    logger.LogWarning(
+                        "Skipped incompatible snapshot fields while serving inventory lot {LotKey}. Paths: {Paths}",
+                        lotKey,
+                        string.Join(", ", removedPaths));
+                    return vehicle;
+                }
+                catch (JsonException nextException)
+                {
+                    currentException = nextException;
+                }
+            }
+
+            throw new JsonException(
+                $"Stored inventory snapshot for lot {lotKey} cannot be read after removing incompatible fields: {string.Join(", ", removedPaths)}.",
+                currentException);
+        }
+    }
+
+    private static bool TryRemoveIncompatibleJsonValue(JsonNode root, string? jsonPath)
+    {
+        if (string.IsNullOrWhiteSpace(jsonPath) || !jsonPath.StartsWith("$", StringComparison.Ordinal)) return false;
+        var matches = JsonPathSegmentRegex().Matches(jsonPath);
+        if (matches.Count == 0) return false;
+
+        JsonNode? current = root;
+        for (var index = 0; index < matches.Count; index++)
+        {
+            var isLast = index == matches.Count - 1;
+            var property = matches[index].Groups[1].Success ? matches[index].Groups[1].Value : null;
+            var arrayIndex = matches[index].Groups[2].Success
+                ? int.Parse(matches[index].Groups[2].Value, CultureInfo.InvariantCulture)
+                : (int?)null;
+
+            if (property is not null)
+            {
+                if (current is not JsonObject objectNode) return false;
+                if (isLast) return objectNode.Remove(property);
+                current = objectNode[property];
+                continue;
+            }
+
+            if (arrayIndex is null || current is not JsonArray arrayNode || arrayIndex < 0 || arrayIndex >= arrayNode.Count) return false;
+            if (isLast)
+            {
+                arrayNode[arrayIndex.Value] = null;
+                return true;
+            }
+            current = arrayNode[arrayIndex.Value];
+        }
+
+        return false;
+    }
+
+    [GeneratedRegex(@"(?:\.([A-Za-z_][A-Za-z0-9_]*))|(?:\[(\d+)\])", RegexOptions.CultureInvariant)]
+    private static partial Regex JsonPathSegmentRegex();
 
     public async Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken, Guid? runId = null)
     {
