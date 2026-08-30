@@ -145,9 +145,11 @@ public sealed record AuctionInfo
     public string? LotSubStatus { get; init; }
 
     [JsonPropertyName("is_buy_now")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? IsBuyNow { get; init; }
 
     [JsonPropertyName("is_timed")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? IsTimed { get; init; }
 
     [JsonExtensionData]
@@ -262,9 +264,11 @@ public sealed record MediaInfo
     public int? ThumbnailsCount { get; init; }
 
     [JsonPropertyName("has_360")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? Has360 { get; init; }
 
     [JsonPropertyName("has_video")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? HasVideo { get; init; }
 
     [JsonPropertyName("thumbs")]
@@ -341,6 +345,7 @@ public sealed record VehicleCondition
     public string? Loss { get; init; }
 
     [JsonPropertyName("has_key")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? HasKey { get; init; }
 
     [JsonPropertyName("run_condition")]
@@ -379,6 +384,7 @@ public sealed record SaleDocument
     public string? Name { get; init; }
 
     [JsonPropertyName("is_pending")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? IsPending { get; init; }
 
     [JsonPropertyName("type")]
@@ -388,9 +394,11 @@ public sealed record SaleDocument
     public string? Group { get; init; }
 
     [JsonPropertyName("export")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? Export { get; init; }
 
     [JsonPropertyName("registration")]
+    [JsonConverter(typeof(NullableBooleanJsonConverter))]
     public bool? Registration { get; init; }
 
     [JsonPropertyName("page_id")]
