@@ -1,0 +1,216 @@
+copart_title_code,english_description,proposed_title_category,risk_flags,source_process_recommended,rows_in_snapshot,mapped
+<MISSING>,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,13,false
+AC,Salvage Certificate,SALVAGE,,true,34,true
+AD,Certificate of Destruction,NON_REPAIRABLE_PARTS_SCRAP,,false,1,true
+AL,Salvage Title,SALVAGE,,true,6,true
+AM,Parts Only,NON_REPAIRABLE_PARTS_SCRAP,,false,28,true
+AN,Non-repairable Certificate,NON_REPAIRABLE_PARTS_SCRAP,,false,4,true
+AQ,Clear Title,CLEAN,,true,74,true
+AR,Rebuilt Title,REBUILT_RECONSTRUCTED,,true,8,true
+AS,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,11,false
+AT,Scrap Title,NON_REPAIRABLE_PARTS_SCRAP,,false,1,true
+AV,Clean Title,CLEAN,,true,1,true
+AY,Flood Title,OTHER_UNVERIFIED,WATER_FLOOD,true,0,true
+B1,Salvage/Rebuilt Title Variant,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,34,true
+B2,Salvage/Rebuilt Title Variant,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,5,true
+B3,Salvage/Rebuilt Title Variant,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,19,true
+BA,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+BB,Bill of Sale,DOCUMENT_ONLY,,true,12,true
+BC,Junk Title,NON_REPAIRABLE_PARTS_SCRAP,,false,5,true
+BD,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,141,false
+BE,Export Only,EXPORT_ONLY,,true,5,true
+BF,Salvage Certificate,SALVAGE,,true,96,true
+BI,Salvage Certificate - Theft,SALVAGE,THEFT,true,10,true
+BJ,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,3,false
+BL,Salvage Certificate - Water Damage,SALVAGE,WATER_FLOOD,true,34,true
+BN,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,5,false
+BP,Salvage Title - Parts Only,NON_REPAIRABLE_PARTS_SCRAP,,true,650,true
+BR,Salvage Certificate - Rebuilt,REBUILT_RECONSTRUCTED,,true,26,true
+BS,Salvage Certificate - Fire Damage,SALVAGE,FIRE,true,2070,true
+BT,Salvage Certificate - Vandalism,SALVAGE,,true,63,true
+BV,Salvage Certificate - Hail Damage,SALVAGE,,true,321,true
+C0,Certificate of Origin,DOCUMENT_ONLY,,true,0,true
+C1,Variante de Salvage Certificate,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,2,true
+C4,Variante de Salvage Certificate,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,18,true
+CA,Salvage Certificate - Airbags Deployed,SALVAGE,,true,0,true
+CB,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,148,false
+CC,Certificate of Clean Title,CLEAN,,true,26,true
+CD,Clean Title - Rebuilt,REBUILT_RECONSTRUCTED,,true,1406,true
+CE,Certificate of Emissions,DOCUMENT_ONLY,,true,7,true
+CF,Clean Title - Fleet Vehicle,CLEAN_BRANDED,,true,51,true
+CH,Salvage Certificate - Total Loss,SALVAGE,,true,3,true
+CI,Salvage Certificate - Insurance Claim,SALVAGE,,true,4,true
+CL,Certificate of Liability,DOCUMENT_ONLY,,true,3,true
+CM,Salvage Certificate - Manufacturer Buyback,SALVAGE,LEMON_MANUFACTURER_BUYBACK,true,0,true
+CO,Certificate of Ownership,DOCUMENT_ONLY,,true,2,true
+CQ,Clean Title - Non-Repairable,NON_REPAIRABLE_PARTS_SCRAP,,true,13,true
+CR,Clean Title - Rebuildable,CLEAN_BRANDED,,true,31,true
+CS,Salvage Certificate - Structural Damage,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,1,true
+CT,Clean Title - Theft Recovery,CLEAN_BRANDED,THEFT,true,27284,true
+CV,Salvage Certificate - Mechanical Damage,SALVAGE,MECHANICAL,true,5,true
+CW,Clean Title - Water Damage,CLEAN_BRANDED,WATER_FLOOD,true,1,true
+CY,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,7,false
+CZ,Salvage Certificate - Collision Damage,SALVAGE,,true,1325,true
+D1,Variante de Salvage Certificate,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,1,true
+D2,Variante de Salvage Certificate,STATE_VARIANT_VERIFY,STATE_VERIFICATION_REQUIRED,true,3,true
+DA,Salvage Certificate - Dealer Only,SALVAGE,DEALER_RESTRICTION,true,117,true
+DC,Salvage Certificate - Cosmetic Damage,SALVAGE,,true,36,true
+DE,Salvage Certificate - Electrical Damage,SALVAGE,,true,1,true
+DJ,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+DL,Salvage Certificate - Dealer Loss,SALVAGE,,true,41,true
+DM,Salvage Certificate - Mechanical,SALVAGE,MECHANICAL,true,1,true
+DN,Salvage Certificate - Not Actual Mileage,SALVAGE,ODOMETER,true,10,true
+DO,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,5,false
+DP,Salvage Certificate - Parts Only,NON_REPAIRABLE_PARTS_SCRAP,,true,11,true
+DQ,Salvage Certificate - Quarter Panel Damage,SALVAGE,,true,38,true
+DR,Salvage Certificate - Rebuildable,SALVAGE,,true,15,true
+DS,Salvage Certificate - Structural,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,4,true
+DT,Salvage Certificate - Theft,SALVAGE,THEFT,true,8,true
+DU,Salvage Certificate - Undercarriage Damage,SALVAGE,,true,2,true
+DV,Salvage Certificate - Vandalism,SALVAGE,,true,1910,true
+DY,Salvage Certificate - Water/Flood,SALVAGE,WATER_FLOOD,true,42,true
+DZ,Salvage Certificate - Wind Damage,SALVAGE,,true,8,true
+E,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,4,false
+EC,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+EN,Salvage Certificate - Engine Damage,SALVAGE,MECHANICAL,true,0,true
+EO,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+ET,Salvage Certificate - Theft,SALVAGE,THEFT,true,8,true
+EU,Salvage Certificate - Unibody Damage,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,1,true
+EXM,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+F1,Salvage Certificate - Frame Damage,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,22,true
+F5,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,2,false
+FC,Salvage Certificate - Fire,SALVAGE,FIRE,true,68,true
+FL,Salvage Certificate - Flood,SALVAGE,WATER_FLOOD,true,37,true
+FN,Salvage Certificate - Front End Damage,SALVAGE,,true,1,true
+FP,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+FR,Salvage Certificate - Rear End Damage,SALVAGE,,true,63,true
+FS,Salvage Certificate - Side Damage,SALVAGE,,true,1485,true
+FT,Salvage Certificate - Theft Recovery,SALVAGE,THEFT,true,4,true
+FV,Salvage Certificate - Vandalism,SALVAGE,,true,380,true
+GM,Salvage Certificate - Major Damage,SALVAGE,,true,0,true
+GO,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,11,false
+GP,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+GS,Salvage Certificate - Storm Damage,SALVAGE,,true,0,true
+HD,Salvage Certificate - Hail,SALVAGE,,true,2,true
+HF,Salvage Certificate - Flood,SALVAGE,WATER_FLOOD,true,0,true
+HS,Salvage Certificate - Hail/Storm,SALVAGE,,true,21,true
+HT,Salvage Certificate - Hail/Theft,SALVAGE,THEFT,true,1,true
+IA,Salvage Certificate - Insurance Auction,SALVAGE,,true,0,true
+IC,Salvage Certificate - Collision,SALVAGE,,true,88,true
+IL,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+IP,Salvage Certificate - Parts,SALVAGE,,true,176,true
+IR,Salvage Certificate - Roll Over,SALVAGE,,true,92,true
+JB,Salvage Certificate - Jacked,SALVAGE,,true,5,true
+JC,Salvage Certificate - Collision,SALVAGE,,true,42,true
+JH,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+JK,Salvage Certificate - Junk,SALVAGE,,true,26,true
+JR,Salvage Certificate - Reconstructed,REBUILT_RECONSTRUCTED,,true,6,true
+JT,Salvage Certificate - Total Loss,SALVAGE,,true,213,true
+KC,Salvage Certificate - Crushed,NON_REPAIRABLE_PARTS_SCRAP,,true,0,true
+KL,Salvage Certificate - Stolen,SALVAGE,THEFT,true,0,true
+KR,Salvage Certificate - Repossession,SALVAGE,,true,1,true
+KV,Salvage Certificate - Stolen/Vandalized,SALVAGE,THEFT,true,1,true
+LB,Salvage Certificate - Lemon Buyback,SALVAGE,LEMON_MANUFACTURER_BUYBACK,true,2,true
+LC,Salvage Certificate - Lemon/Manufacturer Buyback,SALVAGE,LEMON_MANUFACTURER_BUYBACK,true,2,true
+LH,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,2,false
+LL,Salvage Certificate - Leased Vehicle,SALVAGE,,true,5,true
+LP,Salvage Certificate - Personal Use,SALVAGE,,true,2,true
+LQ,Salvage Certificate - Lease/Rental,SALVAGE,,true,25,true
+LR,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,2,false
+LS,Salvage Certificate - Stolen/Recovered,SALVAGE,THEFT,true,421,true
+LU,Salvage Certificate - Unknown,SALVAGE,STATE_VERIFICATION_REQUIRED,true,34,true
+MB,Salvage Certificate - Manufacturer Buyback,SALVAGE,LEMON_MANUFACTURER_BUYBACK,true,13,true
+MF,Salvage Certificate - Fire/Flood,SALVAGE,WATER_FLOOD|FIRE,true,0,true
+MP,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,2,false
+MR,Salvage Certificate - Rebuilt,REBUILT_RECONSTRUCTED,,true,1,true
+MS,Salvage Certificate - Storm Damage,SALVAGE,,true,13,true
+MT,Salvage Certificate - Mechanical/Transmission,SALVAGE,MECHANICAL,true,4,true
+MU,Salvage Certificate - Manufacturer Warranty,SALVAGE,,true,2,true
+NB,Salvage Certificate - New Body,SALVAGE,,true,63,true
+NF,Salvage Certificate - Non-Repairable,NON_REPAIRABLE_PARTS_SCRAP,,true,60,true
+NH,Salvage Certificate - Theft Recovery,SALVAGE,THEFT,true,17,true
+NQ,Salvage Certificate - Non-Repairable/Crash,NON_REPAIRABLE_PARTS_SCRAP,,true,6,true
+NR,Salvage Certificate - Repairable,SALVAGE,,true,571,true
+NS,Salvage Certificate - Stolen,SALVAGE,THEFT,true,3,true
+NT,Salvage Certificate - Theft/Vandalism,SALVAGE,THEFT,true,79,true
+NU,Salvage Certificate - Non-Repairable/Unibody,NON_REPAIRABLE_PARTS_SCRAP,STRUCTURAL_FRAME_UNIBODY,true,885,true
+NX,Salvage Certificate - Salvage/Total Loss,SALVAGE,,true,223,true
+OA,Salvage Certificate - Off-Road Vehicle,SALVAGE,,true,28,true
+OH,Salvage Certificate - Overhauled,REBUILT_RECONSTRUCTED,,true,2,true
+ON,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,4,false
+OS,Salvage Certificate - Out of State,SALVAGE,STATE_VERIFICATION_REQUIRED,true,19,true
+OT,Salvage Certificate - Odometer Tampered,SALVAGE,ODOMETER,true,19,true
+PA,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+PB,Salvage Certificate - Police Buyback,SALVAGE,,true,0,true
+PC,Salvage Certificate - Parts/Crushed,NON_REPAIRABLE_PARTS_SCRAP,,true,10,true
+PD,Salvage Certificate - Damaged/Repairable,SALVAGE,,true,0,true
+PF,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+PL,Salvage Certificate - Leased Vehicle,SALVAGE,,true,40,true
+PN,Salvage Certificate - Personal,SALVAGE,,true,8,true
+PO,Salvage Certificate - Police Auction,SALVAGE,,true,786,true
+PP,Salvage Certificate - Parts/Project,SALVAGE,,true,8,true
+PR,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,2,false
+PS,Salvage Certificate - Parts/Scrap,NON_REPAIRABLE_PARTS_SCRAP,,true,1250,true
+PT,Salvage Certificate - Project,SALVAGE,,true,6,true
+PV,Salvage Certificate - Parts/Valued,SALVAGE,,true,6,true
+PX,Salvage Certificate - Parts/Unknown,SALVAGE,STATE_VERIFICATION_REQUIRED,true,140,true
+R1,Salvage Certificate - Rebuilt/Repaired,REBUILT_RECONSTRUCTED,,true,116,true
+R2,Salvage Certificate - Restored,REBUILT_RECONSTRUCTED,,true,13,true
+RA,Salvage Certificate - Repairable/Restorable,SALVAGE,,true,23,true
+RB,Salvage Certificate - Restored/Builder,REBUILT_RECONSTRUCTED,,true,3825,true
+RC,Salvage Certificate - Rusty/Corroded,SALVAGE,,true,95,true
+RD,Salvage Certificate - Rebuilt/Damaged,REBUILT_RECONSTRUCTED,,true,20,true
+RF,Salvage Certificate - Flood/Rebuildable,SALVAGE,WATER_FLOOD,true,27,true
+RG,Salvage Certificate - Rebuilt/Good,REBUILT_RECONSTRUCTED,,true,104,true
+RH,Salvage Certificate - Rebuilt/Hardtop,REBUILT_RECONSTRUCTED,,true,8,true
+RJ,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,4,false
+RP,Salvage Certificate - Repaired/Reconstructed,REBUILT_RECONSTRUCTED,,true,174,true
+RR,Salvage Certificate - Reconstructed/Rusty,REBUILT_RECONSTRUCTED,,true,91,true
+RS,Salvage Certificate - Restorable/Salvage,SALVAGE,,true,2656,true
+RT,Salvage Certificate - Rebuilt/Transmission,REBUILT_RECONSTRUCTED,MECHANICAL,true,332,true
+RU,Salvage Certificate - Rusted/Unrepairable,SALVAGE,,true,18,true
+RV,Salvage Certificate - Rebuilt/Valuable,REBUILT_RECONSTRUCTED,,true,5,true
+RW,Salvage Certificate - Rebuilt/Wrecked,REBUILT_RECONSTRUCTED,,true,1,true
+S1,Salvage Certificate,SALVAGE,,true,3094,true
+S2,Salvage Certificate,SALVAGE,,true,374,true
+SB,Salvage Certificate - Stolen/Back,SALVAGE,THEFT,true,211,true
+SC,Salvage Certificate - Stolen/Claim,SALVAGE,THEFT,true,41643,true
+SD,Salvage Certificate - Structural Damage,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,183,true
+SE,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+SF,Salvage Certificate - Salvage Frame,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,8,true
+SG,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+SH,Salvage Certificate - Structural/Hit,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,127,true
+SI,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+SK,Salvage Certificate - Structural/Known,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,9,true
+SL,Salvage Certificate - Stolen/Leased,SALVAGE,THEFT,true,2,true
+SM,Salvage Certificate - Stolen/Missing,SALVAGE,THEFT,true,1130,true
+SN,Salvage Certificate - Structural/Non-Repairable,NON_REPAIRABLE_PARTS_SCRAP,STRUCTURAL_FRAME_UNIBODY,true,2,true
+SO,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+SP,Salvage Certificate - Structural/Parts,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,148,true
+SQ,Salvage Certificate - Stolen/Quiet,SALVAGE,THEFT,true,111,true
+SR,Salvage Certificate - Stolen/Recovered,SALVAGE,THEFT,true,714,true
+SS,Salvage Certificate - Structural/Salvage,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,69,true
+ST,Salvage Certificate - Stolen/Totally,SALVAGE,THEFT,true,38455,true
+SV,Salvage Certificate - Salvage/Vehicle,SALVAGE,,true,8385,true
+SW,Salvage Certificate - Structural/Welded,SALVAGE,STRUCTURAL_FRAME_UNIBODY,true,73,true
+TA,Salvage Certificate - Theft/Auction,SALVAGE,THEFT,true,3,true
+TB,Salvage Certificate - Theft/Broken,SALVAGE,THEFT,true,9,true
+TC,Salvage Certificate - Theft/Collision,SALVAGE,THEFT,true,4,true
+TE,Salvage Certificate - Theft/Engine,SALVAGE,THEFT|MECHANICAL,true,1,true
+TH,Salvage Certificate - Theft/Hit,SALVAGE,THEFT,true,49,true
+TL,Salvage Certificate - Theft/Lost,SALVAGE,THEFT,true,0,true
+TR,Salvage Certificate - Theft/Recovered,SALVAGE,THEFT,true,7,true
+TS,Salvage Certificate - Theft/Stolen,SALVAGE,THEFT,true,14,true
+UC,Salvage Certificate - Uncertain,SALVAGE,STATE_VERIFICATION_REQUIRED,true,3,true
+UL,Salvage Certificate - Uncertain/Lost,SALVAGE,STATE_VERIFICATION_REQUIRED,true,0,true
+UN,Salvage Certificate - Uncertain/Not,SALVAGE,STATE_VERIFICATION_REQUIRED,true,1,true
+UR,Salvage Certificate - Uncertain/Rebuilt,REBUILT_RECONSTRUCTED,STATE_VERIFICATION_REQUIRED,true,5,true
+US,Salvage Certificate - Uncertain/Structural,SALVAGE,STRUCTURAL_FRAME_UNIBODY|STATE_VERIFICATION_REQUIRED,true,2,true
+UT,Salvage Certificate - Uncertain/Theft,SALVAGE,THEFT|STATE_VERIFICATION_REQUIRED,true,2,true
+VC,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,1,false
+VD,Salvage Certificate - Vehicle/Destroyed,SALVAGE,,true,11,true
+WD,Salvage Certificate - Water/Damaged,SALVAGE,WATER_FLOOD,true,0,true
+WF,Salvage Certificate - Water/Flood,SALVAGE,WATER_FLOOD,true,38,true
+WO,UNMAPPED_SOURCE_CODE,OTHER_UNVERIFIED,,,2,false
+WS,Salvage Certificate - Water/Salvage,SALVAGE,WATER_FLOOD,true,5,true
+WT,Salvage Certificate - Water/Total,SALVAGE,WATER_FLOOD,true,31,true
