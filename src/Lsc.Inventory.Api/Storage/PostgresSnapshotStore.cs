@@ -1422,45 +1422,21 @@ public sealed partial class PostgresSnapshotStore(
 
     private async Task<InventorySearchPage> SearchProjectionAsync(InventorySearchRequest request, CancellationToken cancellationToken)
     {
+        if (IsPreGradeBaselineSearch(request))
+            return await SearchProjectionPreGradeBaselineAsync(request, cancellationToken);
+
         var page = Math.Max(1, request.Page);
         var pageSize = Math.Clamp(request.PageSize, 1, 100);
         var offset = checked((page - 1) * pageSize);
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        // The projection carries the lifecycle state and maintains it when lifecycle changes.
-        // Filtering directly on latest.is_active preserves the partial indexes and avoids a
-        // 136k-row lifecycle join before ORDER BY/LIMIT on the default browse path.
+        var total = await GetProjectionTotalAsync(connection, request, cancellationToken);
         var where = new List<string> { "latest.is_active" };
-        var total = 0;
-        if (IsDefaultVisibleSearch(request))
-        {
-            await using var cachedCountCommand = connection.CreateCommand();
-            cachedCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
-            cachedCountCommand.CommandText = "select case when @exclude_special_titles then visible_row_count else row_count end from inventory_search_projection_state where projection_name = 'inventory-current-v1' and is_ready and facets_refreshed_at is not null;";
-            AddParameter(cachedCountCommand, "exclude_special_titles", request.ExcludeSpecialTitles);
-            var cachedCount = await cachedCountCommand.ExecuteScalarAsync(cancellationToken);
-            if (cachedCount is not null && cachedCount != DBNull.Value)
-                total = Convert.ToInt32(cachedCount, CultureInfo.InvariantCulture);
-        }
-        if (total == 0 && !IsKnownEmptyProjection(request))
-        {
-            await using var countCommand = connection.CreateCommand();
-            countCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            AddProjectionFilters(countCommand, request, where);
-            countCommand.CommandText = $"select count(*)::int from inventory_search_current latest left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key where {string.Join(" and ", where)};";
-            total = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-        }
-
         var itemWhere = new List<string> { "latest.is_active" };
         await using var itemsCommand = connection.CreateCommand();
         itemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
         AddProjectionFilters(itemsCommand, request, itemWhere);
         itemsCommand.CommandText = $"""
-            select latest.lot_key, latest.observed_at, latest.payload::text,
-                   latest.platform, latest.lot_number, latest.vin,
-                   score.status as score_status, score.pre_grade as score_pre_grade, score.buy_score as score_buy_score,
-                   score.max_points_evaluable as score_max_points_evaluable,
-                   score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
-                   score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
+            select {ProjectionSnapshotColumns}
             from inventory_search_current latest
             left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
             where {string.Join(" and ", itemWhere)}
@@ -1472,6 +1448,169 @@ public sealed partial class PostgresSnapshotStore(
         var items = await ReadStoredSnapshotsAsync(itemsCommand, cancellationToken);
         var generatedAt = items.Count == 0 ? DateTimeOffset.UtcNow : items.Max(snapshot => snapshot.ObservedAt);
         return new InventorySearchPage(page, pageSize, total, generatedAt, items);
+    }
+
+    private const string ProjectionSnapshotColumns = """
+        latest.lot_key, latest.observed_at, latest.payload::text,
+        latest.platform, latest.lot_number, latest.vin,
+        score.status as score_status, score.pre_grade as score_pre_grade, score.buy_score as score_buy_score,
+        score.max_points_evaluable as score_max_points_evaluable,
+        score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
+        score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
+        """;
+
+    private const string ProjectionSnapshotColumnsWithoutScore = """
+        latest.lot_key, latest.observed_at, latest.payload::text,
+        latest.platform, latest.lot_number, latest.vin,
+        null::text as score_status, null::numeric as score_pre_grade, null::numeric as score_buy_score,
+        null::numeric as score_max_points_evaluable, null::numeric as score_coverage_percent,
+        null::numeric as score_confidence_percent, null::text as score_category,
+        null::text as score_policy_version, null::timestamptz as score_scored_at
+        """;
+
+    private async Task<InventorySearchPage> SearchProjectionPreGradeBaselineAsync(InventorySearchRequest request, CancellationToken cancellationToken)
+    {
+        var page = Math.Max(1, request.Page);
+        var pageSize = Math.Clamp(request.PageSize, 1, 100);
+        var offset = checked((page - 1) * pageSize);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        var total = await GetProjectionTotalAsync(connection, request, cancellationToken);
+        var platformClause = string.IsNullOrWhiteSpace(request.Platform) ? string.Empty : " and latest.platform = @platform";
+
+        await using var scoredCountCommand = connection.CreateCommand();
+        scoredCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 8);
+        scoredCountCommand.CommandText = $"""
+            select count(*)::int
+            from inventory_vehicle_score_current score
+            join inventory_search_current latest on latest.lot_key = score.lot_key
+            where latest.is_active and score.pre_grade is not null{platformClause};
+            """;
+        AddPlatformParameter(scoredCountCommand, request);
+        var scoredTotal = Convert.ToInt32(await scoredCountCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+        if (scoredTotal == 0)
+            return await SearchProjectionWithoutScoresAsync(connection, request, page, pageSize, offset, total, cancellationToken);
+
+        var items = new List<StoredVehicleSnapshot>(pageSize);
+
+        if (offset < scoredTotal)
+        {
+            await using var scoredItemsCommand = connection.CreateCommand();
+            scoredItemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            scoredItemsCommand.CommandText = $"""
+                select {ProjectionSnapshotColumns}
+                from inventory_vehicle_score_current score
+                join inventory_search_current latest on latest.lot_key = score.lot_key
+                where latest.is_active and score.pre_grade is not null{platformClause}
+                order by score.pre_grade desc, latest.lot_key asc
+                limit @limit offset @offset;
+                """;
+            AddPlatformParameter(scoredItemsCommand, request);
+            AddParameter(scoredItemsCommand, "limit", pageSize);
+            AddParameter(scoredItemsCommand, "offset", offset);
+            items.AddRange(await ReadStoredSnapshotsAsync(scoredItemsCommand, cancellationToken));
+        }
+
+        if (items.Count < pageSize && offset + items.Count < total)
+        {
+            var unscoredOffset = Math.Max(0, offset - scoredTotal);
+            await using var unscoredItemsCommand = connection.CreateCommand();
+            unscoredItemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            unscoredItemsCommand.CommandText = $"""
+                select {ProjectionSnapshotColumns}
+                from inventory_search_current latest
+                left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
+                where latest.is_active and score.pre_grade is null{platformClause}
+                order by latest.lot_key asc
+                limit @limit offset @offset;
+                """;
+            AddPlatformParameter(unscoredItemsCommand, request);
+            AddParameter(unscoredItemsCommand, "limit", pageSize - items.Count);
+            AddParameter(unscoredItemsCommand, "offset", unscoredOffset);
+            items.AddRange(await ReadStoredSnapshotsAsync(unscoredItemsCommand, cancellationToken));
+        }
+
+        var generatedAt = items.Count == 0 ? DateTimeOffset.UtcNow : items.Max(snapshot => snapshot.ObservedAt);
+        return new InventorySearchPage(page, pageSize, total, generatedAt, items);
+    }
+
+    private async Task<InventorySearchPage> SearchProjectionWithoutScoresAsync(
+        NpgsqlConnection connection,
+        InventorySearchRequest request,
+        int page,
+        int pageSize,
+        int offset,
+        int total,
+        CancellationToken cancellationToken)
+    {
+        var platformClause = string.IsNullOrWhiteSpace(request.Platform) ? string.Empty : " and latest.platform = @platform";
+        await using var itemsCommand = connection.CreateCommand();
+        itemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        itemsCommand.CommandText = $"""
+            select {ProjectionSnapshotColumnsWithoutScore}
+            from inventory_search_current latest
+            where latest.is_active{platformClause}
+            order by latest.auction_at asc nulls last, latest.lot_key asc
+            limit @limit offset @offset;
+            """;
+        AddPlatformParameter(itemsCommand, request);
+        AddParameter(itemsCommand, "limit", pageSize);
+        AddParameter(itemsCommand, "offset", offset);
+        var items = await ReadStoredSnapshotsAsync(itemsCommand, cancellationToken);
+        var generatedAt = items.Count == 0 ? DateTimeOffset.UtcNow : items.Max(snapshot => snapshot.ObservedAt);
+        return new InventorySearchPage(page, pageSize, total, generatedAt, items);
+    }
+
+    private async Task<int> GetProjectionTotalAsync(NpgsqlConnection connection, InventorySearchRequest request, CancellationToken cancellationToken)
+    {
+        int? total = null;
+        if (IsDefaultVisibleSearch(request))
+        {
+            await using var cachedCountCommand = connection.CreateCommand();
+            cachedCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
+            cachedCountCommand.CommandText = "select case when @exclude_special_titles then visible_row_count else row_count end from inventory_search_projection_state where projection_name = 'inventory-current-v1' and is_ready and facets_refreshed_at is not null;";
+            AddParameter(cachedCountCommand, "exclude_special_titles", request.ExcludeSpecialTitles);
+            var cachedCount = await cachedCountCommand.ExecuteScalarAsync(cancellationToken);
+            if (cachedCount is not null && cachedCount != DBNull.Value)
+                total = Convert.ToInt32(cachedCount, CultureInfo.InvariantCulture);
+        }
+        else if (IsPlatformOnlyVisibleSearch(request))
+        {
+            await using var cachedPlatformCountCommand = connection.CreateCommand();
+            cachedPlatformCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
+            cachedPlatformCountCommand.CommandText = """
+                select facets.vehicle_count
+                from inventory_search_facet_counts facets
+                join inventory_search_projection_state state on state.projection_name = 'inventory-current-v1'
+                where state.is_ready and state.facets_refreshed_at is not null
+                  and facets.facet_key = 'platforms'
+                  and lower(facets.facet_value) = @platform;
+                """;
+            AddParameter(cachedPlatformCountCommand, "platform", request.Platform!.Trim().ToLowerInvariant());
+            var cachedCount = await cachedPlatformCountCommand.ExecuteScalarAsync(cancellationToken);
+            if (cachedCount is not null && cachedCount != DBNull.Value)
+                total = Convert.ToInt32(cachedCount, CultureInfo.InvariantCulture);
+        }
+
+        if (!total.HasValue && !IsKnownEmptyProjection(request))
+        {
+            var where = new List<string> { "latest.is_active" };
+            await using var countCommand = connection.CreateCommand();
+            countCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            AddProjectionFilters(countCommand, request, where);
+            var scoreJoin = RequiresProjectionScoreJoin(request)
+                ? " left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key"
+                : string.Empty;
+            countCommand.CommandText = $"select count(*)::int from inventory_search_current latest{scoreJoin} where {string.Join(" and ", where)};";
+            total = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+        }
+
+        return total ?? 0;
+    }
+
+    private static void AddPlatformParameter(NpgsqlCommand command, InventorySearchRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.Platform))
+            AddParameter(command, "platform", request.Platform.Trim().ToLowerInvariant());
     }
 
     private async Task<InventorySearchSummary?> GetCachedProjectionSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken)
@@ -1575,7 +1714,6 @@ public sealed partial class PostgresSnapshotStore(
         static bool Empty(IReadOnlyCollection<string>? values) => values is null || values.Count == 0;
         return string.IsNullOrWhiteSpace(request.Query)
             && string.IsNullOrWhiteSpace(request.Platform)
-            && (string.IsNullOrWhiteSpace(request.Sort) || request.Sort is "auction")
             && Empty(request.Makes) && Empty(request.Models) && Empty(request.VehicleTypes)
             && Empty(request.Titles) && Empty(request.States) && Empty(request.Facilities)
             && Empty(request.PrimaryDamages) && Empty(request.SecondaryDamages) && Empty(request.SellerTypes)
@@ -1589,6 +1727,23 @@ public sealed partial class PostgresSnapshotStore(
             && request.EngineSizeFrom is null && request.EngineSizeTo is null && request.HorsepowerFrom is null && request.HorsepowerTo is null
             && request.MaxCurrentBid is null && request.PreGradeFrom is null && Empty(request.ScoringStatuses);
     }
+
+    private static bool IsPlatformOnlyVisibleSearch(InventorySearchRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Platform)) return false;
+        return IsDefaultVisibleSearch(request with { Platform = null });
+    }
+
+    private static bool IsPreGradeBaselineSearch(InventorySearchRequest request)
+    {
+        var requestedSort = request.Sort?.Trim().ToLowerInvariant();
+        return !request.ExcludeSpecialTitles
+            && (string.IsNullOrWhiteSpace(requestedSort) || requestedSort is "pregrade-desc")
+            && (IsDefaultVisibleSearch(request) || IsPlatformOnlyVisibleSearch(request));
+    }
+
+    private static bool RequiresProjectionScoreJoin(InventorySearchRequest request) =>
+        request.PreGradeFrom.HasValue || request.ScoringStatuses is { Count: > 0 };
 
     private static bool IsKnownEmptyProjection(InventorySearchRequest request) => request.PageSize <= 0;
 
