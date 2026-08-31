@@ -1,0 +1,89 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "deploy-api-r61-20260831-execution-history-read-model",
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/manus/api-r61-execution-history-read-model/infra/release-assets/r61-execution-history-read-model/federated-deploy-api-r61.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "forceUpdateTag": "api-r61-20260831-execution-history-read-model-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT30M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiImage": {
+      "type": "string",
+      "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r61-execution-history-read-model"
+    },
+    "iaaiJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "copartJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "copartAutoJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "genericJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "scoringJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "jobExecutionStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "copartApibaraEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "migrationsEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "facetIndexMigrationStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "projectionRebuildStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "scriptSha256": {
+      "type": "string",
+      "value": "4f4d5d435df9d1ba9aca9524cafbf8f3427745def45c81f22baf41605bea057f"
+    }
+  }
+}
