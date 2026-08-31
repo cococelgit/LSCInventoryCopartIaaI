@@ -7,7 +7,6 @@
   "variables": {
     "identityName": "uai-lsc-inventory-release-afaac3d",
     "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
-    "apiIdentityPrincipalId": "[reference(variables('identityResourceId'), '2018-11-30').properties.principalId]",
     "redisName": "lsc-inventory-facets-redis",
     "redisDatabaseName": "default",
     "scriptName": "deploy-redis-api-r63-20260831-facets-v2",
@@ -58,7 +57,7 @@
       "properties": {
         "accessString": "+@read +@write ~lsc:facets:v2:*",
         "user": {
-          "objectId": "[variables('apiIdentityPrincipalId')]"
+          "objectId": "[reference(variables('identityResourceId'), '2018-11-30').properties.principalId]"
         }
       }
     },
@@ -76,7 +75,7 @@
         "[resourceId('Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments', variables('redisName'), variables('redisDatabaseName'), 'lscfacets')]"
       ],
       "properties": {
-        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v4",
+        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v5",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT45M",
