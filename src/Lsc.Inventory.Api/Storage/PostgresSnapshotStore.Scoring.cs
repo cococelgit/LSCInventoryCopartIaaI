@@ -51,8 +51,11 @@ public sealed partial class PostgresSnapshotStore
         await using var command = connection.CreateCommand();
         command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
         command.CommandText = """
-            with candidates as (
-                select current.lot_key, current.platform, current.observed_at
+            with eligible as (
+                select current.lot_key, current.platform, current.observed_at,
+                       row_number() over (
+                           partition by current.platform
+                           order by current.observed_at asc, current.lot_key asc) as platform_position
                 from inventory_search_current current
                 left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
                 left join inventory_vehicle_scoring_queue queue on queue.lot_key = current.lot_key
@@ -63,7 +66,10 @@ public sealed partial class PostgresSnapshotStore
                     or score.source_observed_at <> current.observed_at
                     or (queue.status = 'failed' and queue.attempts < @maximum_attempts)
                   )
-                order by current.observed_at asc, current.lot_key asc
+            ), candidates as (
+                select lot_key, platform, observed_at
+                from eligible
+                order by platform_position asc, platform asc, lot_key asc
                 limit @limit
             ), upserted as (
                 insert into inventory_vehicle_scoring_queue (

@@ -17,6 +17,17 @@ public sealed class ScoringPriorityAuditContractTests
         Assert.Contains("inventory_vehicle_scoring_runs", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Historical_backfill_round_robins_active_platforms_without_downgrading_high_priority_lots()
+    {
+        var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.Scoring.cs"));
+
+        Assert.Contains("partition by current.platform", source, StringComparison.Ordinal);
+        Assert.Contains("as platform_position", source, StringComparison.Ordinal);
+        Assert.Contains("order by platform_position asc, platform asc, lot_key asc", source, StringComparison.Ordinal);
+        Assert.Contains("order by priority desc, requested_at asc, lot_key asc", source, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryFile(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
