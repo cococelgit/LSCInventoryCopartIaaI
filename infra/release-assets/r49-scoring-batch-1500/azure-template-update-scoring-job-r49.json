@@ -1,0 +1,85 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "update-scoring-job-r49-20260831-batch-1500",
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/manus/api-scoring-r49-batch-1500/infra/release-assets/r49-scoring-batch-1500/federated-update-scoring-job-r49.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "forceUpdateTag": "update-scoring-job-r49-20260831-batch-1500-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT30M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "iaaiJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "copartExcelJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "copartAutoJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "genericJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "scoringJobName": {
+      "type": "string",
+      "value": "job-lsc-inventory-scoring-prod"
+    },
+    "scoringCron": {
+      "type": "string",
+      "value": "7,22,37,52 * * * *"
+    },
+    "scoringBatchMaximum": {
+      "type": "int",
+      "value": 1500
+    },
+    "scoringExecutionStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "migrationsEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "scriptSha256": {
+      "type": "string",
+      "value": "5105e89a67d6e3d86e6c2c4082f62eaa7b86c95ab5f5a45eb46d4b868158147c"
+    }
+  }
+}
