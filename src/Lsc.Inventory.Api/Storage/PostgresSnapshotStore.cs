@@ -498,19 +498,39 @@ public sealed partial class PostgresSnapshotStore(
         var platform = request.Platform?.Trim().ToLowerInvariant() ?? string.Empty;
         var status = request.Status?.Trim().ToLowerInvariant() ?? string.Empty;
         const string runs = """
-            select base.run_id, base.provider, base.platform_scope as platform, base.state_scope as scope, base.status, base.started_at, base.finished_at,
-                   base.vehicles_observed as observed, base.requests_issued as requests, metrics.loaded_count, metrics.marked_count, metrics.discarded_count,
-                   metrics.quarantined_count, metrics.error_count, metrics.pages_processed, metrics.cycle_completed, metrics.reactivated_count,
-                   metrics.misses_incremented_count, metrics.deactivated_count, coalesce(metrics.failures, base.failures, '[]'::jsonb)::text as failures
-            from inventory_sync_runs base
-            left join inventory_execution_run_metrics metrics on metrics.run_id = base.run_id
-            union all
-            select run_id, 'copart-excel' as provider, 'copart' as platform, 'excel-snapshot' as scope, status,
-                   downloaded_at as started_at, finished_at, observed_count as observed, 0 as requests, accepted_count as loaded_count,
-                   marked_count, discarded_count, quarantined_count, error_count, null::integer as pages_processed,
-                   is_complete as cycle_completed, null::integer as reactivated_count, null::integer as misses_incremented_count,
-                   null::integer as deactivated_count, failures::text as failures
-            from copart_snapshot_manifests
+            with raw_history as (
+                select base.run_id, base.provider, base.platform_scope as platform, base.state_scope as scope, base.status,
+                       base.started_at, base.finished_at, base.vehicles_observed as observed, base.requests_issued as requests,
+                       metrics.loaded_count, metrics.marked_count, metrics.discarded_count, metrics.quarantined_count,
+                       metrics.error_count, metrics.pages_processed, metrics.cycle_completed, metrics.reactivated_count,
+                       metrics.misses_incremented_count, metrics.deactivated_count,
+                       coalesce(metrics.failures, base.failures, '[]'::jsonb)::text as failures, 0 as source_rank
+                from inventory_sync_runs base
+                left join inventory_execution_run_metrics metrics on metrics.run_id = base.run_id
+                union all
+                select run_id, 'copart-excel' as provider, 'copart' as platform, 'excel-snapshot' as scope, status,
+                       downloaded_at as started_at, finished_at, observed_count as observed, 0 as requests,
+                       accepted_count as loaded_count, marked_count, discarded_count, quarantined_count, error_count,
+                       null::integer as pages_processed, is_complete as cycle_completed, null::integer as reactivated_count,
+                       null::integer as misses_incremented_count, null::integer as deactivated_count,
+                       failures::text as failures, 1 as source_rank
+                from copart_snapshot_manifests
+            )
+            select run_id,
+                   (array_agg(provider order by source_rank desc, finished_at desc nulls last))[1] as provider,
+                   (array_agg(platform order by source_rank desc, finished_at desc nulls last))[1] as platform,
+                   (array_agg(scope order by source_rank desc, finished_at desc nulls last))[1] as scope,
+                   (array_agg(status order by finished_at desc nulls last, source_rank desc))[1] as status,
+                   min(started_at) as started_at, max(finished_at) as finished_at, max(observed) as observed,
+                   max(requests) as requests, max(loaded_count) as loaded_count, max(marked_count) as marked_count,
+                   max(discarded_count) as discarded_count, max(quarantined_count) as quarantined_count,
+                   max(error_count) as error_count, max(pages_processed) as pages_processed,
+                   bool_or(cycle_completed) filter (where cycle_completed is not null) as cycle_completed,
+                   max(reactivated_count) as reactivated_count, max(misses_incremented_count) as misses_incremented_count,
+                   max(deactivated_count) as deactivated_count,
+                   (array_agg(failures order by length(failures) desc, source_rank desc))[1] as failures
+            from raw_history
+            group by run_id
             """;
         await using var connection = await OpenConnectionAsync(cancellationToken);
         long total;
@@ -527,10 +547,14 @@ public sealed partial class PostgresSnapshotStore(
         {
             command.CommandTimeout = _persistence.CommandTimeoutSeconds;
             command.CommandText = $"""
-                select history.*, coalesce(events.created_count, 0), coalesce(events.updated_count, 0), coalesce(events.unchanged_count, 0)
+                select history.*,
+                       case when events.event_count = 0 then null else events.created_count end,
+                       case when events.event_count = 0 then null else events.updated_count end,
+                       case when events.event_count = 0 then null else events.unchanged_count end
                 from ({runs}) history
                 left join lateral (
-                    select count(*) filter (where action = 'created')::int as created_count,
+                    select count(*)::int as event_count,
+                           count(*) filter (where action = 'created')::int as created_count,
                            count(*) filter (where action = 'updated')::int as updated_count,
                            count(*) filter (where action = 'unchanged')::int as unchanged_count
                     from inventory_sync_run_events where run_id = history.run_id
@@ -548,7 +572,7 @@ public sealed partial class PostgresSnapshotStore(
                 results.Add(new InventoryExecutionSummary(
                     reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
                     reader.GetFieldValue<DateTimeOffset>(5), ReadNullableDateTimeOffset(reader, 6), reader.GetInt32(7), reader.GetInt32(8),
-                    ReadNullableInt32(reader, 9), reader.GetInt32(20), reader.GetInt32(21), reader.GetInt32(22),
+                    ReadNullableInt32(reader, 9), ReadNullableInt32(reader, 20), ReadNullableInt32(reader, 21), ReadNullableInt32(reader, 22),
                     ReadNullableInt32(reader, 10), ReadNullableInt32(reader, 11), ReadNullableInt32(reader, 12), ReadNullableInt32(reader, 13),
                     ReadNullableInt32(reader, 16), ReadNullableInt32(reader, 17), ReadNullableInt32(reader, 18), ReadNullableInt32(reader, 14),
                     reader.IsDBNull(15) ? null : reader.GetBoolean(15), ReadStringArray(reader, 19)));
