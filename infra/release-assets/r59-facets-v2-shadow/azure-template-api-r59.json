@@ -27,7 +27,7 @@
         }
       },
       "properties": {
-        "forceUpdateTag": "api-r59-20260831-facets-v2-shadow-v1",
+        "forceUpdateTag": "api-r59-20260831-facets-v2-shadow-v2",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT30M",
@@ -83,7 +83,7 @@
     },
     "scriptSha256": {
       "type": "string",
-      "value": "3480e7efb18f9bbab2df7a05107422047fee32e0b83d6728897ea2796204abe9"
+      "value": "7d43f1604d6fea8dcea77d242fa40a9b0a75c688be225a6ee048a0ba4abb63f3"
     }
   }
 }
