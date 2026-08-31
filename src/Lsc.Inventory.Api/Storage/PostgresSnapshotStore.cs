@@ -22,7 +22,8 @@ namespace Lsc.Inventory.Api.Storage;
 public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
     IOptions<BlobAuditOptions> blobOptions,
-    ILogger<PostgresSnapshotStore> logger) : IInventorySnapshotStore
+    ILogger<PostgresSnapshotStore> logger,
+    IFacetsV2SharedCache? facetsV2SharedCache = null) : IInventorySnapshotStore
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static readonly SemaphoreSlim AuditSchemaLock = new(1, 1);
@@ -40,6 +41,7 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _nationalSyncSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly BlobAuditOptions _blob = blobOptions.Value;
+    private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
     private readonly ConcurrentDictionary<string, StoredVehicleSnapshot> _recent = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
     private AccessToken _cachedDatabaseAccessToken;

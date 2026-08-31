@@ -50,6 +50,21 @@ builder.Services
     .ValidateDataAnnotations();
 
 builder.Services
+    .AddOptions<FacetsRedisOptions>()
+    .Bind(builder.Configuration.GetSection(FacetsRedisOptions.SectionName))
+    .ValidateDataAnnotations();
+
+builder.Services.AddSingleton<IFacetsV2SharedCache>(serviceProvider =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<FacetsRedisOptions>>().Value;
+    return options.IsConfigured
+        ? new AzureManagedRedisFacetsV2SharedCache(
+            serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<FacetsRedisOptions>>(),
+            serviceProvider.GetRequiredService<ILogger<AzureManagedRedisFacetsV2SharedCache>>())
+        : DisabledFacetsV2SharedCache.Instance;
+});
+
+builder.Services
     .AddOptions<BlobAuditOptions>()
     .Bind(builder.Configuration.GetSection(BlobAuditOptions.SectionName))
     .ValidateDataAnnotations();

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "type": "string", "defaultValue": "eastus2" }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "redisName": "lsc-inventory-facets-redis",
+    "redisDatabaseName": "default",
+    "scriptName": "deploy-redis-api-r63-20260831-facets-v2",
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/manus/api-r63-facets-redis-shared-cache/infra/release-assets/r63-facets-v2-redis-shared-cache/federated-deploy-api-redis-r63.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Cache/redisEnterprise",
+      "apiVersion": "2025-04-01",
+      "name": "[variables('redisName')]",
+      "location": "[parameters('location')]",
+      "sku": { "name": "Balanced_B0" },
+      "properties": {
+        "encryption": {},
+        "highAvailability": "Disabled",
+        "minimumTlsVersion": "1.2",
+        "publicNetworkAccess": "Enabled"
+      },
+      "tags": {
+        "application": "lsc-inventory",
+        "purpose": "facets-v2-short-lived-cache",
+        "data-classification": "derived-public-inventory-counts"
+      }
+    },
+    {
+      "type": "Microsoft.Cache/redisEnterprise/databases",
+      "apiVersion": "2025-04-01",
+      "name": "[format('{0}/{1}', variables('redisName'), variables('redisDatabaseName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Cache/redisEnterprise', variables('redisName'))]"
+      ],
+      "properties": {
+        "accessKeysAuthentication": "Disabled",
+        "clientProtocol": "Encrypted",
+        "clusteringPolicy": "OSSCluster",
+        "evictionPolicy": "VolatileLRU",
+        "modules": [],
+        "port": 10000
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": { "[variables('identityResourceId')]": {} }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cache/redisEnterprise/databases', variables('redisName'), variables('redisDatabaseName'))]"
+      ],
+      "properties": {
+        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT45M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "redisName": { "type": "string", "value": "[variables('redisName')]" },
+    "redisEndpoint": { "type": "string", "value": "[format('{0}.{1}.redis.azure.net:10000', variables('redisName'), parameters('location'))]" },
+    "redisSku": { "type": "string", "value": "Balanced_B0" },
+    "redisHighAvailability": { "type": "bool", "value": false },
+    "redisAccessKeysEnabled": { "type": "bool", "value": false },
+    "apiImage": { "type": "string", "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r63-facets-redis-shared-cache" },
+    "iaaiJobChanged": { "type": "bool", "value": false },
+    "copartJobChanged": { "type": "bool", "value": false },
+    "copartAutoJobChanged": { "type": "bool", "value": false },
+    "genericJobChanged": { "type": "bool", "value": false },
+    "scoringJobChanged": { "type": "bool", "value": false },
+    "jobExecutionStarted": { "type": "bool", "value": false },
+    "migrationsEnabled": { "type": "bool", "value": false },
+    "facetIndexMigrationStarted": { "type": "bool", "value": false },
+    "projectionRebuildStarted": { "type": "bool", "value": false },
+    "scriptSha256": { "type": "string", "value": "519687ce4d5c19ddb7ec5c4a81e5339a839a4b70d30fdeb2d85138406af5b136" }
+  }
+}

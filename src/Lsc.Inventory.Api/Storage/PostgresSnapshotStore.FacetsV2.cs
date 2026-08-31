@@ -90,8 +90,15 @@ public sealed partial class PostgresSnapshotStore
         if (TryGetFacetsV2Cache(cacheKey, out var cached))
             return cached with { Cache = "hit", DurationMs = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds };
 
+        var sharedCached = await _facetsV2SharedCache.GetAsync(cacheKey, cancellationToken);
+        if (sharedCached is not null && string.Equals(sharedCached.SourceVersion, version.SourceVersion, StringComparison.Ordinal))
+        {
+            SetFacetsV2Cache(cacheKey, sharedCached);
+            return sharedCached with { Cache = "shared-hit", DurationMs = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds };
+        }
+
         var candidate = new Lazy<Task<InventoryFacetsV2Response>>(
-            () => ExecuteFacetsV2Async(filters, requested, version, CancellationToken.None),
+            () => GetOrComputeFacetsV2Async(cacheKey, filters, requested, version),
             LazyThreadSafetyMode.ExecutionAndPublication);
         var lazy = _facetsV2SingleFlights.GetOrAdd(cacheKey, candidate);
         var isLeader = ReferenceEquals(candidate, lazy);
@@ -109,6 +116,46 @@ public sealed partial class PostgresSnapshotStore
         {
             if (_facetsV2SingleFlights.TryGetValue(cacheKey, out var current) && ReferenceEquals(current, lazy))
                 _facetsV2SingleFlights.TryRemove(cacheKey, out _);
+        }
+    }
+
+    private async Task<InventoryFacetsV2Response> GetOrComputeFacetsV2Async(
+        string cacheKey,
+        InventorySearchRequest filters,
+        IReadOnlyList<string> requested,
+        FacetsV2ProjectionVersion version)
+    {
+        var sharedCached = await _facetsV2SharedCache.GetAsync(cacheKey, CancellationToken.None);
+        if (sharedCached is not null && string.Equals(sharedCached.SourceVersion, version.SourceVersion, StringComparison.Ordinal))
+            return sharedCached with { Cache = "shared-hit" };
+
+        string? lockToken = null;
+        if (_facetsV2SharedCache.IsConfigured)
+        {
+            lockToken = await _facetsV2SharedCache.TryAcquireLockAsync(cacheKey, CancellationToken.None);
+            if (lockToken is null)
+            {
+                var deadline = DateTimeOffset.UtcNow.AddMilliseconds(2200);
+                while (DateTimeOffset.UtcNow < deadline)
+                {
+                    await Task.Delay(50, CancellationToken.None);
+                    sharedCached = await _facetsV2SharedCache.GetAsync(cacheKey, CancellationToken.None);
+                    if (sharedCached is not null && string.Equals(sharedCached.SourceVersion, version.SourceVersion, StringComparison.Ordinal))
+                        return sharedCached with { Cache = "shared-wait" };
+                }
+            }
+        }
+
+        try
+        {
+            var response = await ExecuteFacetsV2Async(filters, requested, version, CancellationToken.None);
+            await _facetsV2SharedCache.SetAsync(cacheKey, response, CancellationToken.None);
+            return response;
+        }
+        finally
+        {
+            if (lockToken is not null)
+                await _facetsV2SharedCache.ReleaseLockAsync(cacheKey, lockToken, CancellationToken.None);
         }
     }
 
