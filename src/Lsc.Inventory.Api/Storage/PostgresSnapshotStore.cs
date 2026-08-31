@@ -1476,6 +1476,7 @@ public sealed partial class PostgresSnapshotStore(
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var total = await GetProjectionTotalAsync(connection, request, cancellationToken);
         var platformClause = string.IsNullOrWhiteSpace(request.Platform) ? string.Empty : " and latest.platform = @platform";
+        var visibilityClause = ProjectionVisibilityClause(request);
 
         await using var scoredCountCommand = connection.CreateCommand();
         scoredCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 8);
@@ -1483,7 +1484,7 @@ public sealed partial class PostgresSnapshotStore(
             select count(*)::int
             from inventory_vehicle_score_current score
             join inventory_search_current latest on latest.lot_key = score.lot_key
-            where latest.is_active and score.pre_grade is not null{platformClause};
+            where latest.is_active and score.pre_grade is not null{platformClause}{visibilityClause};
             """;
         AddPlatformParameter(scoredCountCommand, request);
         var scoredTotal = Convert.ToInt32(await scoredCountCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
@@ -1500,7 +1501,7 @@ public sealed partial class PostgresSnapshotStore(
                 select {ProjectionSnapshotColumns}
                 from inventory_vehicle_score_current score
                 join inventory_search_current latest on latest.lot_key = score.lot_key
-                where latest.is_active and score.pre_grade is not null{platformClause}
+                where latest.is_active and score.pre_grade is not null{platformClause}{visibilityClause}
                 order by score.pre_grade desc, latest.lot_key asc
                 limit @limit offset @offset;
                 """;
@@ -1519,7 +1520,7 @@ public sealed partial class PostgresSnapshotStore(
                 select {ProjectionSnapshotColumns}
                 from inventory_search_current latest
                 left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
-                where latest.is_active and score.pre_grade is null{platformClause}
+                where latest.is_active and score.pre_grade is null{platformClause}{visibilityClause}
                 order by latest.lot_key asc
                 limit @limit offset @offset;
                 """;
@@ -1543,12 +1544,13 @@ public sealed partial class PostgresSnapshotStore(
         CancellationToken cancellationToken)
     {
         var platformClause = string.IsNullOrWhiteSpace(request.Platform) ? string.Empty : " and latest.platform = @platform";
+        var visibilityClause = ProjectionVisibilityClause(request);
         await using var itemsCommand = connection.CreateCommand();
         itemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
         itemsCommand.CommandText = $"""
             select {ProjectionSnapshotColumnsWithoutScore}
             from inventory_search_current latest
-            where latest.is_active{platformClause}
+            where latest.is_active{platformClause}{visibilityClause}
             order by latest.auction_at asc nulls last, latest.lot_key asc
             limit @limit offset @offset;
             """;
@@ -1573,7 +1575,7 @@ public sealed partial class PostgresSnapshotStore(
             if (cachedCount is not null && cachedCount != DBNull.Value)
                 total = Convert.ToInt32(cachedCount, CultureInfo.InvariantCulture);
         }
-        else if (IsPlatformOnlyVisibleSearch(request))
+        else if (IsPlatformOnlyVisibleSearch(request) && !request.ExcludeSpecialTitles)
         {
             await using var cachedPlatformCountCommand = connection.CreateCommand();
             cachedPlatformCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
@@ -1737,10 +1739,12 @@ public sealed partial class PostgresSnapshotStore(
     private static bool IsPreGradeBaselineSearch(InventorySearchRequest request)
     {
         var requestedSort = request.Sort?.Trim().ToLowerInvariant();
-        return !request.ExcludeSpecialTitles
-            && (string.IsNullOrWhiteSpace(requestedSort) || requestedSort is "pregrade-desc")
+        return (string.IsNullOrWhiteSpace(requestedSort) || requestedSort is "pregrade-desc")
             && (IsDefaultVisibleSearch(request) || IsPlatformOnlyVisibleSearch(request));
     }
+
+    private static string ProjectionVisibilityClause(InventorySearchRequest request) =>
+        request.ExcludeSpecialTitles ? " and not latest.is_special_title" : string.Empty;
 
     private static bool RequiresProjectionScoreJoin(InventorySearchRequest request) =>
         request.PreGradeFrom.HasValue || request.ScoringStatuses is { Count: > 0 };

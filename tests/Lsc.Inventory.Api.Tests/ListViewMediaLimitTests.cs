@@ -28,7 +28,9 @@ public sealed class ListViewMediaLimitTests
             },
             "{}");
         var entryPoint = typeof(PostgresSnapshotStore).Assembly.GetType("Program");
-        var method = entryPoint?.GetMethod("ToPublicVehicle", BindingFlags.Static | BindingFlags.NonPublic);
+        var method = entryPoint?
+            .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+            .SingleOrDefault(candidate => candidate.Name.Contains("ToPublicVehicle", StringComparison.Ordinal));
         Assert.NotNull(method);
 
         var vehicle = method!.Invoke(null, [snapshot, null, null, null, 1]) as PublicInventoryVehicle;
