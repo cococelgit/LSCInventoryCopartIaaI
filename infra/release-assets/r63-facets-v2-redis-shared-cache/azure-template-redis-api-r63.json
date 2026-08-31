@@ -57,7 +57,7 @@
       "properties": {
         "accessString": "+@read +@write ~lsc:facets:v2:*",
         "user": {
-          "objectId": "[reference(variables('identityResourceId'), '2018-11-30').properties.principalId]"
+          "objectId": "[reference(variables('identityResourceId'), '2018-11-30').principalId]"
         }
       }
     },
@@ -75,7 +75,7 @@
         "[resourceId('Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments', variables('redisName'), variables('redisDatabaseName'), 'lscfacets')]"
       ],
       "properties": {
-        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v5",
+        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v6",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT45M",
