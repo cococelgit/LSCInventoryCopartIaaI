@@ -58,7 +58,7 @@
       ],
       "properties": {
         "accessPolicyName": "default",
-        "accessString": "+@read +@write ~lsc:facets:v2:*",
+        "accessString": "+@read +@write +@connection +info ~lsc:facets:v2:*",
         "user": {
           "objectId": "[reference(variables('apiRuntimeIdentityResourceId'), '2018-11-30').principalId]"
         }
