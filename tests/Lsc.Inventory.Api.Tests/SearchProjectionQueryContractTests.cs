@@ -21,6 +21,38 @@ public sealed class SearchProjectionQueryContractTests
         Assert.DoesNotContain("left join inventory_lot_lifecycle lifecycle", method, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void DefaultVisibleBrowseFallsBackWhenTheVisibleCountCacheIsStale()
+    {
+        var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");
+        var source = File.ReadAllText(sourcePath);
+        var methodStart = source.IndexOf("private async Task<int> GetProjectionTotalAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "GetProjectionTotalAsync must remain present.");
+        var methodEnd = source.IndexOf("private static void AddPlatformParameter", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "GetProjectionTotalAsync boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("select row_count, visible_row_count", method);
+        Assert.Contains("request.ExcludeSpecialTitles || rowCount == 0 || visibleRowCount > 0", method);
+        Assert.Contains("stale cache report zero", method, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ProjectionRebuildPersistsTheVisibleActiveCount()
+    {
+        var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");
+        var source = File.ReadAllText(sourcePath);
+        var methodStart = source.IndexOf("public async Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "RebuildSearchProjectionAsync must remain present.");
+        var methodEnd = source.IndexOf("public async Task<InventorySearchProjectionStatus> GetSearchProjectionStatusAsync", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "RebuildSearchProjectionAsync boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("count(*) filter (where not is_special_title)::bigint as visible_rows", method);
+        Assert.Contains("visible_row_count = stats.visible_rows", method);
+        Assert.Contains("from inventory_search_current where is_active", method);
+    }
+
     private static string FindRepositoryFile(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

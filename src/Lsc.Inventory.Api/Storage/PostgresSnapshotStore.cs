@@ -1575,11 +1575,19 @@ public sealed partial class PostgresSnapshotStore(
         {
             await using var cachedCountCommand = connection.CreateCommand();
             cachedCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
-            cachedCountCommand.CommandText = "select case when @exclude_special_titles then visible_row_count else row_count end from inventory_search_projection_state where projection_name = 'inventory-current-v1' and is_ready and facets_refreshed_at is not null;";
-            AddParameter(cachedCountCommand, "exclude_special_titles", request.ExcludeSpecialTitles);
-            var cachedCount = await cachedCountCommand.ExecuteScalarAsync(cancellationToken);
-            if (cachedCount is not null && cachedCount != DBNull.Value)
-                total = Convert.ToInt32(cachedCount, CultureInfo.InvariantCulture);
+            cachedCountCommand.CommandText = "select row_count, visible_row_count from inventory_search_projection_state where projection_name = 'inventory-current-v1' and is_ready and facets_refreshed_at is not null;";
+            await using var reader = await cachedCountCommand.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                var rowCount = reader.GetInt64(0);
+                var visibleRowCount = reader.GetInt64(1);
+                // Older ready projections can have a persisted default of zero for
+                // visible_row_count. Do not let that stale cache report zero while
+                // the projection itself still contains active vehicles; fall back
+                // to the exact filtered count until statistics are refreshed.
+                if (!request.ExcludeSpecialTitles || rowCount == 0 || visibleRowCount > 0)
+                    total = (int)Math.Min(int.MaxValue, request.ExcludeSpecialTitles ? visibleRowCount : rowCount);
+            }
         }
         else if (IsPlatformOnlyVisibleSearch(request) && !request.ExcludeSpecialTitles)
         {
@@ -1964,10 +1972,13 @@ public sealed partial class PostgresSnapshotStore(
             finalize.CommandTimeout = _persistence.CommandTimeoutSeconds;
             finalize.CommandText = """
                 with stats as (
-                    select count(*)::bigint as rows, max(observed_at) as generated_at from inventory_search_current
+                    select count(*)::bigint as rows,
+                           count(*) filter (where not is_special_title)::bigint as visible_rows,
+                           max(observed_at) as generated_at
+                    from inventory_search_current where is_active
                 )
                 update inventory_search_projection_state state
-                set is_ready = true, row_count = stats.rows, generated_at = stats.generated_at,
+                set is_ready = true, row_count = stats.rows, visible_row_count = stats.visible_rows, generated_at = stats.generated_at,
                     facets_refreshed_at = now(), updated_at = now()
                 from stats where state.projection_name = 'inventory-current-v1'
                 returning state.row_count, state.generated_at;
