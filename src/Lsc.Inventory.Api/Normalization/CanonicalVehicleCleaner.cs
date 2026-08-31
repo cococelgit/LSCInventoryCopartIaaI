@@ -55,7 +55,7 @@ public static partial class CanonicalVehicleCleaner
                     Label = Compact(vehicle.Condition.RunCondition.Label)
                 }
             },
-            Seller = vehicle.Seller is null ? null : vehicle.Seller with { Name = Compact(vehicle.Seller.Name), Type = Lower(vehicle.Seller.Type) },
+            Seller = NormalizeSeller(vehicle.Seller),
             SaleDocument = vehicle.SaleDocument is null ? null : vehicle.SaleDocument with { Name = Upper(vehicle.SaleDocument.Name) },
             Location = vehicle.Location is null ? null : vehicle.Location with
             {
@@ -86,6 +86,18 @@ public static partial class CanonicalVehicleCleaner
     }
 
     private static decimal? NonNegative(decimal? value) => value is >= 0 ? value : null;
+    private static AuctionSeller NormalizeSeller(AuctionSeller? seller)
+    {
+        var rawType = Compact(seller?.RawType ?? seller?.Type);
+        return new AuctionSeller
+        {
+            Name = Compact(seller?.Name),
+            RawType = rawType,
+            Type = SellerTaxonomy.Normalize(rawType),
+            Class = Compact(seller?.Class),
+            TextClass = Compact(seller?.TextClass)
+        };
+    }
     private static string? Lower(string? value) => Compact(value)?.ToLowerInvariant();
     private static string? Upper(string? value) => Compact(value)?.ToUpperInvariant();
     private static string? TitleCase(string? value)

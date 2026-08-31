@@ -248,6 +248,9 @@ public sealed record AuctionSeller
     [JsonPropertyName("name")]
     public string? Name { get; init; }
 
+    [JsonPropertyName("raw_type")]
+    public string? RawType { get; init; }
+
     [JsonPropertyName("type")]
     public string? Type { get; init; }
 

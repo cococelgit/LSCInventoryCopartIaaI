@@ -53,7 +53,7 @@ public static class AuctionVehicleMerger
     };
     private static AuctionSeller? MergeSeller(AuctionSeller? preferred, AuctionSeller? fallback) => preferred is null ? fallback : fallback is null ? preferred : preferred with
     {
-        Name = Text(preferred.Name, fallback.Name), Type = Text(preferred.Type, fallback.Type), Class = Text(preferred.Class, fallback.Class), TextClass = Text(preferred.TextClass, fallback.TextClass)
+        Name = Text(preferred.Name, fallback.Name), RawType = Text(preferred.RawType, fallback.RawType), Type = Text(preferred.Type, fallback.Type), Class = Text(preferred.Class, fallback.Class), TextClass = Text(preferred.TextClass, fallback.TextClass)
     };
     private static OdometerInfo? MergeOdometer(OdometerInfo? preferred, OdometerInfo? fallback) => preferred is null ? fallback : fallback is null ? preferred : preferred with
     {

@@ -1370,7 +1370,7 @@ public sealed partial class PostgresSnapshotStore(
             ["facilities"] = "latest.location_display",
             ["primaryDamages"] = "latest.damage",
             ["secondaryDamages"] = "latest.payload #>> '{Condition,SecondaryDamage}'",
-            ["sellerTypes"] = "latest.payload #>> '{Seller,Type}'",
+            ["sellerTypes"] = SqlSellerTypeExpression("latest"),
             ["engineLayouts"] = "latest.payload #>> '{VehicleSpecs,Engine,Layout}'",
             ["cylinders"] = "latest.payload #>> '{Details,VehicleDescription,Cylinders}'",
             ["transmissions"] = "latest.payload #>> '{Transmission}'",
@@ -1687,7 +1687,7 @@ public sealed partial class PostgresSnapshotStore(
             ["platforms"] = "current.platform", ["makes"] = "current.make", ["models"] = "current.model",
             ["vehicleTypes"] = "current.vehicle_type", ["titles"] = "current.title_type", ["states"] = "current.location_state",
             ["facilities"] = "current.location_display", ["primaryDamages"] = "current.primary_damage", ["secondaryDamages"] = "current.secondary_damage",
-            ["sellerTypes"] = "current.seller_type", ["engineLayouts"] = "current.engine_layout", ["cylinders"] = "current.cylinders",
+            ["sellerTypes"] = SqlSellerTypeExpression("current"), ["engineLayouts"] = "current.engine_layout", ["cylinders"] = "current.cylinders",
             ["transmissions"] = "current.transmission", ["fuels"] = "current.fuel_type", ["drives"] = "current.drive_type",
             ["bodyStyles"] = "current.body_style", ["colors"] = "current.color", ["lossTypes"] = "current.loss_type", ["startCodes"] = "current.start_code", ["runConditions"] = PublicRunConditionSql("current")
         };
@@ -1853,6 +1853,9 @@ public sealed partial class PostgresSnapshotStore(
 
     private static string PublicRunConditionSql(string alias) => $"case when lower({alias}.platform) <> 'copart' then 'UNVERIFIED' when upper(replace(coalesce({alias}.start_code, ''), '&', ' AND ')) like '%RUNS AND DRIVES%' then 'RUNS_AND_DRIVES' when upper(coalesce({alias}.start_code, '')) like '%START%' then 'STARTS' when upper(coalesce({alias}.start_code, '')) like '%STATIONARY%' then 'STATIONARY' else 'UNVERIFIED' end";
     private static string PublicRunConditionPayloadSql(string alias) => $"case when lower({alias}.platform) <> 'copart' then 'UNVERIFIED' when upper(replace(coalesce({alias}.payload #>> '{{Condition,RunCondition,Value}}', {alias}.payload #>> '{{Condition,RunCondition,Label}}', ''), '&', ' AND ')) like '%RUNS AND DRIVES%' then 'RUNS_AND_DRIVES' when upper(coalesce({alias}.payload #>> '{{Condition,RunCondition,Value}}', {alias}.payload #>> '{{Condition,RunCondition,Label}}', '')) like '%START%' then 'STARTS' when upper(coalesce({alias}.payload #>> '{{Condition,RunCondition,Value}}', {alias}.payload #>> '{{Condition,RunCondition,Label}}', '')) like '%STATIONARY%' then 'STATIONARY' else 'UNVERIFIED' end";
+    private static string SqlSellerTypeExpression(string alias) => SqlSellerTypeTaxonomy($"coalesce(nullif(btrim({alias}.seller_type), ''), nullif(btrim({alias}.payload #>> '{{Seller,Type}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,TextClass}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,Class}}'), ''))");
+    private static string SqlSellerTypePayloadExpression(string alias) => SqlSellerTypeTaxonomy($"coalesce(nullif(btrim({alias}.payload #>> '{{Seller,Type}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,TextClass}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,Class}}'), ''))");
+    private static string SqlSellerTypeTaxonomy(string source) => $"case when {source} is null then '{SellerTaxonomy.Unclassified}' when lower({source}) like '%insurance%' or lower({source}) like '%insurer%' or lower({source}) like '%casualty%' then '{SellerTaxonomy.Insurance}' when lower({source}) like '%dealer%' or lower({source}) like '%auto group%' or lower({source}) like '%motor group%' then '{SellerTaxonomy.Dealer}' when lower({source}) like '%repo%' or lower({source}) like '%bank%' or lower({source}) like '%credit union%' or lower({source}) like '%lender%' then '{SellerTaxonomy.RepossessionBank}' when lower({source}) like '%finance%' or lower({source}) like '%financial%' or lower({source}) like '%leasing%' then '{SellerTaxonomy.Finance}' when lower({source}) like '%rental%' or lower({source}) like '%fleet%' then '{SellerTaxonomy.RentalFleet}' when lower({source}) like '%government%' or lower({source}) like '%govt%' or lower({source}) like '%municipal%' or lower({source}) like '%county%' or lower({source}) like '%city%' then '{SellerTaxonomy.Government}' when lower({source}) in ('unknown', 'unavailable', 'no information', 'no info', 'not reported', 'n/a', 'na') then '{SellerTaxonomy.Unknown}' else '{SellerTaxonomy.Other}' end";
 
     private static void AddProjectionFilters(NpgsqlCommand command, InventorySearchRequest request, List<string> where)
     {
@@ -1881,7 +1884,7 @@ public sealed partial class PostgresSnapshotStore(
         AddAny("facilities", request.Facilities, "latest.location_display");
         AddAny("primary_damages", request.PrimaryDamages, "latest.primary_damage");
         AddAny("secondary_damages", request.SecondaryDamages, "latest.secondary_damage");
-        AddAny("seller_types", request.SellerTypes, "latest.seller_type");
+        AddAny("seller_types", request.SellerTypes, SqlSellerTypeExpression("latest"));
         AddAny("engine_layouts", request.EngineLayouts, "latest.engine_layout");
         AddAny("cylinders", request.Cylinders, "latest.cylinders");
         AddAny("transmissions", request.Transmissions, "latest.transmission");
@@ -1983,7 +1986,7 @@ public sealed partial class PostgresSnapshotStore(
                     coalesce(lots.drive_type, latest.payload #>> '{vehicle_specs,drive_type}'),
                     coalesce(latest.payload #>> '{vehicle_specs,body_style}', latest.payload #>> '{details,vehicle_description,BodyStyle}'),
                     coalesce(lots.damage, latest.payload #>> '{condition,primary_damage}'),
-                    latest.payload #>> '{condition,secondary_damage}', latest.payload #>> '{seller,type}',
+                    latest.payload #>> '{condition,secondary_damage}', {SqlSellerTypePayloadExpression("latest")},
                     latest.payload #>> '{vehicle_specs,engine,layout}', latest.payload #>> '{details,vehicle_description,Cylinders}',
                     latest.payload #>> '{condition,loss}', coalesce(latest.payload #>> '{condition,run_condition,value}', latest.payload #>> '{condition,run_condition,label}'),
                     lots.auction_state, lots.auction_at, lots.lot_status, lots.lot_sub_status, lots.location_display,
@@ -2151,7 +2154,7 @@ public sealed partial class PostgresSnapshotStore(
                     ('platforms', current.platform), ('makes', current.make), ('models', current.model),
                     ('vehicleTypes', current.vehicle_type), ('titles', current.title_type), ('states', current.location_state),
                     ('facilities', current.location_display), ('primaryDamages', current.primary_damage),
-                    ('secondaryDamages', current.secondary_damage), ('sellerTypes', current.seller_type),
+                    ('secondaryDamages', current.secondary_damage), ('sellerTypes', {SqlSellerTypeExpression("current")}),
                     ('engineLayouts', current.engine_layout), ('cylinders', current.cylinders),
                     ('transmissions', current.transmission), ('fuels', current.fuel_type), ('drives', current.drive_type),
                     ('bodyStyles', current.body_style), ('colors', current.color), ('lossTypes', current.loss_type),
@@ -2323,7 +2326,7 @@ public sealed partial class PostgresSnapshotStore(
         AddAny("facilities", request.Facilities, "latest.location_display");
         AddAny("primary_damages", request.PrimaryDamages, "latest.damage");
         AddAny("secondary_damages", request.SecondaryDamages, "latest.payload #>> '{Condition,SecondaryDamage}'");
-        AddAny("seller_types", request.SellerTypes, "latest.payload #>> '{Seller,Type}'");
+        AddAny("seller_types", request.SellerTypes, SqlSellerTypePayloadExpression("latest"));
         AddAny("engine_layouts", request.EngineLayouts, "latest.payload #>> '{VehicleSpecs,Engine,Layout}'");
         AddAny("cylinders", request.Cylinders, "latest.payload #>> '{Details,VehicleDescription,Cylinders}'");
         AddAny("transmissions", request.Transmissions, "latest.payload #>> '{Transmission}'");

@@ -263,7 +263,7 @@ static PublicInventoryVehicle ToPublicVehicle(
         Lane = sale?.Lane,
         Aisle = sale?.Aisle,
         SellerName = vehicle.Seller?.Name ?? sale?.Seller,
-        SellerType = vehicle.Seller?.Type ?? sale?.SellerType,
+        SellerType = SellerTaxonomy.Normalize(vehicle.Seller?.Type ?? sale?.SellerType),
         TitleType = vehicle.SaleDocument?.Name ?? (string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase) ? vehicle.Title : null),
         TitleCategory = titleTaxonomy.Category,
         TitleDisplayLabel = titleTaxonomy.DisplayLabel,
