@@ -40,4 +40,37 @@ public sealed class ListViewMediaLimitTests
         Assert.Single(vehicle.Photos);
         Assert.Single(vehicle.Media);
     }
+
+    [Fact]
+    public void Keeps_every_available_photo_when_browse_does_not_request_list_view()
+    {
+        var items = Enumerable.Range(1, 35)
+            .Select(index => new AuctionMediaItem
+            {
+                Large = $"https://vis.iaai.com/resizer?imageKeys={index}&width=640",
+                Type = "image"
+            })
+            .ToArray();
+        var snapshot = new StoredVehicleSnapshot(
+            "iaai:202",
+            DateTimeOffset.UtcNow,
+            new AuctionVehicle
+            {
+                Platform = "iaai",
+                LotNumber = "202",
+                Media = new MediaInfo { Items = items }
+            },
+            "{}");
+        var entryPoint = typeof(PostgresSnapshotStore).Assembly.GetType("Program");
+        var method = entryPoint?
+            .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+            .SingleOrDefault(candidate => candidate.Name.Contains("ToPublicVehicle", StringComparison.Ordinal));
+        Assert.NotNull(method);
+
+        var vehicle = method!.Invoke(null, [snapshot, null, null, null, null]) as PublicInventoryVehicle;
+
+        Assert.NotNull(vehicle);
+        Assert.Equal(35, vehicle.Photos.Count);
+        Assert.Equal(35, vehicle.Media.Count);
+    }
 }

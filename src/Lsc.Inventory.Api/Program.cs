@@ -157,38 +157,48 @@ static PublicInventoryVehicle ToPublicVehicle(
     Uri? requestBaseUri = null,
     string? mediaSigningToken = null,
     LscVehicleScoringResult? fullScoring = null,
-    int maxMediaItems = 20)
+    int? maxMediaItems = null)
 {
-    var publicMediaLimit = Math.Clamp(maxMediaItems, 1, 20);
+    var publicMediaLimit = maxMediaItems.HasValue ? Math.Clamp(maxMediaItems.Value, 1, 100) : (int?)null;
     var vehicle = snapshot.Vehicle;
     var platform = vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown";
     var lot = vehicle.LotNumber ?? snapshot.Identity;
-    var media = (vehicle.Media?.Items ?? Array.Empty<AuctionMediaItem>())
+    var mediaCandidates = (vehicle.Media?.Items ?? Array.Empty<AuctionMediaItem>())
         .Select(item => new { Url = SafePhotoUrl(item.Large) ?? SafePhotoUrl(item.Thumb), item.Type })
         .Where(item => item.Url is not null)
         .Select(item => new PublicMediaItem(item.Url!, item.Type))
-        .DistinctBy(item => item.Url)
-        .Take(publicMediaLimit)
-        .ToArray();
+        .DistinctBy(item => item.Url);
+    var media = (publicMediaLimit.HasValue ? mediaCandidates.Take(publicMediaLimit.Value) : mediaCandidates).ToArray();
     var photos = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase) && requestBaseUri is not null && !string.IsNullOrWhiteSpace(mediaSigningToken)
-        ? (vehicle.Media?.Photos ?? Array.Empty<string>())
+        ? (publicMediaLimit.HasValue
+            ? (vehicle.Media?.Photos ?? Array.Empty<string>())
+                .Select((source, index) => new { source, index })
+                .Where(item => IsApprovedCopartMediaUrl(item.source))
+                .Take(publicMediaLimit.Value)
+            : (vehicle.Media?.Photos ?? Array.Empty<string>())
             .Select((source, index) => new { source, index })
-            .Where(item => IsApprovedCopartMediaUrl(item.source))
+            .Where(item => IsApprovedCopartMediaUrl(item.source)))
             .Select(item =>
             {
                 var expires = DateTimeOffset.UtcNow.AddHours(24).ToUnixTimeSeconds();
                 var signature = CreateCopartMediaSignature(platform, lot, item.index, expires, mediaSigningToken!);
                 return new Uri(requestBaseUri, $"/api/v1/inventory/media/{Uri.EscapeDataString(platform)}/{Uri.EscapeDataString(lot)}/{item.index}?expires={expires}&sig={Uri.EscapeDataString(signature)}").ToString();
             })
-            .Take(publicMediaLimit)
             .ToArray()
-        : media.Select(item => item.Url)
+        : (publicMediaLimit.HasValue
+            ? media.Select(item => item.Url)
+                .Concat(vehicle.Media?.Photos ?? Array.Empty<string>())
+                .Select(SafePhotoUrl)
+                .Where(url => url is not null)
+                .Cast<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(publicMediaLimit.Value)
+            : media.Select(item => item.Url)
             .Concat(vehicle.Media?.Photos ?? Array.Empty<string>())
             .Select(SafePhotoUrl)
             .Where(url => url is not null)
             .Cast<string>()
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(publicMediaLimit)
+            .Distinct(StringComparer.OrdinalIgnoreCase))
             .ToArray();
     var publicMedia = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)
         ? photos.Select(url => new PublicMediaItem(url, "image")).ToArray()
@@ -530,7 +540,7 @@ app.MapGet("/api/v1/inventory/search", async (
             snapshot,
             PublicRequestUriResolver.Resolve(context.Request),
             inventoryReadToken,
-            maxMediaItems: listView == true ? 1 : 20)).ToArray()));
+            maxMediaItems: listView == true ? 1 : null)).ToArray()));
 });
 
 app.MapGet("/api/v1/inventory/summary", async (HttpContext context, IInventorySnapshotStore store, string[]? makes, CancellationToken cancellationToken) =>
