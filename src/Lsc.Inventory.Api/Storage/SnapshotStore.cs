@@ -27,6 +27,7 @@ public interface IInventorySnapshotStore
     Task<InventorySearchSummary> GetInventorySearchSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken);
     Task<InventorySearchProjectionStatus> GetSearchProjectionStatusAsync(CancellationToken cancellationToken);
     Task<CopartTitleTaxonomyCoverage> GetCopartTitleTaxonomyCoverageAsync(CancellationToken cancellationToken);
+    Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken);
     Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken);
     Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
@@ -229,6 +230,28 @@ public sealed record CopartTitleTaxonomyCoverage(
     decimal CoveragePercent,
     bool GateEligible,
     DateTimeOffset MeasuredAt);
+
+/// <summary>Read-only evidence for classifying seller metadata without exposing lot or VIN-level data.</summary>
+public sealed record SellerTaxonomyAudit(
+    long ActiveLots,
+    long ProjectionSellerTypePresent,
+    long SourceTypePresent,
+    long SellerNamePresent,
+    long SellerNamePresentSourceTypeMissing,
+    IReadOnlyList<SellerTaxonomyPlatformAudit> Platforms,
+    DateTimeOffset MeasuredAt);
+
+public sealed record SellerTaxonomyPlatformAudit(
+    string Platform,
+    long ActiveLots,
+    long ProjectionSellerTypePresent,
+    long SourceTypePresent,
+    long SellerNamePresent,
+    long SellerNamePresentSourceTypeMissing,
+    IReadOnlyList<InventoryFacetValue> SourceTypes,
+    IReadOnlyList<InventoryFacetValue> SourceClasses,
+    IReadOnlyList<InventoryFacetValue> SourceTextClasses,
+    IReadOnlyList<InventoryFacetValue> TopSellerNamesMissingSourceType);
 
 public sealed record InventorySearchPage(
     int Page,
@@ -831,6 +854,51 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         };
         var generatedAt = snapshots.Length == 0 ? DateTimeOffset.UtcNow : snapshots.Max(snapshot => snapshot.ObservedAt);
         return Task.FromResult(new InventorySearchSummary(snapshots.Length, generatedAt, facets));
+    }
+
+    public Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var active = _snapshots.Values
+            .Where(snapshot => !_lifecycle.TryGetValue(snapshot.Identity, out var lifecycle) || lifecycle.Active)
+            .ToArray();
+        static IReadOnlyList<InventoryFacetValue> Count(IEnumerable<string?> values) => values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new InventoryFacetValue(group.First(), group.Count()))
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Value, StringComparer.OrdinalIgnoreCase)
+            .Take(100)
+            .ToArray();
+        var platforms = active
+            .GroupBy(snapshot => snapshot.Vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var rows = group.ToArray();
+                var typed = rows.Where(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Type)).ToArray();
+                return new SellerTaxonomyPlatformAudit(
+                    group.Key,
+                    rows.LongLength,
+                    typed.LongLength,
+                    typed.LongLength,
+                    rows.LongCount(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Name)),
+                    rows.LongCount(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Name) && string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Type)),
+                    Count(rows.Select(row => row.Vehicle.Seller?.Type)),
+                    Count(rows.Select(row => row.Vehicle.Seller?.Class)),
+                    Count(rows.Select(row => row.Vehicle.Seller?.TextClass)),
+                    Count(rows.Where(row => string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Type)).Select(row => row.Vehicle.Seller?.Name)));
+            })
+            .ToArray();
+        return Task.FromResult(new SellerTaxonomyAudit(
+            active.LongLength,
+            active.LongCount(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Type)),
+            active.LongCount(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Type)),
+            active.LongCount(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Name)),
+            active.LongCount(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Name) && string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Type)),
+            platforms,
+            DateTimeOffset.UtcNow));
     }
 
     public Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken)

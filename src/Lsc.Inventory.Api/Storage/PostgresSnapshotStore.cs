@@ -1725,6 +1725,91 @@ public sealed partial class PostgresSnapshotStore(
         return new InventorySearchSummary((int)Math.Min(int.MaxValue, total), generatedAt, facets);
     }
 
+    public async Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken)
+    {
+        await EnsureSearchProjectionSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        const string sourceType = "coalesce(nullif(btrim(current.payload #>> '{Seller,Type}'), ''), nullif(btrim(current.payload #>> '{Details,SaleInformation,SellerType}'), ''))";
+        const string sourceClass = "nullif(btrim(current.payload #>> '{Seller,Class}'), '')";
+        const string sourceTextClass = "nullif(btrim(current.payload #>> '{Seller,TextClass}'), '')";
+        const string sellerName = "coalesce(nullif(btrim(current.payload #>> '{Seller,Name}'), ''), nullif(btrim(current.payload #>> '{Details,SaleInformation,Seller}'), ''))";
+        const string source = $"from inventory_search_current current left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = current.lot_key where {ActiveLifecyclePredicate}";
+
+        var summaries = new Dictionary<string, (long Active, long ProjectionType, long SourceType, long Name, long NameMissingType)>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = $"""
+                select coalesce(nullif(btrim(current.platform), ''), 'unknown') as platform,
+                       count(*)::bigint as active_lots,
+                       count(*) filter (where nullif(btrim(current.seller_type), '') is not null)::bigint as projection_seller_type_present,
+                       count(*) filter (where {sourceType} is not null)::bigint as source_type_present,
+                       count(*) filter (where {sellerName} is not null)::bigint as seller_name_present,
+                       count(*) filter (where {sellerName} is not null and {sourceType} is null)::bigint as seller_name_present_source_type_missing
+                {source}
+                group by platform
+                order by platform asc;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                summaries[reader.GetString(0)] = (reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt64(5));
+        }
+
+        async Task<IReadOnlyDictionary<string, IReadOnlyList<InventoryFacetValue>>> ReadFacetAsync(string expression, bool onlyMissingSourceType = false)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            var missingSourceType = onlyMissingSourceType ? $" and {sourceType} is null" : string.Empty;
+            command.CommandText = $"""
+                select coalesce(nullif(btrim(current.platform), ''), 'unknown') as platform,
+                       {expression} as value,
+                       count(*)::int as vehicle_count
+                {source}
+                  and {expression} is not null{missingSourceType}
+                group by platform, value
+                order by platform asc, vehicle_count desc, value asc
+                limit 200;
+                """;
+            var values = new Dictionary<string, List<InventoryFacetValue>>(StringComparer.OrdinalIgnoreCase);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var platform = reader.GetString(0);
+                if (!values.TryGetValue(platform, out var items)) values[platform] = items = [];
+                items.Add(new InventoryFacetValue(reader.GetString(1), reader.GetInt32(2)));
+            }
+            return values.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<InventoryFacetValue>)pair.Value, StringComparer.OrdinalIgnoreCase);
+        }
+
+        var sourceTypes = await ReadFacetAsync(sourceType);
+        var sourceClasses = await ReadFacetAsync(sourceClass);
+        var sourceTextClasses = await ReadFacetAsync(sourceTextClass);
+        var missingTypeNames = await ReadFacetAsync(sellerName, onlyMissingSourceType: true);
+        var platforms = summaries
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => new SellerTaxonomyPlatformAudit(
+                pair.Key,
+                pair.Value.Active,
+                pair.Value.ProjectionType,
+                pair.Value.SourceType,
+                pair.Value.Name,
+                pair.Value.NameMissingType,
+                sourceTypes.GetValueOrDefault(pair.Key, []),
+                sourceClasses.GetValueOrDefault(pair.Key, []),
+                sourceTextClasses.GetValueOrDefault(pair.Key, []),
+                missingTypeNames.GetValueOrDefault(pair.Key, [])))
+            .ToArray();
+        return new SellerTaxonomyAudit(
+            platforms.Sum(platform => platform.ActiveLots),
+            platforms.Sum(platform => platform.ProjectionSellerTypePresent),
+            platforms.Sum(platform => platform.SourceTypePresent),
+            platforms.Sum(platform => platform.SellerNamePresent),
+            platforms.Sum(platform => platform.SellerNamePresentSourceTypeMissing),
+            platforms,
+            DateTimeOffset.UtcNow);
+    }
+
     private static bool IsDefaultVisibleSearch(InventorySearchRequest request)
     {
         static bool Empty(IReadOnlyCollection<string>? values) => values is null || values.Count == 0;

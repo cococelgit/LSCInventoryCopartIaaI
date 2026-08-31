@@ -403,6 +403,12 @@ app.MapGet("/api/v1/inventory/title-taxonomy/status", async (HttpContext context
     return Results.Ok(await store.GetCopartTitleTaxonomyCoverageAsync(cancellationToken));
 });
 
+app.MapGet("/api/v1/inventory/seller-taxonomy/audit", async (HttpContext context, IInventorySnapshotStore store, CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    return Results.Ok(await store.GetSellerTaxonomyAuditAsync(cancellationToken));
+});
+
 app.MapGet("/api/v1/inventory/recent", async (HttpContext context, IInventorySnapshotStore store, int? take, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
