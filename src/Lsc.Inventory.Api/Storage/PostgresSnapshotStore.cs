@@ -51,6 +51,12 @@ public sealed partial class PostgresSnapshotStore(
         ManagedIdentityClientId = persistenceOptions.Value.ManagedIdentityClientId
     });
 
+    private static JsonSerializerOptions CreateStoredVehicleJsonOptions() => new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString
+    };
+
     public async Task BootstrapRuntimePrincipalAsync(CancellationToken cancellationToken)
     {
         await using (var administrativeConnection = await OpenConnectionAsync("postgres", cancellationToken))
@@ -2309,11 +2315,7 @@ public sealed partial class PostgresSnapshotStore(
     {
         var snapshots = new List<StoredVehicleSnapshot>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            PropertyNameCaseInsensitive = true,
-            NumberHandling = JsonNumberHandling.AllowReadingFromString
-        };
+        var jsonOptions = CreateStoredVehicleJsonOptions();
         while (await reader.ReadAsync(cancellationToken))
         {
             var rawJson = reader.GetString(2);

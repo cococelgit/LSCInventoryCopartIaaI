@@ -24,12 +24,19 @@ public sealed class InventoryScoringProcessorTests
         Assert.Equal(1, first.Completed);
         Assert.Equal(1, first.Batches);
         Assert.Equal(0, first.Failed);
+        Assert.NotEqual(Guid.Empty, first.RunId);
+        Assert.Equal(1, first.HighPriorityClaimed);
         Assert.Equal(1, status.Completed);
         Assert.Equal(0, status.Queued);
         Assert.NotNull(score);
         Assert.Equal("PRE_GRADED", score!.Status);
         Assert.Equal(0, second.Completed);
         Assert.Equal(1, second.Backfill.AlreadyCurrent);
+        var runs = await store.GetRecentScoringRunsAsync(10, CancellationToken.None);
+        var firstRun = Assert.Single(runs.Where(run => run.RunId == first.RunId));
+        Assert.Equal("completed", firstRun.Status);
+        Assert.Equal("manual-api", firstRun.Trigger);
+        Assert.Equal(1, firstRun.Completed);
     }
 
     [Fact]

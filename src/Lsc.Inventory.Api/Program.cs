@@ -695,10 +695,16 @@ app.MapGet("/internal/scoring/status", async (HttpContext context, IInventorySna
     return Results.Ok(await store.GetScoringOperationalStatusAsync(cancellationToken));
 });
 
+app.MapGet("/internal/scoring/runs", async (HttpContext context, IInventorySnapshotStore store, int? take, CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    return Results.Ok(await store.GetRecentScoringRunsAsync(take ?? 20, cancellationToken));
+});
+
 app.MapPost("/internal/scoring/backfill", async (HttpContext context, IInventoryScoringProcessor processor, int? maximum, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
-    return Results.Ok(await processor.RunBackfillAsync(maximum, cancellationToken));
+    return Results.Ok(await processor.RunBackfillAsync(maximum, cancellationToken, "manual-api"));
 });
 
 app.MapPost("/internal/scoring/process", async (HttpContext context, IInventoryScoringProcessor processor, int? maximum, CancellationToken cancellationToken) =>
@@ -851,7 +857,7 @@ if (args.Contains("--scoring-backfill", StringComparer.OrdinalIgnoreCase)
 {
     await using var scope = app.Services.CreateAsyncScope();
     var processor = scope.ServiceProvider.GetRequiredService<IInventoryScoringProcessor>();
-    var result = await processor.RunBackfillAsync(null, CancellationToken.None);
+    var result = await processor.RunBackfillAsync(null, CancellationToken.None, "scheduled-azure-job");
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
     if (result.Failed > 0) Environment.ExitCode = 1;
     return;
