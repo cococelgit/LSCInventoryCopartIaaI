@@ -7,10 +7,12 @@
   "variables": {
     "identityName": "uai-lsc-inventory-release-afaac3d",
     "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "apiRuntimeIdentityName": "id-lsc-inventory-db-runtime-prod",
+    "apiRuntimeIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('apiRuntimeIdentityName'))]",
     "redisName": "lsc-inventory-facets-redis",
     "redisDatabaseName": "default",
     "scriptName": "deploy-redis-api-r63-20260831-facets-v2",
-    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/a9dd0d106bae2957ccef1a5e1969101eb8686935/infra/release-assets/r63-facets-v2-redis-shared-cache/federated-deploy-api-redis-r63.sh"
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/6339bdf76d784861a40fc67dba403d305d74910f/infra/release-assets/r63-facets-v2-redis-shared-cache/federated-deploy-api-redis-r63.sh"
   },
   "resources": [
     {
@@ -58,7 +60,7 @@
         "accessPolicyName": "default",
         "accessString": "+@read +@write ~lsc:facets:v2:*",
         "user": {
-          "objectId": "[reference(variables('identityResourceId'), '2018-11-30').principalId]"
+          "objectId": "[reference(variables('apiRuntimeIdentityResourceId'), '2018-11-30').principalId]"
         }
       }
     },
@@ -76,7 +78,7 @@
         "[resourceId('Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments', variables('redisName'), variables('redisDatabaseName'), 'lscfacets')]"
       ],
       "properties": {
-        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v8",
+        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v9",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT45M",
@@ -101,6 +103,6 @@
     "migrationsEnabled": { "type": "bool", "value": false },
     "facetIndexMigrationStarted": { "type": "bool", "value": false },
     "projectionRebuildStarted": { "type": "bool", "value": false },
-    "scriptSha256": { "type": "string", "value": "9ff25cc96761cdaaccfcf958c12d3ddb55f4a76b96665d5b192caf34885de77b" }
+    "scriptSha256": { "type": "string", "value": "aae54d4e2c73a3cf3f6796b6ddb9fe13d22ef99457466cc9d00fe2497bc5f723" }
   }
 }
