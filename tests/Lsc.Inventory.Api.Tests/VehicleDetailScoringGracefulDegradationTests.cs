@@ -10,6 +10,7 @@ public sealed class VehicleDetailScoringGracefulDegradationTests
         var source = File.ReadAllText(FindRepositoryFile("Program.cs"));
 
         Assert.Contains("Serving active vehicle detail without full scoring after scoring lookup failed", source, StringComparison.Ordinal);
+        Assert.Contains("Serving active vehicle detail without full scoring after public scoring mapping failed", source, StringComparison.Ordinal);
         Assert.Contains("LscVehicleScoringResult? scoring = null;", source, StringComparison.Ordinal);
         Assert.Contains("full?.Factors?.Select", source, StringComparison.Ordinal);
         Assert.Contains("full?.Penalties?.Select", source, StringComparison.Ordinal);

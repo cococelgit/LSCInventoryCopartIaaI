@@ -586,7 +586,19 @@ app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInven
                 normalizedPlatform ?? "any",
                 lot);
     }
-    return Results.Ok(ToPublicVehicle(snapshot, PublicRequestUriResolver.Resolve(context.Request), inventoryReadToken, scoring));
+    try
+    {
+        return Results.Ok(ToPublicVehicle(snapshot, PublicRequestUriResolver.Resolve(context.Request), inventoryReadToken, scoring));
+    }
+    catch (Exception exception)
+    {
+        loggerFactory.CreateLogger("InventoryVehicleDetail")
+            .LogWarning(exception,
+                "Serving active vehicle detail without full scoring after public scoring mapping failed. Platform: {Platform}; Lot: {Lot}.",
+                normalizedPlatform ?? "any",
+                lot);
+        return Results.Ok(ToPublicVehicle(snapshot, PublicRequestUriResolver.Resolve(context.Request), inventoryReadToken));
+    }
 });
 
 app.MapGet("/api/v1/inventory/media/{platform}/{lot}/{photoIndex:int}", async (
