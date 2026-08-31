@@ -7,10 +7,11 @@
   "variables": {
     "identityName": "uai-lsc-inventory-release-afaac3d",
     "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "apiIdentityPrincipalId": "[reference(variables('identityResourceId'), '2018-11-30').properties.principalId]",
     "redisName": "lsc-inventory-facets-redis",
     "redisDatabaseName": "default",
     "scriptName": "deploy-redis-api-r63-20260831-facets-v2",
-    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/manus/api-r63-facets-redis-shared-cache/infra/release-assets/r63-facets-v2-redis-shared-cache/federated-deploy-api-redis-r63.sh"
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/a9dd0d106bae2957ccef1a5e1969101eb8686935/infra/release-assets/r63-facets-v2-redis-shared-cache/federated-deploy-api-redis-r63.sh"
   },
   "resources": [
     {
@@ -48,6 +49,20 @@
       }
     },
     {
+      "type": "Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments",
+      "apiVersion": "2025-07-01",
+      "name": "[format('{0}/{1}/lscfacets', variables('redisName'), variables('redisDatabaseName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Cache/redisEnterprise/databases', variables('redisName'), variables('redisDatabaseName'))]"
+      ],
+      "properties": {
+        "accessString": "+@read +@write ~lsc:facets:v2:*",
+        "user": {
+          "objectId": "[variables('apiIdentityPrincipalId')]"
+        }
+      }
+    },
+    {
       "type": "Microsoft.Resources/deploymentScripts",
       "apiVersion": "2023-08-01",
       "name": "[variables('scriptName')]",
@@ -58,10 +73,10 @@
         "userAssignedIdentities": { "[variables('identityResourceId')]": {} }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Cache/redisEnterprise/databases', variables('redisName'), variables('redisDatabaseName'))]"
+        "[resourceId('Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments', variables('redisName'), variables('redisDatabaseName'), 'lscfacets')]"
       ],
       "properties": {
-        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v2",
+        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v4",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT45M",
@@ -86,6 +101,6 @@
     "migrationsEnabled": { "type": "bool", "value": false },
     "facetIndexMigrationStarted": { "type": "bool", "value": false },
     "projectionRebuildStarted": { "type": "bool", "value": false },
-    "scriptSha256": { "type": "string", "value": "b8473024fc3635127a5b1186dd8461ced28eed15b1eeebf03b441620bfcc780c" }
+    "scriptSha256": { "type": "string", "value": "9ff25cc96761cdaaccfcf958c12d3ddb55f4a76b96665d5b192caf34885de77b" }
   }
 }
