@@ -561,6 +561,138 @@ app.MapGet("/api/v1/inventory/summary", async (HttpContext context, IInventorySn
         summary.Facets));
 });
 
+app.MapGet("/api/v1/inventory/facets-v2", async (
+    HttpContext context,
+    IInventorySnapshotStore store,
+    string[]? requestedFacets,
+    string? query,
+    string? platform,
+    string[]? makes,
+    string[]? models,
+    string[]? vehicleTypes,
+    string[]? titles,
+    string[]? titleCategories,
+    bool? excludeSpecialTitles,
+    string[]? states,
+    string[]? facilities,
+    string[]? primaryDamages,
+    string[]? secondaryDamages,
+    string[]? sellerTypes,
+    string[]? engineLayouts,
+    string[]? cylinders,
+    int? yearFrom,
+    int? yearTo,
+    decimal? odometerFrom,
+    decimal? odometerTo,
+    decimal? priceFrom,
+    decimal? priceTo,
+    decimal? maxBid,
+    DateTimeOffset? auctionFrom,
+    DateTimeOffset? auctionTo,
+    bool? buyNowOnly,
+    string[]? transmissions,
+    string[]? fuels,
+    string[]? drives,
+    string[]? bodyStyles,
+    string[]? colors,
+    string[]? lossTypes,
+    string[]? startCodes,
+    string[]? runConditions,
+    bool? withPhotosOnly,
+    string? auctionStatus,
+    bool? withBidOnly,
+    string? keyMode,
+    decimal? providerEstimateFrom,
+    decimal? providerEstimateTo,
+    decimal? engineSizeFrom,
+    decimal? engineSizeTo,
+    decimal? horsepowerFrom,
+    decimal? horsepowerTo,
+    decimal? preGradeFrom,
+    string[]? scoringStatuses,
+    CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    if (titleCategories is { Length: > 0 })
+    {
+        if (!titleTaxonomyFacetsEnabled)
+            return Results.Problem("La taxonomía normalizada de títulos Copart aún no está habilitada; falta validar la cobertura del backfill.", statusCode: StatusCodes.Status503ServiceUnavailable, title: "Taxonomía de títulos pendiente de validación");
+        var coverage = await store.GetCopartTitleTaxonomyCoverageAsync(cancellationToken);
+        if (!coverage.GateEligible)
+            return Results.Problem($"La cobertura validada de títulos Copart es {coverage.CoveragePercent:0.##}%; se requiere al menos 95%.", statusCode: StatusCodes.Status503ServiceUnavailable, title: "Cobertura de taxonomía insuficiente");
+    }
+
+    static string[]? NormalizeFacetValues(string[]? values) => values?
+        .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    try
+    {
+        var filters = new InventorySearchRequest(
+            1,
+            1,
+            query,
+            platform,
+            null,
+            NormalizeFacetValues(makes),
+            NormalizeFacetValues(models),
+            NormalizeFacetValues(vehicleTypes),
+            NormalizeFacetValues(titles),
+            NormalizeFacetValues(states),
+            NormalizeFacetValues(facilities),
+            NormalizeFacetValues(primaryDamages),
+            NormalizeFacetValues(secondaryDamages),
+            NormalizeFacetValues(sellerTypes),
+            NormalizeFacetValues(engineLayouts),
+            NormalizeFacetValues(cylinders),
+            yearFrom,
+            yearTo,
+            odometerFrom,
+            odometerTo,
+            priceFrom,
+            priceTo,
+            auctionFrom,
+            auctionTo,
+            buyNowOnly,
+            NormalizeFacetValues(transmissions),
+            NormalizeFacetValues(fuels),
+            NormalizeFacetValues(drives),
+            NormalizeFacetValues(bodyStyles),
+            NormalizeFacetValues(colors),
+            NormalizeFacetValues(lossTypes),
+            NormalizeFacetValues(startCodes),
+            NormalizeFacetValues(runConditions),
+            withPhotosOnly,
+            auctionStatus,
+            withBidOnly,
+            keyMode,
+            providerEstimateFrom,
+            providerEstimateTo,
+            engineSizeFrom,
+            engineSizeTo,
+            horsepowerFrom,
+            horsepowerTo,
+            maxBid,
+            excludeSpecialTitles == true,
+            preGradeFrom,
+            NormalizeFacetValues(scoringStatuses),
+            NormalizeFacetValues(titleCategories));
+        var response = await store.GetInventoryFacetsV2Async(
+            new InventoryFacetsV2Request(filters, NormalizeFacetValues(requestedFacets)),
+            cancellationToken);
+        return Results.Ok(response);
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.Problem(exception.Message, statusCode: StatusCodes.Status503ServiceUnavailable, title: "Facets V2 no disponible");
+    }
+});
+
 app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInventorySnapshotStore store, ILoggerFactory loggerFactory, string lot, string? platform, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();

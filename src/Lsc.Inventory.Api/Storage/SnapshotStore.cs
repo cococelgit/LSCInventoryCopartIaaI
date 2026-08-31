@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Globalization;
+using System.Diagnostics;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Normalization;
@@ -25,6 +26,7 @@ public interface IInventorySnapshotStore
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<InventorySearchPage> SearchAsync(InventorySearchRequest request, CancellationToken cancellationToken);
     Task<InventorySearchSummary> GetInventorySearchSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken);
+    Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken);
     Task<InventorySearchProjectionStatus> GetSearchProjectionStatusAsync(CancellationToken cancellationToken);
     Task<CopartTitleTaxonomyCoverage> GetCopartTitleTaxonomyCoverageAsync(CancellationToken cancellationToken);
     Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken);
@@ -266,6 +268,34 @@ public sealed record InventorySearchSummary(
     int Total,
     DateTimeOffset GeneratedAt,
     IReadOnlyDictionary<string, IReadOnlyList<InventoryFacetValue>> Facets);
+
+public sealed record InventoryFacetsV2Request(
+    InventorySearchRequest Filters,
+    IReadOnlyCollection<string>? RequestedFacets = null);
+
+public sealed record InventoryNumericFacetRange(decimal? Min, decimal? Max);
+
+public sealed record InventoryDateFacetRange(DateTimeOffset? Min, DateTimeOffset? Max);
+
+public sealed record InventoryFacetsV2Ranges(
+    InventoryNumericFacetRange? Year = null,
+    InventoryNumericFacetRange? Odometer = null,
+    InventoryNumericFacetRange? CurrentBid = null,
+    InventoryNumericFacetRange? ProviderEstimate = null,
+    InventoryDateFacetRange? AuctionDate = null,
+    InventoryNumericFacetRange? EngineSize = null,
+    InventoryNumericFacetRange? Horsepower = null,
+    InventoryNumericFacetRange? PreGrade = null);
+
+public sealed record InventoryFacetsV2Response(
+    int Total,
+    DateTimeOffset AsOf,
+    string SourceVersion,
+    long DurationMs,
+    string Cache,
+    IReadOnlyDictionary<string, IReadOnlyList<InventoryFacetValue>> Facets,
+    InventoryFacetsV2Ranges Ranges,
+    IReadOnlyList<string> Warnings);
 
 public sealed record InventorySampleLot(
     string LotKey,
@@ -854,6 +884,181 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         };
         var generatedAt = snapshots.Length == 0 ? DateTimeOffset.UtcNow : snapshots.Max(snapshot => snapshot.ObservedAt);
         return Task.FromResult(new InventorySearchSummary(snapshots.Length, generatedAt, facets));
+    }
+
+    public Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var started = Stopwatch.GetTimestamp();
+        var requested = InventoryFacetsV2Groups.NormalizeRequested(request.RequestedFacets);
+        var filters = request.Filters with
+        {
+            Page = 1,
+            PageSize = 1,
+            Sort = null,
+            Titles = InventoryFacetsV2Fingerprint.Merge(request.Filters.Titles, request.Filters.TitleCategories),
+            TitleCategories = null
+        };
+        var active = _snapshots.Values
+            .Where(snapshot => !_lifecycle.TryGetValue(snapshot.Identity, out var lifecycle) || lifecycle.Active)
+            .Select(AttachScoring)
+            .ToArray();
+        var total = active.Count(snapshot => Matches(snapshot, filters) && MatchesScoring(snapshot.Identity, filters));
+        var facets = new Dictionary<string, IReadOnlyList<InventoryFacetValue>>(StringComparer.OrdinalIgnoreCase);
+        var ranges = new Dictionary<string, InventoryNumericFacetRange>(StringComparer.OrdinalIgnoreCase);
+        InventoryDateFacetRange? auctionDate = null;
+
+        foreach (var group in requested)
+        {
+            var groupFilters = WithoutFacetsV2Group(filters, group);
+            var rows = active
+                .Where(snapshot => Matches(snapshot, groupFilters) && MatchesScoring(snapshot.Identity, groupFilters))
+                .ToArray();
+            if (InventoryFacetsV2Groups.Categorical.Contains(group))
+            {
+                var values = rows
+                    .Select(snapshot => FacetsV2Value(snapshot, group))
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value!.Trim())
+                    .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+                    .Select(valuesGroup => new InventoryFacetValue(valuesGroup.First(), valuesGroup.Count()))
+                    .OrderByDescending(item => item.Count)
+                    .ThenBy(item => item.Value, StringComparer.OrdinalIgnoreCase)
+                    .Take(250)
+                    .ToList();
+                foreach (var selected in InventoryFacetsV2Selections.Get(filters, group))
+                {
+                    if (!values.Any(value => string.Equals(value.Value, selected, StringComparison.OrdinalIgnoreCase)))
+                        values.Add(new InventoryFacetValue(selected, 0));
+                }
+                facets[group] = values;
+                continue;
+            }
+
+            if (string.Equals(group, InventoryFacetsV2Groups.AuctionDate, StringComparison.OrdinalIgnoreCase))
+            {
+                var values = rows.Select(snapshot => snapshot.Vehicle.Auction?.AuctionAt).Where(value => value.HasValue).Select(value => value!.Value).ToArray();
+                auctionDate = values.Length == 0 ? new InventoryDateFacetRange(null, null) : new InventoryDateFacetRange(values.Min(), values.Max());
+                continue;
+            }
+
+            var numeric = rows.Select(snapshot => FacetsV2NumericValue(snapshot, group)).Where(value => value.HasValue).Select(value => value!.Value).ToArray();
+            ranges[group] = numeric.Length == 0
+                ? new InventoryNumericFacetRange(null, null)
+                : new InventoryNumericFacetRange(numeric.Min(), numeric.Max());
+        }
+
+        var asOf = active.Length == 0 ? DateTimeOffset.UtcNow : active.Max(snapshot => snapshot.ObservedAt);
+        var sourceVersion = $"inventory-current-v1:{active.Length}:{asOf.UtcTicks}";
+        return Task.FromResult(new InventoryFacetsV2Response(
+            total,
+            asOf,
+            sourceVersion,
+            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+            "miss",
+            facets,
+            new InventoryFacetsV2Ranges(
+                ranges.GetValueOrDefault(InventoryFacetsV2Groups.Year),
+                ranges.GetValueOrDefault(InventoryFacetsV2Groups.Odometer),
+                ranges.GetValueOrDefault(InventoryFacetsV2Groups.CurrentBid),
+                ranges.GetValueOrDefault(InventoryFacetsV2Groups.ProviderEstimate),
+                auctionDate,
+                ranges.GetValueOrDefault(InventoryFacetsV2Groups.EngineSize),
+                ranges.GetValueOrDefault(InventoryFacetsV2Groups.Horsepower),
+                ranges.GetValueOrDefault(InventoryFacetsV2Groups.PreGrade)),
+            []));
+    }
+
+    private static InventorySearchRequest WithoutFacetsV2Group(InventorySearchRequest request, string group) => group switch
+    {
+        InventoryFacetsV2Groups.Platforms => request with { Platform = null },
+        InventoryFacetsV2Groups.Makes => request with { Makes = null },
+        InventoryFacetsV2Groups.Models => request with { Models = null },
+        InventoryFacetsV2Groups.VehicleTypes => request with { VehicleTypes = null },
+        InventoryFacetsV2Groups.Titles => request with { Titles = null, TitleCategories = null },
+        InventoryFacetsV2Groups.States => request with { States = null },
+        InventoryFacetsV2Groups.Facilities => request with { Facilities = null },
+        InventoryFacetsV2Groups.PrimaryDamages => request with { PrimaryDamages = null },
+        InventoryFacetsV2Groups.SecondaryDamages => request with { SecondaryDamages = null },
+        InventoryFacetsV2Groups.SellerTypes => request with { SellerTypes = null },
+        InventoryFacetsV2Groups.EngineLayouts => request with { EngineLayouts = null },
+        InventoryFacetsV2Groups.Cylinders => request with { Cylinders = null },
+        InventoryFacetsV2Groups.Transmissions => request with { Transmissions = null },
+        InventoryFacetsV2Groups.Fuels => request with { Fuels = null },
+        InventoryFacetsV2Groups.Drives => request with { Drives = null },
+        InventoryFacetsV2Groups.BodyStyles => request with { BodyStyles = null },
+        InventoryFacetsV2Groups.Colors => request with { Colors = null },
+        InventoryFacetsV2Groups.LossTypes => request with { LossTypes = null },
+        InventoryFacetsV2Groups.StartCodes => request with { StartCodes = null },
+        InventoryFacetsV2Groups.RunConditions => request with { RunConditions = null },
+        InventoryFacetsV2Groups.ScoringStatuses => request with { ScoringStatuses = null },
+        InventoryFacetsV2Groups.Year => request with { YearFrom = null, YearTo = null },
+        InventoryFacetsV2Groups.Odometer => request with { OdometerFrom = null, OdometerTo = null },
+        InventoryFacetsV2Groups.CurrentBid => request with { PriceFrom = null, PriceTo = null, MaxCurrentBid = null },
+        InventoryFacetsV2Groups.ProviderEstimate => request with { ProviderEstimateFrom = null, ProviderEstimateTo = null },
+        InventoryFacetsV2Groups.AuctionDate => request with { AuctionFrom = null, AuctionTo = null },
+        InventoryFacetsV2Groups.EngineSize => request with { EngineSizeFrom = null, EngineSizeTo = null },
+        InventoryFacetsV2Groups.Horsepower => request with { HorsepowerFrom = null, HorsepowerTo = null },
+        InventoryFacetsV2Groups.PreGrade => request with { PreGradeFrom = null },
+        _ => request
+    };
+
+    private static string? FacetsV2Value(StoredVehicleSnapshot snapshot, string group)
+    {
+        var vehicle = snapshot.Vehicle;
+        return group switch
+        {
+            InventoryFacetsV2Groups.Platforms => vehicle.Platform,
+            InventoryFacetsV2Groups.Makes => vehicle.Make,
+            InventoryFacetsV2Groups.Models => vehicle.Model,
+            InventoryFacetsV2Groups.VehicleTypes => vehicle.VehicleType,
+            InventoryFacetsV2Groups.Titles => TitleFacetCategory.Classify(vehicle),
+            InventoryFacetsV2Groups.States => vehicle.Location?.State,
+            InventoryFacetsV2Groups.Facilities => vehicle.Location?.Display,
+            InventoryFacetsV2Groups.PrimaryDamages => vehicle.Damage ?? vehicle.Condition?.PrimaryDamage,
+            InventoryFacetsV2Groups.SecondaryDamages => vehicle.Condition?.SecondaryDamage,
+            InventoryFacetsV2Groups.SellerTypes => SellerTaxonomy.Normalize(vehicle.Seller?.Type),
+            InventoryFacetsV2Groups.EngineLayouts => vehicle.VehicleSpecs?.Engine?.Layout,
+            InventoryFacetsV2Groups.Cylinders => vehicle.Details?.VehicleDescription?.Cylinders,
+            InventoryFacetsV2Groups.Transmissions => vehicle.Transmission ?? vehicle.VehicleSpecs?.Transmission,
+            InventoryFacetsV2Groups.Fuels => vehicle.FuelType ?? vehicle.VehicleSpecs?.FuelType,
+            InventoryFacetsV2Groups.Drives => vehicle.DriveType ?? vehicle.VehicleSpecs?.DriveType,
+            InventoryFacetsV2Groups.BodyStyles => vehicle.VehicleSpecs?.BodyStyle ?? vehicle.Details?.VehicleDescription?.BodyStyle,
+            InventoryFacetsV2Groups.Colors => vehicle.Color ?? vehicle.VehicleSpecs?.ExteriorColor,
+            InventoryFacetsV2Groups.LossTypes => vehicle.Condition?.Loss,
+            InventoryFacetsV2Groups.StartCodes => vehicle.Condition?.RunCondition?.Value,
+            InventoryFacetsV2Groups.RunConditions => NormalizeFacetsV2RunCondition(vehicle),
+            InventoryFacetsV2Groups.ScoringStatuses => snapshot.Scoring?.Status,
+            _ => null
+        };
+    }
+
+    private static decimal? FacetsV2NumericValue(StoredVehicleSnapshot snapshot, string group)
+    {
+        var vehicle = snapshot.Vehicle;
+        return group switch
+        {
+            InventoryFacetsV2Groups.Year => vehicle.Year,
+            InventoryFacetsV2Groups.Odometer => vehicle.Odometer,
+            InventoryFacetsV2Groups.CurrentBid => vehicle.Pricing?.CurrentBidUsd,
+            InventoryFacetsV2Groups.ProviderEstimate => vehicle.Pricing?.EstimatedCost?.FromUsd ?? vehicle.Pricing?.EstimatedCost?.ToUsd,
+            InventoryFacetsV2Groups.EngineSize => decimal.TryParse(vehicle.VehicleSpecs?.Engine?.SizeLiters, NumberStyles.Any, CultureInfo.InvariantCulture, out var size) ? size : null,
+            InventoryFacetsV2Groups.Horsepower => vehicle.VehicleSpecs?.Engine?.Horsepower,
+            InventoryFacetsV2Groups.PreGrade => snapshot.Scoring?.PreGrade,
+            _ => null
+        };
+    }
+
+    private static string NormalizeFacetsV2RunCondition(AuctionVehicle vehicle)
+    {
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase)) return "UNVERIFIED";
+        var value = vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label;
+        if (string.IsNullOrWhiteSpace(value)) return "UNVERIFIED";
+        var normalized = value.Trim().ToUpperInvariant().Replace("&", " AND ", StringComparison.Ordinal);
+        if (normalized.Contains("RUNS AND DRIVES", StringComparison.Ordinal)) return "RUNS_AND_DRIVES";
+        if (normalized.Contains("START", StringComparison.Ordinal)) return "STARTS";
+        if (normalized.Contains("STATIONARY", StringComparison.Ordinal)) return "STATIONARY";
+        return "UNVERIFIED";
     }
 
     public Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken)
