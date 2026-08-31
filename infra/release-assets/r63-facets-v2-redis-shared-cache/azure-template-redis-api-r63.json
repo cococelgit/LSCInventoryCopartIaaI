@@ -15,7 +15,7 @@
   "resources": [
     {
       "type": "Microsoft.Cache/redisEnterprise",
-      "apiVersion": "2025-04-01",
+      "apiVersion": "2025-07-01",
       "name": "[variables('redisName')]",
       "location": "[parameters('location')]",
       "sku": { "name": "Balanced_B0" },
@@ -33,7 +33,7 @@
     },
     {
       "type": "Microsoft.Cache/redisEnterprise/databases",
-      "apiVersion": "2025-04-01",
+      "apiVersion": "2025-07-01",
       "name": "[format('{0}/{1}', variables('redisName'), variables('redisDatabaseName'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Cache/redisEnterprise', variables('redisName'))]"
@@ -61,7 +61,7 @@
         "[resourceId('Microsoft.Cache/redisEnterprise/databases', variables('redisName'), variables('redisDatabaseName'))]"
       ],
       "properties": {
-        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v1",
+        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v2",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT45M",
@@ -86,6 +86,6 @@
     "migrationsEnabled": { "type": "bool", "value": false },
     "facetIndexMigrationStarted": { "type": "bool", "value": false },
     "projectionRebuildStarted": { "type": "bool", "value": false },
-    "scriptSha256": { "type": "string", "value": "519687ce4d5c19ddb7ec5c4a81e5339a839a4b70d30fdeb2d85138406af5b136" }
+    "scriptSha256": { "type": "string", "value": "b8473024fc3635127a5b1186dd8461ced28eed15b1eeebf03b441620bfcc780c" }
   }
 }
