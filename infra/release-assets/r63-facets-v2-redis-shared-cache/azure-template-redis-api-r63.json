@@ -52,7 +52,7 @@
     {
       "type": "Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments",
       "apiVersion": "2026-05-01-preview",
-      "name": "[format('{0}/{1}/lscfacets', variables('redisName'), variables('redisDatabaseName'))]",
+      "name": "[format('{0}/{1}/lscfacetsruntime', variables('redisName'), variables('redisDatabaseName'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Cache/redisEnterprise/databases', variables('redisName'), variables('redisDatabaseName'))]"
       ],
@@ -75,10 +75,10 @@
         "userAssignedIdentities": { "[variables('identityResourceId')]": {} }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments', variables('redisName'), variables('redisDatabaseName'), 'lscfacets')]"
+        "[resourceId('Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments', variables('redisName'), variables('redisDatabaseName'), 'lscfacetsruntime')]"
       ],
       "properties": {
-        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v9",
+        "forceUpdateTag": "redis-api-r63-20260831-facets-v2-v10",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT45M",
