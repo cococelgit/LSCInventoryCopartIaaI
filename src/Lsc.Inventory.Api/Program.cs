@@ -555,7 +555,7 @@ app.MapGet("/api/v1/inventory/summary", async (HttpContext context, IInventorySn
         summary.Facets));
 });
 
-app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInventorySnapshotStore store, string lot, string? platform, CancellationToken cancellationToken) =>
+app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInventorySnapshotStore store, ILoggerFactory loggerFactory, string lot, string? platform, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
     var normalizedPlatform = platform?.Trim().ToLowerInvariant();
@@ -573,7 +573,19 @@ app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInven
     // here against the current date can hide a lot that is still intentionally visible.
     if (snapshot is null)
         return Results.NotFound();
-    var scoring = await store.GetScoreByLotAsync(lot, cancellationToken);
+    LscVehicleScoringResult? scoring = null;
+    try
+    {
+        scoring = await store.GetScoreByLotAsync(lot, cancellationToken);
+    }
+    catch (Exception exception)
+    {
+        loggerFactory.CreateLogger("InventoryVehicleDetail")
+            .LogWarning(exception,
+                "Serving active vehicle detail without full scoring after scoring lookup failed. Platform: {Platform}; Lot: {Lot}.",
+                normalizedPlatform ?? "any",
+                lot);
+    }
     return Results.Ok(ToPublicVehicle(snapshot, PublicRequestUriResolver.Resolve(context.Request), inventoryReadToken, scoring));
 });
 
