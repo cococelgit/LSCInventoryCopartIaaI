@@ -11,6 +11,8 @@ public sealed class VehicleDetailScoringGracefulDegradationTests
 
         Assert.Contains("Serving active vehicle detail without full scoring after scoring lookup failed", source, StringComparison.Ordinal);
         Assert.Contains("LscVehicleScoringResult? scoring = null;", source, StringComparison.Ordinal);
+        Assert.Contains("full?.Factors?.Select", source, StringComparison.Ordinal);
+        Assert.Contains("full?.Penalties?.Select", source, StringComparison.Ordinal);
         Assert.Contains("return Results.Ok(ToPublicVehicle(snapshot", source, StringComparison.Ordinal);
     }
 

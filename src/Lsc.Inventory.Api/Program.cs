@@ -322,8 +322,8 @@ static PublicLscScoring? ToPublicScoring(LscScoringSummary? summary, LscVehicleS
         ScoredAt = scoredAt,
         ReasonCodes = full?.ReasonCodes ?? [],
         MissingFields = full?.MissingFields ?? [],
-        Factors = full?.Factors.Select(factor => new PublicLscScoreFactor(factor.Code, factor.Name, factor.Points, factor.MaxPointsEvaluable, factor.Evaluated, factor.Explanation)).ToArray() ?? [],
-        Penalties = full?.Penalties.Select(penalty => new PublicLscScorePenalty(penalty.Code, penalty.Name, penalty.Points, penalty.Explanation)).ToArray() ?? []
+        Factors = full?.Factors?.Select(factor => new PublicLscScoreFactor(factor.Code, factor.Name, factor.Points, factor.MaxPointsEvaluable, factor.Evaluated, factor.Explanation)).ToArray() ?? [],
+        Penalties = full?.Penalties?.Select(penalty => new PublicLscScorePenalty(penalty.Code, penalty.Name, penalty.Points, penalty.Explanation)).ToArray() ?? []
     };
 }
 
