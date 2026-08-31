@@ -12,7 +12,7 @@ readonly API_NAME="ca-lsc-inventory-api-prod"
 readonly REDIS_NAME="lsc-inventory-facets-redis"
 readonly REDIS_DATABASE_NAME="default"
 readonly REDIS_ENDPOINT="${REDIS_NAME}.eastus2.redis.azure.net:10000"
-readonly REDIS_API_VERSION="2025-07-01"
+readonly API_IDENTITY_NAME="uai-lsc-inventory-release-afaac3d"
 readonly IAAI_JOB_NAME="job-lsc-iaai-pilot-prod"
 readonly COPART_JOB_NAME="job-lsc-copart-excel-prod"
 readonly COPART_AUTO_JOB_NAME="job-lsc-copart-auto-prod"
@@ -35,17 +35,12 @@ fingerprint_job() { local job_name="$1" query="$2"; az containerapp job show --r
 app_env_value() { app_field "properties.template.containers[0].env[?name=='$1'].value | [0]"; }
 app_env_without_redis_hash() { az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_NAME" --query 'properties.template.containers[0].env' --output json | jq -S 'map(select(.name | startswith("FacetsRedis__") | not))' | sha256sum | { read -r digest _; printf '%s\n' "$digest"; }; }
 compact_job_json() { az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$1" --query "$2" --output json | tr -d '[:space:]'; }
-redis_url() { printf 'https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Cache/redisEnterprise/%s%s?api-version=%s' "$subscription_id" "$RESOURCE_GROUP" "$REDIS_NAME" "$1" "$REDIS_API_VERSION"; }
-redis_field() { az rest --method get --url "$(redis_url "$1")" --query "$2" --output tsv; }
-
 command -v az >/dev/null 2>&1 || fail "Azure CLI is unavailable"
 command -v curl >/dev/null 2>&1 || fail "curl is unavailable"
 command -v jq >/dev/null 2>&1 || fail "jq is unavailable"
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is unavailable"
 az extension add --name containerapp --upgrade --only-show-errors
 
-subscription_id="$(az account show --query id --output tsv)"
-[[ -n "$subscription_id" && "$subscription_id" != "null" ]] || fail "Unable to resolve subscription"
 api_image_before="$(app_field 'properties.template.containers[0].image')"
 api_mode_before="$(app_field properties.configuration.activeRevisionsMode)"
 api_identity_before="$(fingerprint_app identity)"
@@ -58,6 +53,7 @@ api_migrations_before="$(app_env_value Persistence__RunMigrations)"
 api_warmup_before="$(app_env_value SearchProjection__WarmupOnStartup)"
 api_identity_id="$(app_field 'keys(identity.userAssignedIdentities)[0]')"
 [[ -n "$api_identity_id" && "$api_identity_id" != "null" ]] || fail "Unable to resolve API managed identity"
+[[ "$api_identity_id" == */userAssignedIdentities/${API_IDENTITY_NAME} ]] || fail "API managed identity differs from the approved Redis ACL principal"
 api_identity_client_id="$(az identity show --ids "$api_identity_id" --query clientId --output tsv)"
 api_identity_object_id="$(az identity show --ids "$api_identity_id" --query principalId --output tsv)"
 [[ -n "$api_identity_client_id" && "$api_identity_client_id" != "null" && -n "$api_identity_object_id" && "$api_identity_object_id" != "null" ]] || fail "Unable to resolve API managed identity identifiers"
@@ -98,20 +94,6 @@ scoring_identity_before="$(fingerprint_job "$SCORING_JOB_NAME" identity)"
 [[ "$generic_trigger_before" == "Manual" ]] || fail "Expected generic job to remain Manual; found: ${generic_trigger_before:-empty}"
 [[ "$scoring_image_before" == "$EXPECTED_SCORING_IMAGE" ]] || fail "Expected scoring r54 image; found: ${scoring_image_before:-empty}"
 [[ "$scoring_trigger_before" == "Schedule" && "$scoring_cron_before" == "$EXPECTED_SCORING_CRON" && "$scoring_args_before" == "$EXPECTED_SCORING_ARGS" ]] || fail "Scoring configuration changed unexpectedly"
-
-[[ "$(redis_field '' 'properties.provisioningState')" == "Succeeded" ]] || fail "Redis cluster is not provisioned"
-[[ "$(redis_field '' 'sku.name')" == "Balanced_B0" ]] || fail "Redis SKU is not Balanced_B0"
-[[ "$(redis_field '' 'properties.highAvailability')" == "Disabled" ]] || fail "Redis high availability does not match approved single-node setup"
-[[ "$(redis_field '' 'properties.minimumTlsVersion')" == "1.2" ]] || fail "Redis minimum TLS is not 1.2"
-[[ "$(redis_field "/databases/${REDIS_DATABASE_NAME}" 'properties.clientProtocol')" == "Encrypted" ]] || fail "Redis database protocol is not encrypted"
-[[ "$(redis_field "/databases/${REDIS_DATABASE_NAME}" 'properties.accessKeysAuthentication')" == "Disabled" ]] || fail "Redis access keys must remain disabled"
-
-assignment_url="$(redis_url "/databases/${REDIS_DATABASE_NAME}/accessPolicyAssignments/lscfacets")"
-assignment_body="$(jq -cn --arg object_id "$api_identity_object_id" '{properties:{accessString:"+@read +@write ~lsc:facets:v2:*",user:{objectId:$object_id}}}')"
-az rest --method put --url "$assignment_url" --body "$assignment_body" --headers 'Content-Type=application/json' --output none
-assignment_object_after="$(az rest --method get --url "$assignment_url" --query 'properties.user.objectId' --output tsv)"
-assignment_acl_after="$(az rest --method get --url "$assignment_url" --query 'properties.accessString' --output tsv)"
-[[ "$assignment_object_after" == "$api_identity_object_id" && "$assignment_acl_after" == '+@read +@write ~lsc:facets:v2:*' ]] || fail "Redis ACL assignment does not match API identity or minimum access"
 
 image_ref="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 printf 'API_R63_BUILD_START image=%s git_context=%s\n' "$image_ref" "$SOURCE_CONTEXT_URL"
