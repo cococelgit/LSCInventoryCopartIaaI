@@ -55,6 +55,7 @@
         "[resourceId('Microsoft.Cache/redisEnterprise/databases', variables('redisName'), variables('redisDatabaseName'))]"
       ],
       "properties": {
+        "accessPolicyName": "default",
         "accessString": "+@read +@write ~lsc:facets:v2:*",
         "user": {
           "objectId": "[reference(variables('identityResourceId'), '2018-11-30').principalId]"
