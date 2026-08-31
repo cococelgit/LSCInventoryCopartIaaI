@@ -178,7 +178,18 @@ public sealed partial class PostgresSnapshotStore
             """;
         AddParameter(command, "lot_number", lotNumber.Trim());
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? ReadScoringResult(reader) : null;
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        try
+        {
+            return ReadScoringResult(reader);
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidCastException or FormatException or NotSupportedException)
+        {
+            logger.LogWarning(exception,
+                "Ignoring an unreadable full LSC scoring result for active lot {LotNumber}; the vehicle detail will use its stored scoring summary.",
+                lotNumber);
+            return null;
+        }
     }
 
     private async Task<IReadOnlyList<ScoringQueueItem>> ClaimScoringBatchAsync(int maximum, CancellationToken cancellationToken)
