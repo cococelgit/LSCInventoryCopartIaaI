@@ -216,7 +216,9 @@ public sealed record InventorySearchRequest(
     bool ExcludeSpecialTitles = false,
     decimal? PreGradeFrom = null,
     IReadOnlyCollection<string>? ScoringStatuses = null,
-    IReadOnlyCollection<string>? TitleCategories = null);
+    IReadOnlyCollection<string>? TitleCategories = null,
+    decimal? BuyNowFrom = null,
+    decimal? BuyNowTo = null);
 
 public sealed record InventorySearchProjectionStatus(
     bool Ready,
@@ -1184,6 +1186,8 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         if (request.OdometerTo.HasValue && (vehicle.Odometer ?? decimal.MaxValue) > request.OdometerTo.Value) return false;
         if (request.PriceFrom.HasValue && (vehicle.Pricing?.CurrentBidUsd ?? decimal.MinValue) < request.PriceFrom.Value) return false;
         if (request.PriceTo.HasValue && (vehicle.Pricing?.CurrentBidUsd ?? decimal.MaxValue) > request.PriceTo.Value) return false;
+        if (request.BuyNowFrom.HasValue && (vehicle.Pricing?.BuyNowUsd ?? decimal.MinValue) < request.BuyNowFrom.Value) return false;
+        if (request.BuyNowTo.HasValue && (vehicle.Pricing?.BuyNowUsd ?? decimal.MaxValue) > request.BuyNowTo.Value) return false;
         if (request.MaxCurrentBid.HasValue && vehicle.Pricing?.CurrentBidUsd is decimal currentBid && currentBid > request.MaxCurrentBid.Value) return false;
         if (request.AuctionFrom.HasValue && (vehicle.Auction?.AuctionAt ?? DateTimeOffset.MinValue) < request.AuctionFrom.Value) return false;
         if (request.AuctionTo.HasValue && (vehicle.Auction?.AuctionAt ?? DateTimeOffset.MaxValue) > request.AuctionTo.Value) return false;

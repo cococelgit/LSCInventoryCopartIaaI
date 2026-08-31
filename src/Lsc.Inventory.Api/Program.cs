@@ -450,6 +450,8 @@ app.MapGet("/api/v1/inventory/search", async (
     decimal? odometerTo,
     decimal? priceFrom,
     decimal? priceTo,
+    decimal? buyNowFrom,
+    decimal? buyNowTo,
     decimal? maxBid,
     DateTimeOffset? auctionFrom,
     DateTimeOffset? auctionTo,
@@ -535,7 +537,9 @@ app.MapGet("/api/v1/inventory/search", async (
         horsepowerTo,
         maxBid,
         excludeSpecialTitles == true,
-        TitleCategories: Normalize(titleCategories)), cancellationToken);
+        TitleCategories: Normalize(titleCategories),
+        BuyNowFrom: buyNowFrom,
+        BuyNowTo: buyNowTo), cancellationToken);
     return Results.Ok(new PublicInventorySearchResponse(
         "lsc-inventory-postgres",
         result.GeneratedAt,
@@ -586,6 +590,8 @@ app.MapGet("/api/v1/inventory/facets-v2", async (
     decimal? odometerTo,
     decimal? priceFrom,
     decimal? priceTo,
+    decimal? buyNowFrom,
+    decimal? buyNowTo,
     decimal? maxBid,
     DateTimeOffset? auctionFrom,
     DateTimeOffset? auctionTo,
@@ -677,7 +683,9 @@ app.MapGet("/api/v1/inventory/facets-v2", async (
             excludeSpecialTitles == true,
             preGradeFrom,
             NormalizeFacetValues(scoringStatuses),
-            NormalizeFacetValues(titleCategories));
+            NormalizeFacetValues(titleCategories),
+            BuyNowFrom: buyNowFrom,
+            BuyNowTo: buyNowTo);
         var response = await store.GetInventoryFacetsV2Async(
             new InventoryFacetsV2Request(filters, NormalizeFacetValues(requestedFacets)),
             cancellationToken);

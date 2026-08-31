@@ -1847,7 +1847,7 @@ public sealed partial class PostgresSnapshotStore(
             && Empty(request.Fuels) && Empty(request.Drives) && Empty(request.BodyStyles) && Empty(request.Colors)
             && Empty(request.LossTypes) && Empty(request.StartCodes) && Empty(request.RunConditions)
             && request.YearFrom is null && request.YearTo is null && request.OdometerFrom is null && request.OdometerTo is null
-            && request.PriceFrom is null && request.PriceTo is null && request.AuctionFrom is null && request.AuctionTo is null
+            && request.PriceFrom is null && request.PriceTo is null && request.BuyNowFrom is null && request.BuyNowTo is null && request.AuctionFrom is null && request.AuctionTo is null
             && request.BuyNowOnly is null && request.WithPhotosOnly is null && request.AuctionStatus is null
             && request.WithBidOnly is null && request.KeyMode is null && request.ProviderEstimateFrom is null && request.ProviderEstimateTo is null
             && request.EngineSizeFrom is null && request.EngineSizeTo is null && request.HorsepowerFrom is null && request.HorsepowerTo is null
@@ -1925,6 +1925,8 @@ public sealed partial class PostgresSnapshotStore(
         if (request.OdometerTo.HasValue) { where.Add("latest.odometer <= @odometer_to"); AddParameter(command, "odometer_to", request.OdometerTo.Value); }
         if (request.PriceFrom.HasValue) { where.Add("latest.current_bid_usd >= @price_from"); AddParameter(command, "price_from", request.PriceFrom.Value); }
         if (request.PriceTo.HasValue) { where.Add("latest.current_bid_usd <= @price_to"); AddParameter(command, "price_to", request.PriceTo.Value); }
+        if (request.BuyNowFrom.HasValue) { where.Add("latest.buy_now_usd >= @buy_now_from"); AddParameter(command, "buy_now_from", request.BuyNowFrom.Value); }
+        if (request.BuyNowTo.HasValue) { where.Add("latest.buy_now_usd <= @buy_now_to"); AddParameter(command, "buy_now_to", request.BuyNowTo.Value); }
         if (request.MaxCurrentBid.HasValue) { where.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @max_current_bid)"); AddParameter(command, "max_current_bid", request.MaxCurrentBid.Value); }
         if (request.AuctionFrom.HasValue) { where.Add("latest.auction_at >= @auction_from"); AddParameter(command, "auction_from", request.AuctionFrom.Value); }
         if (request.AuctionTo.HasValue) { where.Add("latest.auction_at <= @auction_to"); AddParameter(command, "auction_to", request.AuctionTo.Value); }
@@ -2367,6 +2369,8 @@ public sealed partial class PostgresSnapshotStore(
         if (request.OdometerTo.HasValue) { where.Add("latest.odometer <= @odometer_to"); AddParameter(command, "odometer_to", request.OdometerTo.Value); }
         if (request.PriceFrom.HasValue) { where.Add("latest.current_bid_usd >= @price_from"); AddParameter(command, "price_from", request.PriceFrom.Value); }
         if (request.PriceTo.HasValue) { where.Add("latest.current_bid_usd <= @price_to"); AddParameter(command, "price_to", request.PriceTo.Value); }
+        if (request.BuyNowFrom.HasValue) { where.Add("latest.buy_now_usd >= @buy_now_from"); AddParameter(command, "buy_now_from", request.BuyNowFrom.Value); }
+        if (request.BuyNowTo.HasValue) { where.Add("latest.buy_now_usd <= @buy_now_to"); AddParameter(command, "buy_now_to", request.BuyNowTo.Value); }
         if (request.MaxCurrentBid.HasValue) { where.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @max_current_bid)"); AddParameter(command, "max_current_bid", request.MaxCurrentBid.Value); }
         if (request.AuctionFrom.HasValue) { where.Add("latest.auction_at >= @auction_from"); AddParameter(command, "auction_from", request.AuctionFrom.Value); }
         if (request.AuctionTo.HasValue) { where.Add("latest.auction_at <= @auction_to"); AddParameter(command, "auction_to", request.AuctionTo.Value); }
