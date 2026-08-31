@@ -20,7 +20,12 @@ public sealed partial class PostgresSnapshotStore
     private sealed record FacetsV2ProjectionVersion(bool Ready, DateTimeOffset AsOf, string SourceVersion);
     private sealed record FacetsV2CacheEntry(string Key, DateTimeOffset ExpiresAt, InventoryFacetsV2Response Response);
     private sealed record FacetsV2ValueSpec(string Group, string ValueAlias, string Expression, string Parameter);
-    private sealed record FacetsV2RangeSpec(string Group, string MinimumAlias, string MaximumAlias, string? FromParameter, string? ToParameter);
+    private sealed record FacetsV2RangeSpec(
+        string Group,
+        string MinimumAlias,
+        string MaximumAlias,
+        string MinimumExpression,
+        string MaximumExpression);
 
     private static readonly IReadOnlyList<FacetsV2ValueSpec> FacetsV2ValueSpecs =
     [
@@ -49,14 +54,14 @@ public sealed partial class PostgresSnapshotStore
 
     private static readonly IReadOnlyList<FacetsV2RangeSpec> FacetsV2RangeSpecs =
     [
-        new(InventoryFacetsV2Groups.Year, "year_value", "year_value", "facet_year_from", "facet_year_to"),
-        new(InventoryFacetsV2Groups.Odometer, "odometer_value", "odometer_value", "facet_odometer_from", "facet_odometer_to"),
-        new(InventoryFacetsV2Groups.CurrentBid, "current_bid_value", "current_bid_value", "facet_price_from", "facet_price_to"),
-        new(InventoryFacetsV2Groups.ProviderEstimate, "provider_estimate_from_value", "provider_estimate_to_value", "facet_provider_estimate_from", "facet_provider_estimate_to"),
-        new(InventoryFacetsV2Groups.AuctionDate, "auction_at_value", "auction_at_value", "facet_auction_from", "facet_auction_to"),
-        new(InventoryFacetsV2Groups.EngineSize, "engine_size_value", "engine_size_value", "facet_engine_size_from", "facet_engine_size_to"),
-        new(InventoryFacetsV2Groups.Horsepower, "horsepower_value", "horsepower_value", "facet_horsepower_from", "facet_horsepower_to"),
-        new(InventoryFacetsV2Groups.PreGrade, "pre_grade_value", "pre_grade_value", "facet_pre_grade_from", null)
+        new(InventoryFacetsV2Groups.Year, "year_value", "year_value", "latest.year::numeric", "latest.year::numeric"),
+        new(InventoryFacetsV2Groups.Odometer, "odometer_value", "odometer_value", "latest.odometer", "latest.odometer"),
+        new(InventoryFacetsV2Groups.CurrentBid, "current_bid_value", "current_bid_value", "latest.current_bid_usd", "latest.current_bid_usd"),
+        new(InventoryFacetsV2Groups.ProviderEstimate, "provider_estimate_from_value", "provider_estimate_to_value", "latest.provider_estimate_from", "latest.provider_estimate_to"),
+        new(InventoryFacetsV2Groups.AuctionDate, "auction_at_value", "auction_at_value", "latest.auction_at", "latest.auction_at"),
+        new(InventoryFacetsV2Groups.EngineSize, "engine_size_value", "engine_size_value", "latest.engine_size_liters", "latest.engine_size_liters"),
+        new(InventoryFacetsV2Groups.Horsepower, "horsepower_value", "horsepower_value", "latest.horsepower", "latest.horsepower"),
+        new(InventoryFacetsV2Groups.PreGrade, "pre_grade_value", "pre_grade_value", "score.pre_grade", "score.pre_grade")
     ];
 
     public async Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken)
@@ -258,46 +263,46 @@ public sealed partial class PostgresSnapshotStore
         var fixedWhere = new List<string> { "latest.is_active" };
         AddFacetsV2FixedFilters(command, request, fixedWhere);
 
-        var needsScore = request.PreGradeFrom.HasValue || request.ScoringStatuses is { Count: > 0 } ||
-            requested.Contains(InventoryFacetsV2Groups.PreGrade, StringComparer.OrdinalIgnoreCase) ||
-            requested.Contains(InventoryFacetsV2Groups.ScoringStatuses, StringComparer.OrdinalIgnoreCase);
+        var requestedValueSpecs = FacetsV2ValueSpecs
+            .Where(spec => requested.Contains(spec.Group, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        var activeValueSpecs = FacetsV2ValueSpecs
+            .Where(spec => InventoryFacetsV2Selections.Get(request, spec.Group).Any())
+            .ToArray();
+        var requestedRangeSpecs = FacetsV2RangeSpecs
+            .Where(spec => requested.Contains(spec.Group, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        var activeRangeSpecs = FacetsV2RangeSpecs
+            .Where(spec => IsFacetsV2RangeActive(request, spec.Group))
+            .ToArray();
+
+        var needsScore = requestedValueSpecs.Concat(activeValueSpecs).Any(spec => spec.Group == InventoryFacetsV2Groups.ScoringStatuses) ||
+            requestedRangeSpecs.Concat(activeRangeSpecs).Any(spec => spec.Group == InventoryFacetsV2Groups.PreGrade);
         var scoreJoin = needsScore ? "left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key" : string.Empty;
         var scoreStatusExpression = needsScore ? "nullif(btrim(score.status), '')" : "null::text";
-        var preGradeExpression = needsScore ? "score.pre_grade" : "null::numeric";
 
-        var valueExpressions = FacetsV2ValueSpecs
+        var valueExpressions = requestedValueSpecs
             .Select(spec => $"{(spec.Group == InventoryFacetsV2Groups.ScoringStatuses ? scoreStatusExpression : spec.Expression)} as {spec.ValueAlias}")
             .ToList();
-        valueExpressions.AddRange(
-        [
-            "latest.year::numeric as year_value",
-            "latest.odometer as odometer_value",
-            "latest.current_bid_usd as current_bid_value",
-            "latest.provider_estimate_from as provider_estimate_from_value",
-            "latest.provider_estimate_to as provider_estimate_to_value",
-            "latest.auction_at as auction_at_value",
-            "latest.engine_size_liters as engine_size_value",
-            "latest.horsepower as horsepower_value",
-            $"{preGradeExpression} as pre_grade_value"
-        ]);
+        foreach (var spec in requestedRangeSpecs)
+        {
+            valueExpressions.Add($"{spec.MinimumExpression} as {spec.MinimumAlias}");
+            if (!string.Equals(spec.MinimumAlias, spec.MaximumAlias, StringComparison.Ordinal))
+                valueExpressions.Add($"{spec.MaximumExpression} as {spec.MaximumAlias}");
+        }
 
         var matchExpressions = new List<string>();
-        foreach (var spec in FacetsV2ValueSpecs)
+        foreach (var spec in activeValueSpecs)
         {
             var selected = InventoryFacetsV2Selections.Get(request, spec.Group).ToArray();
             var expression = spec.Group == InventoryFacetsV2Groups.ScoringStatuses ? scoreStatusExpression : spec.Expression;
-            if (selected.Length == 0)
-            {
-                matchExpressions.Add($"true as matches_{spec.Group}");
-                continue;
-            }
             AddParameter(command, spec.Parameter, selected.Select(value => value.ToLowerInvariant()).ToArray());
             matchExpressions.Add($"lower(coalesce({expression}, '')) = any(@{spec.Parameter}) as matches_{spec.Group}");
         }
 
-        matchExpressions.AddRange(BuildFacetsV2RangeMatches(command, request));
-        var allGroups = FacetsV2ValueSpecs.Select(spec => spec.Group).Concat(FacetsV2RangeSpecs.Select(spec => spec.Group)).ToArray();
-        var allPredicate = string.Join(" and ", allGroups.Select(group => $"matches_{group}"));
+        matchExpressions.AddRange(BuildFacetsV2RangeMatches(command, request, activeRangeSpecs));
+        var activeGroups = activeValueSpecs.Select(spec => spec.Group).Concat(activeRangeSpecs.Select(spec => spec.Group)).ToArray();
+        var allPredicate = BuildFacetsV2Predicate(activeGroups);
         var branches = new List<string>
         {
             $"select 'meta'::text as result_kind, null::text as group_key, null::text as value, count(*)::int as vehicle_count, null::numeric as minimum_numeric, null::numeric as maximum_numeric, null::timestamptz as minimum_date, null::timestamptz as maximum_date from base where {allPredicate}"
@@ -305,7 +310,7 @@ public sealed partial class PostgresSnapshotStore
 
         foreach (var group in requested)
         {
-            var exceptPredicate = string.Join(" and ", allGroups.Where(candidate => !string.Equals(candidate, group, StringComparison.OrdinalIgnoreCase)).Select(candidate => $"matches_{candidate}"));
+            var exceptPredicate = BuildFacetsV2Predicate(activeGroups.Where(candidate => !string.Equals(candidate, group, StringComparison.OrdinalIgnoreCase)));
             if (InventoryFacetsV2Groups.Categorical.Contains(group))
             {
                 var spec = FacetsV2ValueSpecs.Single(candidate => string.Equals(candidate.Group, group, StringComparison.OrdinalIgnoreCase));
@@ -335,11 +340,13 @@ public sealed partial class PostgresSnapshotStore
             }
         }
 
+        if (valueExpressions.Count == 0 && matchExpressions.Count == 0)
+            valueExpressions.Add("1 as facet_row");
+
         command.CommandText = $"""
             with base as materialized (
                 select
-                    {string.Join(",\n                    ", valueExpressions)},
-                    {string.Join(",\n                    ", matchExpressions)}
+                    {string.Join(",\n                    ", valueExpressions.Concat(matchExpressions))}
                 from inventory_search_current latest
                 {scoreJoin}
                 where {string.Join(" and ", fixedWhere)}
@@ -349,36 +356,66 @@ public sealed partial class PostgresSnapshotStore
         return command;
     }
 
-    private static IReadOnlyList<string> BuildFacetsV2RangeMatches(NpgsqlCommand command, InventorySearchRequest request)
+    private static IReadOnlyList<string> BuildFacetsV2RangeMatches(
+        NpgsqlCommand command,
+        InventorySearchRequest request,
+        IReadOnlyCollection<FacetsV2RangeSpec> activeSpecs)
     {
         var matches = new List<string>();
-        matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.Year, "latest.year", request.YearFrom, "facet_year_from", request.YearTo, "facet_year_to"));
-        matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.Odometer, "latest.odometer", request.OdometerFrom, "facet_odometer_from", request.OdometerTo, "facet_odometer_to"));
+        var activeGroups = activeSpecs.Select(spec => spec.Group).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (activeGroups.Contains(InventoryFacetsV2Groups.Year))
+            matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.Year, "latest.year", request.YearFrom, "facet_year_from", request.YearTo, "facet_year_to"));
+        if (activeGroups.Contains(InventoryFacetsV2Groups.Odometer))
+            matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.Odometer, "latest.odometer", request.OdometerFrom, "facet_odometer_from", request.OdometerTo, "facet_odometer_to"));
 
-        var bid = new List<string>();
-        if (request.PriceFrom.HasValue) { bid.Add("latest.current_bid_usd >= @facet_price_from"); AddParameter(command, "facet_price_from", request.PriceFrom.Value); }
-        if (request.PriceTo.HasValue) { bid.Add("latest.current_bid_usd <= @facet_price_to"); AddParameter(command, "facet_price_to", request.PriceTo.Value); }
-        if (request.MaxCurrentBid.HasValue) { bid.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @facet_max_current_bid)"); AddParameter(command, "facet_max_current_bid", request.MaxCurrentBid.Value); }
-        matches.Add($"{(bid.Count == 0 ? "true" : string.Join(" and ", bid))} as matches_{InventoryFacetsV2Groups.CurrentBid}");
-
-        var estimate = new List<string>();
-        if (request.ProviderEstimateFrom.HasValue) { estimate.Add("latest.provider_estimate_to >= @facet_provider_estimate_from"); AddParameter(command, "facet_provider_estimate_from", request.ProviderEstimateFrom.Value); }
-        if (request.ProviderEstimateTo.HasValue) { estimate.Add("latest.provider_estimate_from <= @facet_provider_estimate_to"); AddParameter(command, "facet_provider_estimate_to", request.ProviderEstimateTo.Value); }
-        matches.Add($"{(estimate.Count == 0 ? "true" : string.Join(" and ", estimate))} as matches_{InventoryFacetsV2Groups.ProviderEstimate}");
-
-        matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.AuctionDate, "latest.auction_at", request.AuctionFrom, "facet_auction_from", request.AuctionTo, "facet_auction_to"));
-        matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.EngineSize, "latest.engine_size_liters", request.EngineSizeFrom, "facet_engine_size_from", request.EngineSizeTo, "facet_engine_size_to"));
-        matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.Horsepower, "latest.horsepower", request.HorsepowerFrom, "facet_horsepower_from", request.HorsepowerTo, "facet_horsepower_to"));
-        if (request.PreGradeFrom.HasValue)
+        if (activeGroups.Contains(InventoryFacetsV2Groups.CurrentBid))
         {
-            AddParameter(command, "facet_pre_grade_from", request.PreGradeFrom.Value);
+            var bid = new List<string>();
+            if (request.PriceFrom.HasValue) { bid.Add("latest.current_bid_usd >= @facet_price_from"); AddParameter(command, "facet_price_from", request.PriceFrom.Value); }
+            if (request.PriceTo.HasValue) { bid.Add("latest.current_bid_usd <= @facet_price_to"); AddParameter(command, "facet_price_to", request.PriceTo.Value); }
+            if (request.MaxCurrentBid.HasValue) { bid.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @facet_max_current_bid)"); AddParameter(command, "facet_max_current_bid", request.MaxCurrentBid.Value); }
+            matches.Add($"{string.Join(" and ", bid)} as matches_{InventoryFacetsV2Groups.CurrentBid}");
+        }
+
+        if (activeGroups.Contains(InventoryFacetsV2Groups.ProviderEstimate))
+        {
+            var estimate = new List<string>();
+            if (request.ProviderEstimateFrom.HasValue) { estimate.Add("latest.provider_estimate_to >= @facet_provider_estimate_from"); AddParameter(command, "facet_provider_estimate_from", request.ProviderEstimateFrom.Value); }
+            if (request.ProviderEstimateTo.HasValue) { estimate.Add("latest.provider_estimate_from <= @facet_provider_estimate_to"); AddParameter(command, "facet_provider_estimate_to", request.ProviderEstimateTo.Value); }
+            matches.Add($"{string.Join(" and ", estimate)} as matches_{InventoryFacetsV2Groups.ProviderEstimate}");
+        }
+
+        if (activeGroups.Contains(InventoryFacetsV2Groups.AuctionDate))
+            matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.AuctionDate, "latest.auction_at", request.AuctionFrom, "facet_auction_from", request.AuctionTo, "facet_auction_to"));
+        if (activeGroups.Contains(InventoryFacetsV2Groups.EngineSize))
+            matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.EngineSize, "latest.engine_size_liters", request.EngineSizeFrom, "facet_engine_size_from", request.EngineSizeTo, "facet_engine_size_to"));
+        if (activeGroups.Contains(InventoryFacetsV2Groups.Horsepower))
+            matches.Add(BuildRangeMatch(command, InventoryFacetsV2Groups.Horsepower, "latest.horsepower", request.HorsepowerFrom, "facet_horsepower_from", request.HorsepowerTo, "facet_horsepower_to"));
+        if (activeGroups.Contains(InventoryFacetsV2Groups.PreGrade) && request.PreGradeFrom is { } preGradeFrom)
+        {
+            AddParameter(command, "facet_pre_grade_from", preGradeFrom);
             matches.Add($"score.pre_grade >= @facet_pre_grade_from as matches_{InventoryFacetsV2Groups.PreGrade}");
         }
-        else
-        {
-            matches.Add($"true as matches_{InventoryFacetsV2Groups.PreGrade}");
-        }
         return matches;
+    }
+
+    private static bool IsFacetsV2RangeActive(InventorySearchRequest request, string group) => group switch
+    {
+        InventoryFacetsV2Groups.Year => request.YearFrom.HasValue || request.YearTo.HasValue,
+        InventoryFacetsV2Groups.Odometer => request.OdometerFrom.HasValue || request.OdometerTo.HasValue,
+        InventoryFacetsV2Groups.CurrentBid => request.PriceFrom.HasValue || request.PriceTo.HasValue || request.MaxCurrentBid.HasValue,
+        InventoryFacetsV2Groups.ProviderEstimate => request.ProviderEstimateFrom.HasValue || request.ProviderEstimateTo.HasValue,
+        InventoryFacetsV2Groups.AuctionDate => request.AuctionFrom.HasValue || request.AuctionTo.HasValue,
+        InventoryFacetsV2Groups.EngineSize => request.EngineSizeFrom.HasValue || request.EngineSizeTo.HasValue,
+        InventoryFacetsV2Groups.Horsepower => request.HorsepowerFrom.HasValue || request.HorsepowerTo.HasValue,
+        InventoryFacetsV2Groups.PreGrade => request.PreGradeFrom.HasValue,
+        _ => false
+    };
+
+    private static string BuildFacetsV2Predicate(IEnumerable<string> groups)
+    {
+        var predicates = groups.Select(group => $"matches_{group}").ToArray();
+        return predicates.Length == 0 ? "true" : string.Join(" and ", predicates);
     }
 
     private static string BuildRangeMatch<T>(NpgsqlCommand command, string group, string expression, T? from, string fromParameter, T? to, string toParameter) where T : struct

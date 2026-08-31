@@ -141,6 +141,13 @@ public sealed class InventoryFacetsV2Tests
         Assert.Contains("with base as materialized", sql);
         Assert.Contains("matches_makes", sql);
         Assert.Contains("matches_sellertypes", sql);
+        Assert.Contains("as make_value", sql);
+        Assert.Contains("as seller_type_value", sql);
+        Assert.DoesNotContain("as model_value", sql);
+        Assert.DoesNotContain("as facility_value", sql);
+        Assert.DoesNotContain("as secondary_damage_value", sql);
+        Assert.DoesNotContain("as year_value", sql);
+        Assert.DoesNotContain("true as matches_", sql);
         var makesBranch = FacetBranch(sql, InventoryFacetsV2Groups.Makes);
         var sellersBranch = FacetBranch(sql, InventoryFacetsV2Groups.SellerTypes);
         Assert.DoesNotContain("matches_makes", makesBranch);
@@ -150,6 +157,56 @@ public sealed class InventoryFacetsV2Tests
         Assert.DoesNotContain("payload", sql);
         Assert.Contains(command.Parameters.Cast<NpgsqlParameter>(), parameter => parameter.ParameterName == "facet_makes");
         Assert.Contains(command.Parameters.Cast<NpgsqlParameter>(), parameter => parameter.ParameterName == "facet_seller_types");
+    }
+
+    [Fact]
+    public void Generated_postgresql_keeps_active_range_match_without_projecting_unrequested_range_values()
+    {
+        var store = new PostgresSnapshotStore(
+            Microsoft.Extensions.Options.Options.Create(new PersistenceOptions()),
+            Microsoft.Extensions.Options.Options.Create(new BlobAuditOptions()),
+            NullLogger<PostgresSnapshotStore>.Instance);
+        var method = typeof(PostgresSnapshotStore).GetMethod("BuildFacetsV2Command", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var connection = new NpgsqlConnection();
+        using var command = Assert.IsType<NpgsqlCommand>(method!.Invoke(store,
+        [
+            connection,
+            new InventorySearchRequest(1, 24, YearFrom: 2020),
+            new[] { InventoryFacetsV2Groups.Makes }
+        ]));
+        var sql = command.CommandText.ToLowerInvariant();
+
+        Assert.Contains("matches_year", sql);
+        Assert.DoesNotContain("as year_value", sql);
+        Assert.Contains("matches_year", FacetBranch(sql, InventoryFacetsV2Groups.Makes));
+        Assert.Contains(command.Parameters.Cast<NpgsqlParameter>(), parameter => parameter.ParameterName == "facet_year_from");
+    }
+
+    [Fact]
+    public void Generated_postgresql_core_request_omits_high_cardinality_ranges_and_score_join()
+    {
+        var store = new PostgresSnapshotStore(
+            Microsoft.Extensions.Options.Options.Create(new PersistenceOptions()),
+            Microsoft.Extensions.Options.Options.Create(new BlobAuditOptions()),
+            NullLogger<PostgresSnapshotStore>.Instance);
+        var method = typeof(PostgresSnapshotStore).GetMethod("BuildFacetsV2Command", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var connection = new NpgsqlConnection();
+        using var command = Assert.IsType<NpgsqlCommand>(method!.Invoke(store,
+        [
+            connection,
+            new InventorySearchRequest(1, 24),
+            InventoryFacetsV2Groups.Core
+        ]));
+        var sql = command.CommandText.ToLowerInvariant();
+
+        Assert.DoesNotContain("as model_value", sql);
+        Assert.DoesNotContain("as facility_value", sql);
+        Assert.DoesNotContain("as primary_damage_value", sql);
+        Assert.DoesNotContain("as year_value", sql);
+        Assert.DoesNotContain("inventory_vehicle_score_current", sql);
+        Assert.DoesNotContain("true as matches_", sql);
     }
 
     [Fact]
