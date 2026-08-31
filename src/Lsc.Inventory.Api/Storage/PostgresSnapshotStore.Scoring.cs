@@ -378,21 +378,48 @@ public sealed partial class PostgresSnapshotStore
         command.Transaction = transaction;
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
-            with candidates as (
-                select lot_key
+            with high_priority as (
+                select lot_key, platform, priority, requested_at
                 from inventory_vehicle_scoring_queue
-                where status = 'queued'
+                where status = 'queued' and priority >= @high_priority
                 order by priority desc, requested_at asc, lot_key asc
                 limit @limit
-                for update skip locked
+            ), remaining as (
+                select greatest(@limit - count(*)::int, 0) as capacity
+                from high_priority
+            ), low_ranked as (
+                select lot_key, platform, priority, requested_at,
+                       row_number() over (
+                           partition by platform
+                           order by requested_at asc, lot_key asc) as platform_position
+                from inventory_vehicle_scoring_queue
+                where status = 'queued' and priority < @high_priority
+            ), low_priority as (
+                select low.lot_key, low.platform, low.priority, low.requested_at
+                from low_ranked low
+                cross join remaining
+                order by low.platform_position asc, low.platform asc, low.requested_at asc, low.lot_key asc
+                limit (select capacity from remaining)
+            ), candidates as (
+                select lot_key, priority, requested_at from high_priority
+                union all
+                select lot_key, priority, requested_at from low_priority
+            ), locked as (
+                select queue.lot_key
+                from inventory_vehicle_scoring_queue queue
+                join candidates on candidates.lot_key = queue.lot_key
+                where queue.status = 'queued'
+                order by candidates.priority desc, candidates.requested_at asc, candidates.lot_key asc
+                for update of queue skip locked
             )
             update inventory_vehicle_scoring_queue queue
             set status = 'processing', attempts = queue.attempts + 1, claimed_at = now(), updated_at = now()
-            from candidates
-            where queue.lot_key = candidates.lot_key
+            from locked
+            where queue.lot_key = locked.lot_key
             returning queue.lot_key, queue.platform, queue.source_observed_at, queue.attempts, queue.priority;
             """;
         AddParameter(command, "limit", limit);
+        AddParameter(command, "high_priority", HighPriorityScoring);
         var items = new List<ScoringQueueItem>();
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {

@@ -28,6 +28,22 @@ public sealed class ScoringPriorityAuditContractTests
         Assert.Contains("order by priority desc, requested_at asc, lot_key asc", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Durable_queue_claims_historical_debt_evenly_after_reserving_capacity_for_high_priority_lots()
+    {
+        var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.Scoring.cs"));
+
+        Assert.Contains("with high_priority as", source, StringComparison.Ordinal);
+        Assert.Contains("priority >= @high_priority", source, StringComparison.Ordinal);
+        Assert.Contains("priority < @high_priority", source, StringComparison.Ordinal);
+        Assert.Contains("row_number() over (", source, StringComparison.Ordinal);
+        Assert.Contains("partition by platform", source, StringComparison.Ordinal);
+        Assert.Contains("cross join remaining", source, StringComparison.Ordinal);
+        Assert.Contains("order by low.platform_position asc, low.platform asc", source, StringComparison.Ordinal);
+        Assert.Contains("for update of queue skip locked", source, StringComparison.Ordinal);
+        Assert.Contains("AddParameter(command, \"high_priority\", HighPriorityScoring)", source, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryFile(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
