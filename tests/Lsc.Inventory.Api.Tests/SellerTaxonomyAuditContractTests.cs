@@ -17,6 +17,8 @@ public sealed class SellerTaxonomyAuditContractTests
         Assert.Contains("'{Seller,TextClass}'", source, StringComparison.Ordinal);
         Assert.Contains("'{Seller,Name}'", source, StringComparison.Ordinal);
         Assert.Contains("ActiveLifecyclePredicate", source, StringComparison.Ordinal);
+        Assert.Contains("platformSql", source, StringComparison.Ordinal);
+        Assert.Contains("group by {platformSql}", source, StringComparison.Ordinal);
         Assert.Contains("TopSellerNamesMissingSourceType", contract, StringComparison.Ordinal);
     }
 

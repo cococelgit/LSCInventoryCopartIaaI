@@ -1730,6 +1730,7 @@ public sealed partial class PostgresSnapshotStore(
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        const string platformSql = "coalesce(nullif(btrim(current.platform), ''), 'unknown')";
         const string sourceType = "coalesce(nullif(btrim(current.payload #>> '{Seller,Type}'), ''), nullif(btrim(current.payload #>> '{Details,SaleInformation,SellerType}'), ''))";
         const string sourceClass = "nullif(btrim(current.payload #>> '{Seller,Class}'), '')";
         const string sourceTextClass = "nullif(btrim(current.payload #>> '{Seller,TextClass}'), '')";
@@ -1741,14 +1742,14 @@ public sealed partial class PostgresSnapshotStore(
         {
             command.CommandTimeout = _persistence.CommandTimeoutSeconds;
             command.CommandText = $"""
-                select coalesce(nullif(btrim(current.platform), ''), 'unknown') as platform,
+                select {platformSql} as platform,
                        count(*)::bigint as active_lots,
                        count(*) filter (where nullif(btrim(current.seller_type), '') is not null)::bigint as projection_seller_type_present,
                        count(*) filter (where {sourceType} is not null)::bigint as source_type_present,
                        count(*) filter (where {sellerName} is not null)::bigint as seller_name_present,
                        count(*) filter (where {sellerName} is not null and {sourceType} is null)::bigint as seller_name_present_source_type_missing
                 {source}
-                group by platform
+                group by {platformSql}
                 order by platform asc;
                 """;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -1762,12 +1763,12 @@ public sealed partial class PostgresSnapshotStore(
             command.CommandTimeout = _persistence.CommandTimeoutSeconds;
             var missingSourceType = onlyMissingSourceType ? $" and {sourceType} is null" : string.Empty;
             command.CommandText = $"""
-                select coalesce(nullif(btrim(current.platform), ''), 'unknown') as platform,
+                select {platformSql} as platform,
                        {expression} as value,
                        count(*)::int as vehicle_count
                 {source}
                   and {expression} is not null{missingSourceType}
-                group by platform, value
+                group by {platformSql}, {expression}
                 order by platform asc, vehicle_count desc, value asc
                 limit 200;
                 """;
