@@ -142,6 +142,8 @@ public sealed class InventorySyncProcessor(
                                         }
                                     }
 
+                                    providerVehicle = providerVehicle with { SourceProvider = "apibara" };
+                                    vehicleToPersist = vehicleToPersist with { SourceProvider = "apibara" };
                                     var ingestion = await canonicalPipeline.ProcessAsync(providerVehicle, observedAt, cancellationToken, runId, vehicleToPersist);
                                     vehiclesObserved++;
                                     if (!ingestion.Loaded)
