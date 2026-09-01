@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "type": "string", "defaultValue": "eastus2" }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "deploy-api-r69-20260901-buy-now-positive",
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/5ccb54203a4c3c030074d48458398306c5e0c9bb/infra/release-assets/r69-buy-now-positive/federated-deploy-api-buy-now-r69.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": { "[variables('identityResourceId')]": {} }
+      },
+      "properties": {
+        "forceUpdateTag": "api-r69-20260901-buy-now-positive-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT45M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiImage": { "type": "string", "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r69-buy-now-positive" },
+    "redisOrAclChanged": { "type": "bool", "value": false },
+    "iaaiJobChanged": { "type": "bool", "value": false },
+    "copartJobChanged": { "type": "bool", "value": false },
+    "copartAutoJobChanged": { "type": "bool", "value": false },
+    "genericJobChanged": { "type": "bool", "value": false },
+    "scoringJobChanged": { "type": "bool", "value": false },
+    "jobExecutionStarted": { "type": "bool", "value": false },
+    "migrationsEnabled": { "type": "bool", "value": false },
+    "facetIndexMigrationStarted": { "type": "bool", "value": false },
+    "projectionRebuildStarted": { "type": "bool", "value": false },
+    "scriptSha256": { "type": "string", "value": "eca9177494ea62b85f9985e3b85c6f9302c47a8824e4055031869b619d62eb70" }
+  }
+}
