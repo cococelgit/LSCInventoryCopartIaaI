@@ -119,6 +119,7 @@ builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
 builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalSyncProcessor>();
 builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInventoryIngestionPipeline>();
 builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
+builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
 builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
 builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
@@ -938,6 +939,13 @@ app.MapPost("/internal/auctions-api/incremental", async (HttpContext context, IA
     // A valid token and AuctionsApi:Enabled are not enough for canonical writes.
     // The processor applies the second AllowWrites gate when persist=true.
     var result = await processor.RunAsync(platform ?? "", persist == true, cancellationToken);
+    return Results.Ok(result);
+});
+
+app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IAuctionsApiInitialImportProcessor processor, string? platform, int? maximumLots, bool? persist, int? startPage, CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var result = await processor.RunAsync(platform ?? "", maximumLots ?? 100000, persist == true, cancellationToken, startPage ?? 1);
     return Results.Ok(result);
 });
 

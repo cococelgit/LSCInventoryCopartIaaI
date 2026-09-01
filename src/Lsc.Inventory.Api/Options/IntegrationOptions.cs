@@ -57,6 +57,12 @@ public sealed class AuctionsApiOptions
     [Range(1, 120)]
     public int RequestTimeoutSeconds { get; init; } = 30;
 
+    [Range(1, 100000)]
+    public int InitialImportMaxLots { get; init; } = 100000;
+
+    [Range(1, 500)]
+    public int InitialImportMaxRequests { get; init; } = 120;
+
     public bool IsConfigured => Enabled && !string.IsNullOrWhiteSpace(ApiKey);
 }
 

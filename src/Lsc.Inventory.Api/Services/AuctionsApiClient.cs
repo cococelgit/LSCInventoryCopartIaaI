@@ -18,7 +18,7 @@ public interface IAuctionsApiClient
 
 public sealed record AuctionsApiWindowRequest(
     int DomainId,
-    int Minutes,
+    int? Minutes,
     int Page = 1,
     int? PerPage = null);
 
@@ -43,7 +43,7 @@ public sealed class AuctionsApiClient(
             throw new InvalidOperationException("AuctionsAPI is disabled. Enable it only for an approved shadow evaluation.");
         if (request.DomainId is not (1 or 3))
             throw new ArgumentOutOfRangeException(nameof(request.DomainId), "Only IAAI (1) and Copart (3) are allowed in this adapter.");
-        if (request.Minutes is < 1 or > 4320)
+        if (request.Minutes is not null and (< 1 or > 4320))
             throw new ArgumentOutOfRangeException(nameof(request.Minutes), "The overlap window must be between 1 and 4320 minutes.");
         if (request.Page < 1)
             throw new ArgumentOutOfRangeException(nameof(request.Page));
@@ -52,7 +52,7 @@ public sealed class AuctionsApiClient(
         var query = new Dictionary<string, string?>
         {
             ["domain_id"] = request.DomainId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["minutes"] = request.Minutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["minutes"] = request.Minutes?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["page"] = request.Page.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["per_page"] = perPage.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };

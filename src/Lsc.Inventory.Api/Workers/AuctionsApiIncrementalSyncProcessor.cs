@@ -77,7 +77,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             var activeWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: false, cancellationToken);
             pages += activeWindow.Pages;
             requests += activeWindow.Requests;
-            foreach (var vehicle in Vehicles(activeWindow.Rows, normalizedPlatform))
+            foreach (var vehicle in MapRows(activeWindow.Rows, normalizedPlatform))
             {
                 if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
                 {
@@ -111,7 +111,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             pages += archivedWindow.Pages;
             requests += archivedWindow.Requests;
             var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var vehicle in Vehicles(archivedWindow.Rows, normalizedPlatform))
+            foreach (var vehicle in MapRows(archivedWindow.Rows, normalizedPlatform))
             {
                 if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
                 archived++;
@@ -150,7 +150,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 : await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(DomainId(platform), minutes, page, _options.PageSize), cancellationToken);
             requests++;
             pages++;
-            rows.AddRange(Rows(response.Data));
+            rows.AddRange(ExtractRows(response.Data));
             if (response.NextPage is not null && response.NextPage <= page) break;
             if (response.NextPage is null && !HasNextPage(response.Meta, page)) break;
             page = response.NextPage ?? page + 1;
@@ -194,7 +194,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
 
     private static int DomainId(string platform) => platform == "iaai" ? 1 : 3;
 
-    private static IEnumerable<JsonElement> Rows(JsonElement data)
+    internal static IEnumerable<JsonElement> ExtractRows(JsonElement data)
     {
         if (data.ValueKind == JsonValueKind.Array)
         {
@@ -210,7 +210,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         }
     }
 
-    private static IEnumerable<AuctionVehicle> Vehicles(IEnumerable<JsonElement> rows, string platform)
+    internal static IEnumerable<AuctionVehicle> MapRows(IEnumerable<JsonElement> rows, string platform)
     {
         foreach (var row in rows)
         {
