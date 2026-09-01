@@ -461,8 +461,24 @@ public sealed partial class PostgresSnapshotStore
 
     private async Task PersistScoringResultAsync(LscVehicleScoringResult outcome, DateTimeOffset sourceObservedAt, CancellationToken cancellationToken)
     {
+        await EnsureScoringSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await PersistScoringResultInTransactionAsync(connection, transaction, outcome, sourceObservedAt, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes scoring rows using an already-open transaction. Copart inline ingestion uses this so
+    /// the current inventory projection cannot commit unless its canonical score also commits.
+    /// </summary>
+    private async Task PersistScoringResultInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        LscVehicleScoringResult outcome,
+        DateTimeOffset sourceObservedAt,
+        CancellationToken cancellationToken)
+    {
         await using (var result = connection.CreateCommand())
         {
             result.Transaction = transaction;
@@ -512,7 +528,6 @@ public sealed partial class PostgresSnapshotStore
             AddScoringParameters(current, outcome, sourceObservedAt);
             await current.ExecuteNonQueryAsync(cancellationToken);
         }
-        await transaction.CommitAsync(cancellationToken);
     }
 
     private static void AddScoringParameters(NpgsqlCommand command, LscVehicleScoringResult outcome, DateTimeOffset sourceObservedAt)

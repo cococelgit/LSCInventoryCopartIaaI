@@ -231,3 +231,12 @@
 - [x] Mantener D09 desactivada y no crear descartes automáticos a partir de categorías normalizadas.
 - [x] Cubrir títulos clean, branded, salvage, rebuilt, no reparable, export, documento, variante estatal, desconocido e IAAI sin modificación.
 - [x] Redactar handoff técnico para que el API exponga los campos sin recalcular taxonomía. Validación local: `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 105/105 y `pnpm check` aprobó; no se ejecutó job ni despliegue.
+
+## Grading inline Copart
+
+- [x] Integrar el baseline canónico `lsc_pre_grade_v1` del commit aprobado `5428b3f`, sin copiar ni modificar la fórmula.
+- [x] Persistir cada lote Copart elegible junto con su resultado canónico de grading en una transacción PostgreSQL antes de que la proyección quede visible.
+- [x] Conservar idempotencia por `policy_version` e `input_hash`; un score vigente conserva `scored_at` y se marca como `scoreSkippedUnchanged`.
+- [x] Mantener descartes/cuarentenas fuera de grading inline y conservar `MARCAR` con su resultado `MANUAL_REVIEW`.
+- [x] Registrar en el manifiesto Copart `created`, `updated`, `unchanged`, `scoredInline`, `scoreSkippedUnchanged`, `scoreFailed`, duración acumulada y p50/p95; las corridas históricas permanecen como `N/D`.
+- [x] Cubrir Copart elegible, marcado, payload idéntico, cambio relevante y fallo atómico mediante pruebas. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 118/118 y `pnpm check` aprobó. No se ejecutó ningún Job ni deployment.

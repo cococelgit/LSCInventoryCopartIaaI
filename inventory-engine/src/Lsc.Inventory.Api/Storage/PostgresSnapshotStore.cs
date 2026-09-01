@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using Azure.Storage.Blobs;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
+using Lsc.Inventory.Api.Scoring;
 using Lsc.Inventory.Api.Sources;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -225,6 +227,194 @@ public sealed partial class PostgresSnapshotStore(
         _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
         logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAtUtc);
         await EnqueueScoringCandidateAsync(identity, vehicle.Platform, observedAtUtc, cancellationToken);
+    }
+
+    public async Task<CopartInlineScoringPersistenceResult> PersistCopartAcceptedWithScoringAsync(
+        AuctionVehicle vehicle,
+        EligibilityEvaluation eligibility,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Inline scoring persistence is restricted to Copart Excel lots.");
+        if (!eligibility.LoadToSystem)
+            throw new InvalidOperationException("Only eligible Copart lots may be persisted with inline scoring.");
+
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await EnsureScoringSchemaAsync(cancellationToken);
+        var observedAtUtc = observedAt.ToUniversalTime();
+        var identity = BuildIdentity(vehicle);
+        vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
+        var rawJson = JsonSerializer.Serialize(vehicle);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
+
+        var scoreInputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
+        var scoringDuration = TimeSpan.Zero;
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        string snapshotChange;
+        await using (var existing = connection.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            existing.CommandText = """
+                select exists(select 1 from auction_lots where lot_key = @lot_key),
+                       exists(select 1 from auction_lot_versions where lot_key = @lot_key and payload_hash = @payload_hash);
+                """;
+            AddParameter(existing, "lot_key", identity);
+            AddParameter(existing, "payload_hash", payloadHash);
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            snapshotChange = !reader.GetBoolean(0) ? "created" : reader.GetBoolean(1) ? "unchanged" : "updated";
+        }
+
+        var scoreCurrent = false;
+        await using (var current = connection.CreateCommand())
+        {
+            current.Transaction = transaction;
+            current.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            current.CommandText = """
+                select policy_version, input_hash
+                from inventory_vehicle_score_current
+                where lot_key = @lot_key
+                for update;
+                """;
+            AddParameter(current, "lot_key", identity);
+            await using var reader = await current.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                scoreCurrent = string.Equals(reader.GetString(0), LscScoringPolicy.Version, StringComparison.Ordinal) &&
+                               string.Equals(reader.GetString(1), scoreInputHash, StringComparison.Ordinal);
+            }
+        }
+
+        await using (var snapshot = connection.CreateCommand())
+        {
+            snapshot.Transaction = transaction;
+            snapshot.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            snapshot.CommandText = """
+                insert into auction_lots (
+                    lot_key, platform, lot_number, vin, title, year, make, model, vehicle_type,
+                    color, fuel_type, transmission, drive_type, odometer, damage, auction_state,
+                    auction_at, lot_status, lot_sub_status, location_display, location_state,
+                    facility_id, current_bid_usd, buy_now_usd, sale_price_usd, media_photos_count,
+                    media_has_360, observed_at, updated_at)
+                values (
+                    @lot_key, @platform, @lot_number, @vin, @title, @year, @make, @model, @vehicle_type,
+                    @color, @fuel_type, @transmission, @drive_type, @odometer, @damage, @auction_state,
+                    @auction_at, @lot_status, @lot_sub_status, @location_display, @location_state,
+                    @facility_id, @current_bid_usd, @buy_now_usd, @sale_price_usd, @media_photos_count,
+                    @media_has_360, @observed_at, now())
+                on conflict (lot_key) do update set
+                    title = excluded.title, year = excluded.year, make = excluded.make, model = excluded.model,
+                    vehicle_type = excluded.vehicle_type, color = excluded.color, fuel_type = excluded.fuel_type,
+                    transmission = excluded.transmission, drive_type = excluded.drive_type, odometer = excluded.odometer,
+                    damage = excluded.damage, auction_state = excluded.auction_state, auction_at = excluded.auction_at,
+                    lot_status = excluded.lot_status, lot_sub_status = excluded.lot_sub_status,
+                    location_display = excluded.location_display, location_state = excluded.location_state,
+                    facility_id = excluded.facility_id, current_bid_usd = excluded.current_bid_usd,
+                    buy_now_usd = excluded.buy_now_usd, sale_price_usd = excluded.sale_price_usd,
+                    media_photos_count = excluded.media_photos_count, media_has_360 = excluded.media_has_360,
+                    observed_at = excluded.observed_at, updated_at = now();
+
+                insert into auction_lot_versions (
+                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    sale_price_usd, lot_status, lot_sub_status, payload)
+                values (
+                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
+                on conflict (lot_key, payload_hash) do nothing;
+
+                insert into inventory_lot_lifecycle (
+                    lot_key, platform, is_active, consecutive_misses, first_seen_at, last_seen_at, deactivated_at, updated_at)
+                values (@lot_key, @platform, true, 0, @observed_at, @observed_at, null, now())
+                on conflict (lot_key) do update set
+                    platform = excluded.platform, is_active = true, consecutive_misses = 0,
+                    last_seen_at = excluded.last_seen_at, deactivated_at = null, updated_at = now();
+                """;
+            AddSnapshotParameters(snapshot, vehicle, identity, observedAtUtc, payloadHash, blobName, rawJson);
+            await snapshot.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        LscVehicleScoringResult? score = null;
+        if (scoreCurrent)
+        {
+            await using var touch = connection.CreateCommand();
+            touch.Transaction = transaction;
+            touch.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            touch.CommandText = """
+                update inventory_vehicle_score_results
+                set source_observed_at = @source_observed_at, updated_at = now()
+                where lot_key = @lot_key and policy_version = @policy_version and input_hash = @input_hash;
+
+                update inventory_vehicle_score_current
+                set source_observed_at = @source_observed_at, updated_at = now()
+                where lot_key = @lot_key and policy_version = @policy_version and input_hash = @input_hash;
+                """;
+            AddParameter(touch, "lot_key", identity);
+            AddParameter(touch, "source_observed_at", observedAtUtc);
+            AddParameter(touch, "policy_version", LscScoringPolicy.Version);
+            AddParameter(touch, "input_hash", scoreInputHash);
+            await touch.ExecuteNonQueryAsync(cancellationToken);
+        }
+        else
+        {
+            var scoringStartedAt = Stopwatch.GetTimestamp();
+            score = LscVehicleScoringEngine.Evaluate(vehicle, eligibility, observedAtUtc);
+            scoringDuration = Stopwatch.GetElapsedTime(scoringStartedAt);
+            await PersistScoringResultInTransactionAsync(connection, transaction, score, observedAtUtc, cancellationToken);
+        }
+
+        await using (var dequeue = connection.CreateCommand())
+        {
+            dequeue.Transaction = transaction;
+            dequeue.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            dequeue.CommandText = "delete from inventory_vehicle_scoring_queue where lot_key = @lot_key;";
+            AddParameter(dequeue, "lot_key", identity);
+            await dequeue.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
+        return new CopartInlineScoringPersistenceResult(snapshotChange, !scoreCurrent, scoreCurrent, score, scoringDuration);
+    }
+
+    private static void AddSnapshotParameters(NpgsqlCommand command, AuctionVehicle vehicle, string identity, DateTimeOffset observedAtUtc, string payloadHash, string blobName, string rawJson)
+    {
+        AddParameter(command, "lot_key", identity);
+        AddParameter(command, "platform", vehicle.Platform);
+        AddParameter(command, "lot_number", vehicle.LotNumber);
+        AddParameter(command, "vin", vehicle.Vin);
+        AddParameter(command, "title", vehicle.Title);
+        AddParameter(command, "year", vehicle.Year);
+        AddParameter(command, "make", vehicle.Make);
+        AddParameter(command, "model", vehicle.Model);
+        AddParameter(command, "vehicle_type", vehicle.VehicleType);
+        AddParameter(command, "color", vehicle.Color);
+        AddParameter(command, "fuel_type", vehicle.FuelType);
+        AddParameter(command, "transmission", vehicle.Transmission);
+        AddParameter(command, "drive_type", vehicle.DriveType);
+        AddParameter(command, "odometer", vehicle.Odometer);
+        AddParameter(command, "damage", vehicle.Damage);
+        AddParameter(command, "auction_state", vehicle.Auction?.State);
+        AddParameter(command, "auction_at", vehicle.Auction?.AuctionAt?.ToUniversalTime());
+        AddParameter(command, "lot_status", vehicle.Auction?.LotStatus);
+        AddParameter(command, "lot_sub_status", vehicle.Auction?.LotSubStatus);
+        AddParameter(command, "location_display", vehicle.Location?.Display);
+        AddParameter(command, "location_state", vehicle.Location?.State);
+        AddParameter(command, "facility_id", vehicle.Location?.FacilityId);
+        AddParameter(command, "current_bid_usd", vehicle.Pricing?.CurrentBidUsd);
+        AddParameter(command, "buy_now_usd", vehicle.Pricing?.BuyNowUsd);
+        AddParameter(command, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
+        AddParameter(command, "media_photos_count", vehicle.Media?.ThumbnailsCount);
+        AddParameter(command, "media_has_360", vehicle.Media?.Has360);
+        AddParameter(command, "observed_at", observedAtUtc);
+        AddParameter(command, "payload_hash", payloadHash);
+        AddParameter(command, "raw_blob_name", blobName);
+        AddParameter(command, "payload", rawJson);
     }
 
     private async Task<AuctionVehicle> ReuseResolvedCopartMediaAsync(string identity, AuctionVehicle vehicle, CancellationToken cancellationToken)
@@ -933,6 +1123,15 @@ public sealed partial class PostgresSnapshotStore(
                 quarantined_count = 0,
                 marked_count = 0,
                 error_count = 0,
+                created_count = null,
+                updated_count = null,
+                unchanged_count = null,
+                scored_inline_count = null,
+                score_skipped_unchanged_count = null,
+                score_failed_count = null,
+                inline_scoring_duration_ms = null,
+                inline_scoring_p50_ms = null,
+                inline_scoring_p95_ms = null,
                 failures = '[]'::jsonb,
                 updated_at = now()
             where copart_snapshot_manifests.status = 'completed_with_errors'
@@ -968,6 +1167,15 @@ public sealed partial class PostgresSnapshotStore(
                 quarantined_count = @quarantined_count,
                 marked_count = @marked_count,
                 error_count = @error_count,
+                created_count = @created_count,
+                updated_count = @updated_count,
+                unchanged_count = @unchanged_count,
+                scored_inline_count = @scored_inline_count,
+                score_skipped_unchanged_count = @score_skipped_unchanged_count,
+                score_failed_count = @score_failed_count,
+                inline_scoring_duration_ms = @inline_scoring_duration_ms,
+                inline_scoring_p50_ms = @inline_scoring_p50_ms,
+                inline_scoring_p95_ms = @inline_scoring_p95_ms,
                 is_complete = @is_complete,
                 status = @status,
                 failures = cast(@failures as jsonb),
@@ -982,6 +1190,15 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "quarantined_count", completion.Quarantined);
         AddParameter(command, "marked_count", completion.Marked);
         AddParameter(command, "error_count", completion.Errors);
+        AddParameter(command, "created_count", completion.InlineScoring?.Created);
+        AddParameter(command, "updated_count", completion.InlineScoring?.Updated);
+        AddParameter(command, "unchanged_count", completion.InlineScoring?.Unchanged);
+        AddParameter(command, "scored_inline_count", completion.InlineScoring?.ScoredInline);
+        AddParameter(command, "score_skipped_unchanged_count", completion.InlineScoring?.ScoreSkippedUnchanged);
+        AddParameter(command, "score_failed_count", completion.InlineScoring?.ScoreFailed);
+        AddParameter(command, "inline_scoring_duration_ms", completion.InlineScoring?.InlineScoringDurationMs);
+        AddParameter(command, "inline_scoring_p50_ms", completion.InlineScoring?.InlineScoringP50Ms);
+        AddParameter(command, "inline_scoring_p95_ms", completion.InlineScoring?.InlineScoringP95Ms);
         AddParameter(command, "is_complete", completion.IsComplete);
         AddParameter(command, "status", completion.Failures.Count == 0 && completion.IsComplete ? "succeeded" : "completed_with_errors");
         AddParameter(command, "failures", JsonSerializer.Serialize(completion.Failures));
@@ -1235,7 +1452,9 @@ public sealed partial class PostgresSnapshotStore(
             manifestCommand.CommandText = """
                 select left(sha256, 12), file_name, downloaded_at, row_count, observed_count,
                        accepted_count, discarded_count, quarantined_count, marked_count, error_count,
-                       status, is_complete
+                       created_count, updated_count, unchanged_count, scored_inline_count,
+                       score_skipped_unchanged_count, score_failed_count, inline_scoring_duration_ms,
+                       inline_scoring_p50_ms, inline_scoring_p95_ms, status, is_complete
                 from copart_snapshot_manifests
                 order by downloaded_at desc
                 limit 1;
@@ -1255,8 +1474,17 @@ public sealed partial class PostgresSnapshotStore(
                     Quarantined = reader.GetInt32(7),
                     Marked = reader.GetInt32(8),
                     Errors = reader.GetInt32(9),
-                    Status = reader.GetString(10),
-                    IsComplete = reader.GetBoolean(11)
+                    Created = ReadNullableInt32(reader, 10),
+                    Updated = ReadNullableInt32(reader, 11),
+                    Unchanged = ReadNullableInt32(reader, 12),
+                    ScoredInline = ReadNullableInt32(reader, 13),
+                    ScoreSkippedUnchanged = ReadNullableInt32(reader, 14),
+                    ScoreFailed = ReadNullableInt32(reader, 15),
+                    InlineScoringDurationMs = reader.IsDBNull(16) ? (long?)null : reader.GetInt64(16),
+                    InlineScoringP50Ms = reader.IsDBNull(17) ? (long?)null : reader.GetInt64(17),
+                    InlineScoringP95Ms = reader.IsDBNull(18) ? (long?)null : reader.GetInt64(18),
+                    Status = reader.GetString(19),
+                    IsComplete = reader.GetBoolean(20)
                 };
             }
         }
@@ -1920,10 +2148,29 @@ public sealed partial class PostgresSnapshotStore(
                     quarantined_count integer not null default 0,
                     marked_count integer not null default 0,
                     error_count integer not null default 0,
+                    created_count integer,
+                    updated_count integer,
+                    unchanged_count integer,
+                    scored_inline_count integer,
+                    score_skipped_unchanged_count integer,
+                    score_failed_count integer,
+                    inline_scoring_duration_ms bigint,
+                    inline_scoring_p50_ms bigint,
+                    inline_scoring_p95_ms bigint,
                     failures jsonb not null default '[]'::jsonb,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
+
+                alter table copart_snapshot_manifests add column if not exists created_count integer;
+                alter table copart_snapshot_manifests add column if not exists updated_count integer;
+                alter table copart_snapshot_manifests add column if not exists unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists scored_inline_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_skipped_unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_failed_count integer;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_duration_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p50_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p95_ms bigint;
 
                 create index if not exists ix_copart_snapshot_manifests_status_downloaded on copart_snapshot_manifests (status, downloaded_at desc);
 
@@ -2124,10 +2371,29 @@ public sealed partial class PostgresSnapshotStore(
                     quarantined_count integer not null default 0,
                     marked_count integer not null default 0,
                     error_count integer not null default 0,
+                    created_count integer,
+                    updated_count integer,
+                    unchanged_count integer,
+                    scored_inline_count integer,
+                    score_skipped_unchanged_count integer,
+                    score_failed_count integer,
+                    inline_scoring_duration_ms bigint,
+                    inline_scoring_p50_ms bigint,
+                    inline_scoring_p95_ms bigint,
                     failures jsonb not null default '[]'::jsonb,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
+                alter table copart_snapshot_manifests add column if not exists created_count integer;
+                alter table copart_snapshot_manifests add column if not exists updated_count integer;
+                alter table copart_snapshot_manifests add column if not exists unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists scored_inline_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_skipped_unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_failed_count integer;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_duration_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p50_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p95_ms bigint;
+
                 create index if not exists ix_copart_snapshot_manifests_status_downloaded
                     on copart_snapshot_manifests (status, downloaded_at desc);
                 """;

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
@@ -18,6 +19,11 @@ public interface IInventorySnapshotStore
     Task<EligibilityAuditPage> GetDiscardedEligibilityDecisionsAsync(int page, int pageSize, string? ruleCode, string? query, CancellationToken cancellationToken);
     Task<InventoryValidationReport> GetValidationReportAsync(CancellationToken cancellationToken);
     Task PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken);
+    /// <summary>
+    /// Persists an already eligible Copart lot together with its canonical LSC pre-grade.
+    /// The production implementation commits the visible snapshot and score in one transaction.
+    /// </summary>
+    Task<CopartInlineScoringPersistenceResult> PersistCopartAcceptedWithScoringAsync(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset observedAt, CancellationToken cancellationToken);
     Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
@@ -79,13 +85,36 @@ public sealed record CopartSnapshotCompletion(
     int Marked,
     int Errors,
     bool IsComplete,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures,
+    CopartInlineScoringMetrics? InlineScoring = null);
 
 public sealed record StoredVehicleSnapshot(
     string Identity,
     DateTimeOffset ObservedAt,
     AuctionVehicle Vehicle,
     string RawJson);
+
+public sealed record CopartInlineScoringPersistenceResult(
+    string SnapshotChange,
+    bool ScoredInline,
+    bool ScoreSkippedUnchanged,
+    LscVehicleScoringResult? Score,
+    TimeSpan ScoringDuration);
+
+/// <summary>
+/// Copart-only metrics captured from facts observed during one complete snapshot run.
+/// Counters are not synthesized for prior runs.
+/// </summary>
+public sealed record CopartInlineScoringMetrics(
+    int Created,
+    int Updated,
+    int Unchanged,
+    int ScoredInline,
+    int ScoreSkippedUnchanged,
+    int ScoreFailed,
+    long InlineScoringDurationMs,
+    long? InlineScoringP50Ms,
+    long? InlineScoringP95Ms);
 
 public sealed record CopartMediaEnrichmentResult(
     bool Processed,
@@ -292,6 +321,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
 
     public IReadOnlyDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> SyncRuns => _syncRuns;
     public int CopartAuctionObservationCount => _copartAuctionObservations.Count;
+    public bool FailNextCopartInlineScoringPersistence { get; set; }
 
     public Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
@@ -441,6 +471,43 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         _lifecycle[identity] = (vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", true, 0);
         _scoringQueue[identity] = (vehicle, observedAt, 0, 100);
         return Task.CompletedTask;
+    }
+
+    public Task<CopartInlineScoringPersistenceResult> PersistCopartAcceptedWithScoringAsync(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset observedAt, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.Equals(vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Inline scoring persistence is restricted to Copart Excel lots.");
+        if (!eligibility.LoadToSystem)
+            throw new InvalidOperationException("Only eligible Copart lots may be persisted with inline scoring.");
+        if (FailNextCopartInlineScoringPersistence)
+        {
+            FailNextCopartInlineScoringPersistence = false;
+            throw new InvalidOperationException("Injected Copart inline scoring persistence failure.");
+        }
+
+        var identity = string.Join(':', vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", vehicle.LotNumber?.Trim() ?? vehicle.Vin?.Trim() ?? "unknown");
+        var rawJson = JsonSerializer.Serialize(vehicle);
+        var snapshotChange = !_snapshots.TryGetValue(identity, out var existing)
+            ? "created"
+            : string.Equals(existing.RawJson, rawJson, StringComparison.Ordinal) ? "unchanged" : "updated";
+        var inputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
+
+        _snapshots[identity] = new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson);
+        _lifecycle[identity] = (InventorySourcePolicy.CopartExcelSource, true, 0);
+        if (_scores.TryGetValue(identity, out var current) &&
+            string.Equals(current.PolicyVersion, LscScoringPolicy.Version, StringComparison.Ordinal) &&
+            string.Equals(current.InputHash, inputHash, StringComparison.Ordinal))
+        {
+            return Task.FromResult(new CopartInlineScoringPersistenceResult(snapshotChange, false, true, current, TimeSpan.Zero));
+        }
+
+        var startedAt = Stopwatch.GetTimestamp();
+        var score = LscVehicleScoringEngine.Evaluate(vehicle, eligibility, observedAt);
+        var duration = Stopwatch.GetElapsedTime(startedAt);
+        _scores[identity] = score;
+        _scoringQueue.TryRemove(identity, out _);
+        return Task.FromResult(new CopartInlineScoringPersistenceResult(snapshotChange, true, false, score, duration));
     }
 
     public Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
