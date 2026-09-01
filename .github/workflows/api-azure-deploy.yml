@@ -56,9 +56,13 @@ jobs:
         run: |
           set -euo pipefail
           current_image="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          current_revision="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.latestRevisionName' -o tsv)"
           test -n "$current_image" && test "$current_image" != "None"
+          test -n "$current_revision" && test "$current_revision" != "None"
           echo "CURRENT_API_IMAGE=$current_image" >> "$GITHUB_ENV"
+          echo "CURRENT_API_REVISION=$current_revision" >> "$GITHUB_ENV"
           echo "Current API image: $current_image"
+          echo "Current API revision: $current_revision"
 
       - name: Build immutable API image in ACR
         run: |
@@ -103,6 +107,20 @@ jobs:
               "AuctionsApi__Enabled=${{ inputs.enable_auctions_api }}" \
               "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
             --only-show-errors
+
+      - name: Deactivate previous API revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployed_revision="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.latestRevisionName' -o tsv)"
+          if [[ -n "${CURRENT_API_REVISION:-}" && "$CURRENT_API_REVISION" != "$deployed_revision" ]]; then
+            az containerapp revision deactivate \
+              --name "$INVENTORY_API_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --revision "$CURRENT_API_REVISION" \
+              --only-show-errors
+            echo "Deactivated previous API revision: $CURRENT_API_REVISION"
+          fi
 
       - name: Verify deployed revision and safe flags
         shell: bash
