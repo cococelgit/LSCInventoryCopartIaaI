@@ -15,7 +15,7 @@ using Npgsql;
 
 namespace Lsc.Inventory.Api.Storage;
 
-public sealed class PostgresSnapshotStore(
+public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
     IOptions<BlobAuditOptions> blobOptions,
     ILogger<PostgresSnapshotStore> logger) : IInventorySnapshotStore
@@ -25,11 +25,13 @@ public sealed class PostgresSnapshotStore(
     private static readonly SemaphoreSlim CopartAuctionHistorySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim EligibilitySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
+    private static readonly SemaphoreSlim ScoringSchemaLock = new(1, 1);
     private static bool _schemaInitialized;
     private static bool _copartSchemaInitialized;
     private static bool _copartAuctionHistorySchemaInitialized;
     private static bool _eligibilitySchemaInitialized;
     private static bool _lifecycleSchemaInitialized;
+    private static bool _scoringSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly BlobAuditOptions _blob = blobOptions.Value;
     private readonly ConcurrentDictionary<string, StoredVehicleSnapshot> _recent = new(StringComparer.OrdinalIgnoreCase);
@@ -222,6 +224,7 @@ public sealed class PostgresSnapshotStore(
 
         _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
         logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAtUtc);
+        await EnqueueScoringCandidateAsync(identity, vehicle.Platform, observedAtUtc, cancellationToken);
     }
 
     private async Task<AuctionVehicle> ReuseResolvedCopartMediaAsync(string identity, AuctionVehicle vehicle, CancellationToken cancellationToken)

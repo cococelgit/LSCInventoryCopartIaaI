@@ -262,6 +262,9 @@ public sealed record VehicleSpecs
     [JsonConverter(typeof(FlexibleStringJsonConverter))]
     public string? Cylinders { get; init; }
 
+    [JsonPropertyName("airbags")]
+    public string? Airbags { get; init; }
+
     [JsonPropertyName("trim")]
     public string? Trim { get; init; }
 }
