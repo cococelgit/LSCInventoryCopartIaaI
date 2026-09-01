@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "type": "string", "defaultValue": "eastus2" }
+  },
+  "variables": {
+    "redisName": "lsc-inventory-facets-redis",
+    "redisDatabaseName": "default",
+    "apiRuntimeIdentityName": "id-lsc-inventory-db-runtime-prod",
+    "apiRuntimeIdentityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('apiRuntimeIdentityName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments",
+      "apiVersion": "2026-05-01-preview",
+      "name": "[format('{0}/{1}/lscfacetsruntime', variables('redisName'), variables('redisDatabaseName'))]",
+      "properties": {
+        "accessPolicyName": "default",
+        "accessString": "+@read +@write +@connection +info +eval ~lsc:facets:v2:*",
+        "user": {
+          "objectId": "[reference(variables('apiRuntimeIdentityResourceId'), '2018-11-30').principalId]"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "redisOrAclChanged": { "type": "bool", "value": true },
+    "aclAssignment": { "type": "string", "value": "lscfacetsruntime" },
+    "apiChanged": { "type": "bool", "value": false },
+    "iaaiJobChanged": { "type": "bool", "value": false },
+    "copartJobChanged": { "type": "bool", "value": false },
+    "copartAutoJobChanged": { "type": "bool", "value": false },
+    "genericJobChanged": { "type": "bool", "value": false },
+    "scoringJobChanged": { "type": "bool", "value": false },
+    "jobExecutionStarted": { "type": "bool", "value": false },
+    "migrationsEnabled": { "type": "bool", "value": false },
+    "facetIndexMigrationStarted": { "type": "bool", "value": false },
+    "projectionRebuildStarted": { "type": "bool", "value": false }
+  }
+}
