@@ -52,4 +52,10 @@ public sealed class CopartExcelOptions
 
     [Range(1, 250000)]
     public int AuctionHistoryBackfillBatchSize { get; init; } = 100000;
+
+    [Range(1, 2000)]
+    public int ScoringBackfillBatchSize { get; init; } = 500;
+
+    [Range(1, 16)]
+    public int ScoringBackfillConcurrency { get; init; } = 8;
 }

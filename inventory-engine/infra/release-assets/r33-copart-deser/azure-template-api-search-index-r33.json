@@ -10,8 +10,8 @@
   "variables": {
     "identityName": "uai-lsc-inventory-release-afaac3d",
     "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
-    "scriptName": "deploy-api-search-index-r32-20260830-correct-source",
-    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/main/inventory-engine/infra/release-assets/r32-search-index-correct-source/federated-deploy-api-search-index-r32.sh"
+    "scriptName": "deploy-api-search-index-r33-20260830-copart-deser",
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/main/inventory-engine/infra/release-assets/r33-copart-deser/federated-deploy-api-search-index-r33.sh"
   },
   "resources": [
     {
@@ -27,7 +27,7 @@
         }
       },
       "properties": {
-        "forceUpdateTag": "api-search-index-r32-20260830-correct-source-v1",
+        "forceUpdateTag": "api-search-index-r33-20260830-copart-deser-v2",
         "azCliVersion": "2.65.0",
         "primaryScriptUri": "[variables('scriptUri')]",
         "timeout": "PT30M",
@@ -39,7 +39,7 @@
   "outputs": {
     "apiImage": {
       "type": "string",
-      "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r32-search-index-correct-source"
+      "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r33-copart-deser"
     },
     "iaaiJobChanged": {
       "type": "bool",
@@ -75,7 +75,7 @@
     },
     "scriptSha256": {
       "type": "string",
-      "value": "d83656edf94a748d202e8fd6a45a2ac6c023b0b666f90c64bc083267c1eda6aa"
+      "value": "3322489d6912c5916eef50867124b83378a2bcea7e89660dc84c31f51318864e"
     }
   }
 }

@@ -101,7 +101,7 @@ public sealed class CopartTitleBackfillProcessor(
     {
         try
         {
-            var mappedVehicle = CopartTitleMapper.Apply(candidate.Vehicle);
+            var mappedVehicle = CopartTitleMapper.ApplyTaxonomy(CopartTitleMapper.Apply(candidate.Vehicle));
             var mappingStatus = mappedVehicle.AdditionalData is not null &&
                 mappedVehicle.AdditionalData.TryGetValue("source_title_mapping", out var status) &&
                 status.ValueKind == System.Text.Json.JsonValueKind.String

@@ -81,6 +81,7 @@ builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotPro
 builder.Services.AddScoped<ICopartMediaEnrichmentProcessor, CopartMediaEnrichmentProcessor>();
 builder.Services.AddScoped<ICopartTitleBackfillProcessor, CopartTitleBackfillProcessor>();
 builder.Services.AddScoped<ICopartAuctionHistoryBackfillProcessor, CopartAuctionHistoryBackfillProcessor>();
+builder.Services.AddScoped<ICopartScoringBackfillProcessor, CopartScoringBackfillProcessor>();
 builder.Services.AddHostedService<InventorySyncWorker>();
 
 var app = builder.Build();
@@ -509,7 +510,7 @@ if (lotMediaDiagnosticArgument is not null)
                 resolution.Resolved,
                 resolution.GalleryImages,
                 resolution.HdImages,
-                resolution.Failure
+                resolution.FailureCode
             }
         }));
     }
@@ -569,6 +570,33 @@ if (args.Contains("--copart-auction-history-report", StringComparer.OrdinalIgnor
     return;
 }
 
+if (args.Contains("--copart-scoring-report", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await store.GetCopartScoringCoverageReportAsync(CancellationToken.None)));
+    return;
+}
+
+if (args.Contains("--copart-scoring-backfill", StringComparer.OrdinalIgnoreCase))
+{
+    try
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var processor = scope.ServiceProvider.GetRequiredService<ICopartScoringBackfillProcessor>();
+        var result = await processor.RunAsync(CancellationToken.None);
+        Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+        if (result.Failed > 0 || result.Remaining > 0) Environment.ExitCode = 1;
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Copart scoring backfill fatal error: {exception}");
+        Environment.ExitCode = 1;
+    }
+
+    return;
+}
+
 if (args.Contains("--copart-title-backfill", StringComparer.OrdinalIgnoreCase))
 {
     try
@@ -602,7 +630,8 @@ if (copartFileIndex >= 0)
     await using var content = snapshot.Content;
     var result = await processor.ProcessAsync(snapshot, CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
-    if (!result.Processed || !result.IsComplete || result.Errors > 0)
+    var isExpectedNoOp = result.IsDuplicate || string.Equals(result.RejectionReason, "SKIPPED_LOCK_HELD: another Copart snapshot processor is active.", StringComparison.Ordinal);
+    if (!isExpectedNoOp && (!result.Processed || !result.IsComplete || result.Errors > 0))
     {
         Environment.ExitCode = 1;
     }
@@ -637,7 +666,8 @@ if (args.Contains("--copart-excel-run", StringComparer.OrdinalIgnoreCase))
     var processor = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotProcessor>();
     var result = await processor.RunLatestAsync(CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
-    if (!result.Processed || !result.IsComplete || result.Errors > 0)
+    var isExpectedNoOp = result.IsDuplicate || string.Equals(result.RejectionReason, "SKIPPED_LOCK_HELD: another Copart snapshot processor is active.", StringComparison.Ordinal);
+    if (!isExpectedNoOp && (!result.Processed || !result.IsComplete || result.Errors > 0))
     {
         Environment.ExitCode = 1;
     }

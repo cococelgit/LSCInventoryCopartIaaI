@@ -73,12 +73,12 @@ jobs:
           az containerapp job show \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,image:properties.template.containers[0].image}' \
+            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,parallelism:properties.configuration.scheduleTriggerConfig.parallelism,completionCount:properties.configuration.scheduleTriggerConfig.completionCount,image:properties.template.containers[0].image}' \
             -o json
           az containerapp job execution list \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime}' \
+            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,conditions:properties.conditions}' \
             -o json
           echo "Listing recent manual Copart processing executions."
           az containerapp job execution list \
@@ -106,9 +106,15 @@ jobs:
           environment_name="${environment_id##*/}"
           workspace_id="$(az containerapp env show --name "$environment_name" --resource-group "$RESOURCE_GROUP" --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' -o tsv)"
           if [ -n "$workspace_id" ] && [ "$workspace_id" != "None" ]; then
+            echo "Dedicated Copart Job logs (read-only)."
             az monitor log-analytics query \
               --workspace "$workspace_id" \
               --analytics-query "union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL | where ContainerAppName_s == '$COPART_JOB_NAME' | order by TimeGenerated desc | take 500" \
+              -o json
+            echo "Scheduled Copart Job logs (read-only)."
+            az monitor log-analytics query \
+              --workspace "$workspace_id" \
+              --analytics-query "union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL | where ContainerAppName_s == '$COPART_AUTO_PROCESS_JOB_NAME' | project TimeGenerated, ContainerAppName_s, Log_s, Reason_s | order by TimeGenerated desc | take 500" \
               -o json
           else
             echo "No Log Analytics workspace identifier was available."

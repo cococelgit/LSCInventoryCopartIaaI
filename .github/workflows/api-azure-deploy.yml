@@ -66,8 +66,8 @@ jobs:
           az acr build \
             --registry "$ACR_NAME" \
             --image "$IMAGE_NAME:api-${GITHUB_SHA}" \
-            --file inventory-engine/Dockerfile \
-            inventory-engine
+            --file Dockerfile \
+            .
 
       - name: Enforce safe first rollout flags
         shell: bash

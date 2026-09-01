@@ -47,8 +47,7 @@ public sealed class CopartExcelSnapshotAdapterTests
         Assert.Equal("Clear Title", mappedVehicle.SaleDocument!.Name);
         Assert.Equal("AQ", mappedVehicle.AdditionalData!["source_title_type_code"].GetString());
         Assert.Equal("mapped", mappedVehicle.AdditionalData["source_title_mapping"].GetString());
-        Assert.Equal("CLEAN", mappedVehicle.AdditionalData["title_category"].GetString());
-        Assert.Equal("STANDARD", mappedVehicle.AdditionalData["title_review_status"].GetString());
+        Assert.False(mappedVehicle.AdditionalData.ContainsKey("title_category"));
         Assert.True(AuctionEligibilityEvaluator.Evaluate(mappedVehicle, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).LoadToSystem);
     }
 
@@ -66,8 +65,7 @@ public sealed class CopartExcelSnapshotAdapterTests
         var evaluation = AuctionEligibilityEvaluator.Evaluate(unmappedVehicle, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         Assert.Equal("M02", unmappedVehicle.Title);
         Assert.Equal("unmapped", unmappedVehicle.AdditionalData!["source_title_mapping"].GetString());
-        Assert.Equal("OTHER_UNVERIFIED", unmappedVehicle.AdditionalData["title_category"].GetString());
-        Assert.Equal("DOCUMENT_REVIEW", unmappedVehicle.AdditionalData["title_review_status"].GetString());
+        Assert.False(unmappedVehicle.AdditionalData.ContainsKey("title_category"));
         Assert.True(evaluation.LoadToSystem);
         Assert.Contains(evaluation.Flags, flag => flag.Code == "M02");
     }
@@ -202,6 +200,40 @@ public sealed class CopartExcelSnapshotAdapterTests
         Assert.False(reserialized.Contains("\"label\"", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("2500.50", true)]
+    [InlineData("0", false)]
+    [InlineData("-25", false)]
+    [InlineData("", false)]
+    [InlineData("not-a-price", false)]
+    public async Task Buy_now_is_present_only_for_strictly_positive_copart_values(string buyNow, bool expectedAvailable)
+    {
+        var adapter = CreateAdapter();
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var row in adapter.ReadAcceptedSnapshotAsync(CreateSnapshot(BuildCsv(1, buyNow: buyNow)), CancellationToken.None))
+            vehicles.Add(row);
+
+        var vehicle = Assert.Single(vehicles);
+        Assert.Equal(expectedAvailable, vehicle.Pricing!.BuyNowUsd is > 0m);
+        if (expectedAvailable) Assert.Equal(2500.50m, vehicle.Pricing.BuyNowUsd);
+        else Assert.Null(vehicle.Pricing.BuyNowUsd);
+    }
+
+    [Fact]
+    public async Task Zero_current_bid_remains_distinct_from_absent_buy_now()
+    {
+        var adapter = CreateAdapter();
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var row in adapter.ReadAcceptedSnapshotAsync(CreateSnapshot(BuildCsv(1, currentBid: "0", buyNow: "0")), CancellationToken.None))
+            vehicles.Add(row);
+
+        var vehicle = Assert.Single(vehicles);
+        Assert.Equal(0m, vehicle.Pricing!.CurrentBidUsd);
+        Assert.Null(vehicle.Pricing.BuyNowUsd);
+    }
+
     [Fact]
     public async Task Hash_mismatch_is_rejected()
     {
@@ -230,13 +262,13 @@ public sealed class CopartExcelSnapshotAdapterTests
         return new CopartSnapshotEnvelope("salesdata.csv", hash, DateTimeOffset.UtcNow, new MemoryStream(bytes));
     }
 
-    private static string BuildCsv(int rows, string runDrives = "Runs and Drives")
+    private static string BuildCsv(int rows, string runDrives = "Runs and Drives", string currentBid = "5000", string buyNow = "0")
     {
         const string header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Drive,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail\n";
         var builder = new StringBuilder(header);
         for (var index = 0; index < rows; index++)
         {
-            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,FRONT WHEEL DRIVE,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
+            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,FRONT WHEEL DRIVE,{runDrives},10000,Actual,Open,{currentBid},{buyNow},https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
         }
         return builder.ToString();
     }

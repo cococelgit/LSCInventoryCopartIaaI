@@ -1,18 +1,17 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Globalization;
-using System.Text.RegularExpressions;
+using Azure;
 using Azure.Core;
 using Azure.Identity;
 using Azure.Storage.Blobs;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
-using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Scoring;
+using Lsc.Inventory.Api.Sources;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -24,31 +23,84 @@ public sealed partial class PostgresSnapshotStore(
     ILogger<PostgresSnapshotStore> logger) : IInventorySnapshotStore
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
-    private static readonly SemaphoreSlim AuditSchemaLock = new(1, 1);
-    private static readonly SemaphoreSlim SearchProjectionSchemaLock = new(1, 1);
+    private static readonly SemaphoreSlim CopartSchemaLock = new(1, 1);
+    private static readonly SemaphoreSlim CopartAuctionHistorySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim EligibilitySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim ScoringSchemaLock = new(1, 1);
-    private static readonly SemaphoreSlim NationalSyncSchemaLock = new(1, 1);
+    private const long CopartProcessingAdvisoryLockKey = 812043557764023219L;
     private static bool _schemaInitialized;
-    private static bool _auditSchemaInitialized;
-    private static bool _searchProjectionSchemaInitialized;
+    private static bool _copartSchemaInitialized;
+    private static bool _copartAuctionHistorySchemaInitialized;
     private static bool _eligibilitySchemaInitialized;
     private static bool _lifecycleSchemaInitialized;
     private static bool _scoringSchemaInitialized;
-    private static bool _nationalSyncSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly BlobAuditOptions _blob = blobOptions.Value;
     private readonly ConcurrentDictionary<string, StoredVehicleSnapshot> _recent = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
-    private AccessToken _cachedDatabaseAccessToken;
-    private bool _projectionReadyCache;
-    private long _projectionReadyCheckedAtTicks;
-    private const string ActiveLifecyclePredicate = "coalesce(lifecycle.is_active, current.is_active)";
     private readonly TokenCredential _credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
     {
         ManagedIdentityClientId = persistenceOptions.Value.ManagedIdentityClientId
     });
+
+    /// <summary>
+    /// Holds a PostgreSQL session advisory lock for the lifetime of a Copart snapshot processor.
+    /// The lock does not create schema, alter IAAI, or modify any inventory record.
+    /// </summary>
+    public async Task<IAsyncDisposable?> TryAcquireCopartProcessingLeaseAsync(CancellationToken cancellationToken)
+    {
+        var connection = await OpenConnectionAsync(cancellationToken);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = "select pg_try_advisory_lock(@lock_key);";
+            AddParameter(command, "lock_key", CopartProcessingAdvisoryLockKey);
+            var acquired = (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
+            if (!acquired)
+            {
+                await connection.DisposeAsync();
+                return null;
+            }
+
+            return new PostgresCopartProcessingLease(connection, CopartProcessingAdvisoryLockKey, logger);
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    private sealed class PostgresCopartProcessingLease(
+        NpgsqlConnection connection,
+        long lockKey,
+        ILogger logger) : IAsyncDisposable
+    {
+        private NpgsqlConnection? _connection = connection;
+
+        public async ValueTask DisposeAsync()
+        {
+            var activeConnection = Interlocked.Exchange(ref _connection, null);
+            if (activeConnection is null) return;
+
+            try
+            {
+                await using var command = activeConnection.CreateCommand();
+                command.CommandText = "select pg_advisory_unlock(@lock_key);";
+                AddParameter(command, "lock_key", lockKey);
+                await command.ExecuteNonQueryAsync();
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "Copart processing advisory lock release was deferred to database session close.");
+            }
+            finally
+            {
+                await activeConnection.DisposeAsync();
+            }
+        }
+    }
 
     public async Task BootstrapRuntimePrincipalAsync(CancellationToken cancellationToken)
     {
@@ -120,33 +172,21 @@ public sealed partial class PostgresSnapshotStore(
         logger.LogInformation("Bootstrapped the database and least-privilege runtime principal.");
     }
 
-    public async Task<InventoryLotPersistenceResult> PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken, Guid? runId = null)
+    public async Task PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken)
     {
-        var identity = BuildIdentity(vehicle);
-        var rawJson = JsonSerializer.Serialize(vehicle);
-        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAt, payloadHash);
-
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
+        var observedAtUtc = observedAt.ToUniversalTime();
+        var auctionAtUtc = vehicle.Auction?.AuctionAt?.ToUniversalTime();
+        var identity = BuildIdentity(vehicle);
+        vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
+        var rawJson = JsonSerializer.Serialize(vehicle);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        string? previousHash = null;
-        AuctionVehicle? previousVehicle = null;
-        await using (var previous = connection.CreateCommand())
-        {
-            previous.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            previous.CommandText = "select payload_hash, payload::text from auction_lot_versions where lot_key = @lot_key order by observed_at desc limit 1;";
-            AddParameter(previous, "lot_key", identity);
-            await using var reader = await previous.ExecuteReaderAsync(cancellationToken);
-            if (await reader.ReadAsync(cancellationToken))
-            {
-                previousHash = reader.GetString(0);
-                previousVehicle = JsonSerializer.Deserialize<AuctionVehicle>(reader.GetString(1), new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
-            }
-        }
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
@@ -226,7 +266,7 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "odometer", vehicle.Odometer);
         AddParameter(command, "damage", vehicle.Damage);
         AddParameter(command, "auction_state", vehicle.Auction?.State);
-        AddParameter(command, "auction_at", vehicle.Auction?.AuctionAt);
+        AddParameter(command, "auction_at", auctionAtUtc);
         AddParameter(command, "lot_status", vehicle.Auction?.LotStatus);
         AddParameter(command, "lot_sub_status", vehicle.Auction?.LotSubStatus);
         AddParameter(command, "location_display", vehicle.Location?.Display);
@@ -237,146 +277,814 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
         AddParameter(command, "media_photos_count", vehicle.Media?.ThumbnailsCount);
         AddParameter(command, "media_has_360", vehicle.Media?.Has360);
-        AddParameter(command, "observed_at", observedAt);
+        AddParameter(command, "observed_at", observedAtUtc);
         AddParameter(command, "payload_hash", payloadHash);
         AddParameter(command, "raw_blob_name", blobName);
         AddParameter(command, "payload", rawJson);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
-        await UpsertSearchProjectionAsync(connection, identity, vehicle, observedAt, rawJson, cancellationToken);
 
-        _recent[identity] = new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson);
-        logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAt);
-        var action = previousHash is null ? "created" : string.Equals(previousHash, payloadHash, StringComparison.Ordinal) ? "unchanged" : "updated";
-        var changedFields = action == "created" ? new[] { "initial" } : action == "updated" ? DescribeChangedFields(previousVehicle, vehicle) : Array.Empty<string>();
-        var result = new InventoryLotPersistenceResult(identity, action, changedFields);
-        if (!string.Equals(action, "unchanged", StringComparison.Ordinal))
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
+        logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAtUtc);
+        await EnqueueScoringCandidateAsync(identity, vehicle.Platform, observedAtUtc, cancellationToken);
+    }
+
+    public async Task<CopartInlineScoringPersistenceResult> PersistCopartAcceptedWithScoringAsync(
+        AuctionVehicle vehicle,
+        EligibilityEvaluation eligibility,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Inline scoring persistence is restricted to Copart Excel lots.");
+        if (!eligibility.LoadToSystem)
+            throw new InvalidOperationException("Only eligible Copart lots may be persisted with inline scoring.");
+
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await EnsureScoringSchemaAsync(cancellationToken);
+        var observedAtUtc = observedAt.ToUniversalTime();
+        var identity = BuildIdentity(vehicle);
+        vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
+        var rawJson = JsonSerializer.Serialize(vehicle);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
+
+        var policyVersion = LscScoringPolicy.ResolveVersion(vehicle.Platform);
+        var scoreInputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
+        var scoringDuration = TimeSpan.Zero;
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        string snapshotChange;
+        await using (var existing = connection.CreateCommand())
         {
-            try
+            existing.Transaction = transaction;
+            existing.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            existing.CommandText = """
+                select exists(select 1 from auction_lots where lot_key = @lot_key),
+                       exists(select 1 from auction_lot_versions where lot_key = @lot_key and payload_hash = @payload_hash);
+                """;
+            AddParameter(existing, "lot_key", identity);
+            AddParameter(existing, "payload_hash", payloadHash);
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            snapshotChange = !reader.GetBoolean(0) ? "created" : reader.GetBoolean(1) ? "unchanged" : "updated";
+        }
+
+        var scoreCurrent = false;
+        await using (var current = connection.CreateCommand())
+        {
+            current.Transaction = transaction;
+            current.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            current.CommandText = """
+                select policy_version, input_hash
+                from inventory_vehicle_score_current
+                where lot_key = @lot_key
+                for update;
+                """;
+            AddParameter(current, "lot_key", identity);
+            await using var reader = await current.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
             {
-                await EnqueueScoringCandidateAsync(identity, vehicle.Platform, observedAt, cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                // Scoring is deliberately non-blocking: inventory ingestion stays available if its queue is unavailable.
-                logger.LogError(exception, "Could not enqueue lot {LotKey} for LSC scoring.", identity);
+                scoreCurrent = string.Equals(reader.GetString(0), policyVersion, StringComparison.Ordinal) &&
+                               string.Equals(reader.GetString(1), scoreInputHash, StringComparison.Ordinal);
             }
         }
-        if (runId is not null)
+
+        await using (var snapshot = connection.CreateCommand())
         {
-            await RecordSyncRunEventAsync(new InventorySyncRunEvent(
-                runId.Value,
-                vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
-                identity,
-                vehicle.LotNumber,
-                MaskVin(vehicle.Vin),
-                action,
-                changedFields,
-                [],
-                observedAt), cancellationToken);
+            snapshot.Transaction = transaction;
+            snapshot.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            snapshot.CommandText = """
+                insert into auction_lots (
+                    lot_key, platform, lot_number, vin, title, year, make, model, vehicle_type,
+                    color, fuel_type, transmission, drive_type, odometer, damage, auction_state,
+                    auction_at, lot_status, lot_sub_status, location_display, location_state,
+                    facility_id, current_bid_usd, buy_now_usd, sale_price_usd, media_photos_count,
+                    media_has_360, observed_at, updated_at)
+                values (
+                    @lot_key, @platform, @lot_number, @vin, @title, @year, @make, @model, @vehicle_type,
+                    @color, @fuel_type, @transmission, @drive_type, @odometer, @damage, @auction_state,
+                    @auction_at, @lot_status, @lot_sub_status, @location_display, @location_state,
+                    @facility_id, @current_bid_usd, @buy_now_usd, @sale_price_usd, @media_photos_count,
+                    @media_has_360, @observed_at, now())
+                on conflict (lot_key) do update set
+                    title = excluded.title, year = excluded.year, make = excluded.make, model = excluded.model,
+                    vehicle_type = excluded.vehicle_type, color = excluded.color, fuel_type = excluded.fuel_type,
+                    transmission = excluded.transmission, drive_type = excluded.drive_type, odometer = excluded.odometer,
+                    damage = excluded.damage, auction_state = excluded.auction_state, auction_at = excluded.auction_at,
+                    lot_status = excluded.lot_status, lot_sub_status = excluded.lot_sub_status,
+                    location_display = excluded.location_display, location_state = excluded.location_state,
+                    facility_id = excluded.facility_id, current_bid_usd = excluded.current_bid_usd,
+                    buy_now_usd = excluded.buy_now_usd, sale_price_usd = excluded.sale_price_usd,
+                    media_photos_count = excluded.media_photos_count, media_has_360 = excluded.media_has_360,
+                    observed_at = excluded.observed_at, updated_at = now();
+
+                insert into auction_lot_versions (
+                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    sale_price_usd, lot_status, lot_sub_status, payload)
+                values (
+                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
+                on conflict (lot_key, payload_hash) do nothing;
+
+                insert into inventory_lot_lifecycle (
+                    lot_key, platform, is_active, consecutive_misses, first_seen_at, last_seen_at, deactivated_at, updated_at)
+                values (@lot_key, @platform, true, 0, @observed_at, @observed_at, null, now())
+                on conflict (lot_key) do update set
+                    platform = excluded.platform, is_active = true, consecutive_misses = 0,
+                    last_seen_at = excluded.last_seen_at, deactivated_at = null, updated_at = now();
+                """;
+            AddSnapshotParameters(snapshot, vehicle, identity, observedAtUtc, payloadHash, blobName, rawJson);
+            await snapshot.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        LscVehicleScoringResult? score = null;
+        if (scoreCurrent)
+        {
+            await using var touch = connection.CreateCommand();
+            touch.Transaction = transaction;
+            touch.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            touch.CommandText = """
+                update inventory_vehicle_score_results
+                set source_observed_at = @source_observed_at, updated_at = now()
+                where lot_key = @lot_key and policy_version = @policy_version and input_hash = @input_hash;
+
+                update inventory_vehicle_score_current
+                set source_observed_at = @source_observed_at, updated_at = now()
+                where lot_key = @lot_key and policy_version = @policy_version and input_hash = @input_hash;
+                """;
+            AddParameter(touch, "lot_key", identity);
+            AddParameter(touch, "source_observed_at", observedAtUtc);
+            AddParameter(touch, "policy_version", policyVersion);
+            AddParameter(touch, "input_hash", scoreInputHash);
+            await touch.ExecuteNonQueryAsync(cancellationToken);
+        }
+        else
+        {
+            var scoringStartedAt = Stopwatch.GetTimestamp();
+            score = LscVehicleScoringEngine.Evaluate(vehicle, eligibility, observedAtUtc);
+            scoringDuration = Stopwatch.GetElapsedTime(scoringStartedAt);
+            await PersistScoringResultInTransactionAsync(connection, transaction, score, observedAtUtc, cancellationToken);
+        }
+
+        await using (var dequeue = connection.CreateCommand())
+        {
+            dequeue.Transaction = transaction;
+            dequeue.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            dequeue.CommandText = "delete from inventory_vehicle_scoring_queue where lot_key = @lot_key;";
+            AddParameter(dequeue, "lot_key", identity);
+            await dequeue.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
+        return new CopartInlineScoringPersistenceResult(snapshotChange, !scoreCurrent, scoreCurrent, score, scoringDuration);
+    }
+
+    private static void AddSnapshotParameters(NpgsqlCommand command, AuctionVehicle vehicle, string identity, DateTimeOffset observedAtUtc, string payloadHash, string blobName, string rawJson)
+    {
+        AddParameter(command, "lot_key", identity);
+        AddParameter(command, "platform", vehicle.Platform);
+        AddParameter(command, "lot_number", vehicle.LotNumber);
+        AddParameter(command, "vin", vehicle.Vin);
+        AddParameter(command, "title", vehicle.Title);
+        AddParameter(command, "year", vehicle.Year);
+        AddParameter(command, "make", vehicle.Make);
+        AddParameter(command, "model", vehicle.Model);
+        AddParameter(command, "vehicle_type", vehicle.VehicleType);
+        AddParameter(command, "color", vehicle.Color);
+        AddParameter(command, "fuel_type", vehicle.FuelType);
+        AddParameter(command, "transmission", vehicle.Transmission);
+        AddParameter(command, "drive_type", vehicle.DriveType);
+        AddParameter(command, "odometer", vehicle.Odometer);
+        AddParameter(command, "damage", vehicle.Damage);
+        AddParameter(command, "auction_state", vehicle.Auction?.State);
+        AddParameter(command, "auction_at", vehicle.Auction?.AuctionAt?.ToUniversalTime());
+        AddParameter(command, "lot_status", vehicle.Auction?.LotStatus);
+        AddParameter(command, "lot_sub_status", vehicle.Auction?.LotSubStatus);
+        AddParameter(command, "location_display", vehicle.Location?.Display);
+        AddParameter(command, "location_state", vehicle.Location?.State);
+        AddParameter(command, "facility_id", vehicle.Location?.FacilityId);
+        AddParameter(command, "current_bid_usd", vehicle.Pricing?.CurrentBidUsd);
+        AddParameter(command, "buy_now_usd", vehicle.Pricing?.BuyNowUsd);
+        AddParameter(command, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
+        AddParameter(command, "media_photos_count", vehicle.Media?.ThumbnailsCount);
+        AddParameter(command, "media_has_360", vehicle.Media?.Has360);
+        AddParameter(command, "observed_at", observedAtUtc);
+        AddParameter(command, "payload_hash", payloadHash);
+        AddParameter(command, "raw_blob_name", blobName);
+        AddParameter(command, "payload", rawJson);
+    }
+
+    private async Task<AuctionVehicle> ReuseResolvedCopartMediaAsync(string identity, AuctionVehicle vehicle, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase) || vehicle.Media?.Photos?.Count is > 1)
+            return vehicle;
+        var catalogUrl = ReadCopartCatalogUrl(vehicle);
+        if (catalogUrl is null) return vehicle;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select payload::text
+            from auction_lot_versions
+            where lot_key = @lot_key
+              and payload ? 'copart_media_resolution'
+              and payload #>> '{_raw_source,Image URL}' = @catalog_url
+              and coalesce(jsonb_array_length(payload #> '{media,thumbs}'), 0) > 1
+            order by created_at desc
+            limit 1;
+            """;
+        AddParameter(command, "lot_key", identity);
+        AddParameter(command, "catalog_url", catalogUrl);
+        var rawJson = await command.ExecuteScalarAsync(cancellationToken) as string;
+        if (string.IsNullOrWhiteSpace(rawJson)) return vehicle;
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        var resolved = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+        return resolved?.Media?.Photos?.Count is > 1 ? vehicle with { Media = resolved.Media } : vehicle;
+    }
+
+    private static string? ReadCopartCatalogUrl(AuctionVehicle vehicle)
+    {
+        if (vehicle.RawSource is not { } rawSource || rawSource.ValueKind != JsonValueKind.Object ||
+            !rawSource.TryGetProperty("Image URL", out var candidate) || candidate.ValueKind != JsonValueKind.String) return null;
+        var value = candidate.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        var limit = Math.Clamp(maximum, 1, 10000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lots.lot_key, lots.observed_at, versions.payload::text
+            from auction_lots lots
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) versions on true
+            where lots.platform = 'copart'
+              and coalesce(lifecycle.is_active, true)
+              and coalesce(lots.media_photos_count, 0) <= 1
+              and coalesce(versions.payload #>> '{_raw_source,Image URL}', '') <> ''
+              and not exists (
+                  select 1
+                  from auction_lot_versions resolved
+                  where resolved.lot_key = lots.lot_key
+                    and resolved.payload ? 'copart_media_resolution'
+                    and resolved.payload #>> '{_raw_source,Image URL}' = versions.payload #>> '{_raw_source,Image URL}'
+                    and coalesce(jsonb_array_length(resolved.payload #> '{media,thumbs}'), 0) > 1
+              )
+            order by lots.updated_at asc, lots.lot_key
+            limit @limit;
+            """;
+        AddParameter(command, "limit", limit);
+        var result = new List<StoredVehicleSnapshot>(limit);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var identity = reader.GetString(0);
+            var observedAt = reader.GetFieldValue<DateTimeOffset>(1);
+            var rawJson = reader.GetString(2);
+            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (vehicle is not null) result.Add(new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson));
         }
         return result;
     }
 
-    private async Task UpsertSearchProjectionAsync(NpgsqlConnection connection, string lotKey, AuctionVehicle vehicle, DateTimeOffset observedAt, string payloadJson, CancellationToken cancellationToken)
+    public async Task<bool> UpdateCopartMediaAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, string resolutionStatus, CancellationToken cancellationToken)
     {
-        var sourceTitle = TitleFacetCategory.SourceTitle(vehicle);
-        var titleType = TitleFacetCategory.Classify(vehicle);
-        var specialTitle = TitleFacetCategory.IsSpecial(titleType);
-        var hasPhotos = (vehicle.Media?.Photos?.Count ?? 0) > 0 || (vehicle.Media?.Items?.Count ?? 0) > 0;
-        decimal? engineSize = decimal.TryParse(vehicle.VehicleSpecs?.Engine?.SizeLiters, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedEngineSize) ? parsedEngineSize : null;
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Copart media can only update Copart inventory.");
 
-        await using var projection = connection.CreateCommand();
-        projection.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        projection.CommandText = """
-            insert into inventory_search_current (
-                lot_key, platform, lot_number, vin, title, year, make, model, vehicle_type, title_type,
-                color, fuel_type, transmission, drive_type, body_style, primary_damage, secondary_damage,
-                seller_type, engine_layout, cylinders, loss_type, start_code, auction_state, auction_at,
-                lot_status, lot_sub_status, location_display, location_state, facility_id, odometer,
-                current_bid_usd, buy_now_usd, provider_estimate_from, provider_estimate_to, engine_size_liters,
-                horsepower, has_key, has_photos, media_has_360, is_buy_now, is_special_title, is_active,
-                observed_at, payload, search_text, updated_at)
-            values (
-                @lot_key, @platform, @lot_number, @vin, @title, @year, @make, @model, @vehicle_type, @title_type,
-                @color, @fuel_type, @transmission, @drive_type, @body_style, @primary_damage, @secondary_damage,
-                @seller_type, @engine_layout, @cylinders, @loss_type, @start_code, @auction_state, @auction_at,
-                @lot_status, @lot_sub_status, @location_display, @location_state, @facility_id, @odometer,
-                @current_bid_usd, @buy_now_usd, @provider_estimate_from, @provider_estimate_to, @engine_size_liters,
-                @horsepower, @has_key, @has_photos, @media_has_360, @is_buy_now, @is_special_title, true,
-                @observed_at, cast(@payload as jsonb), @search_text, now())
-            on conflict (lot_key) do update set
-                platform = excluded.platform, lot_number = excluded.lot_number, vin = excluded.vin,
-                title = excluded.title, year = excluded.year, make = excluded.make, model = excluded.model,
-                vehicle_type = excluded.vehicle_type, title_type = excluded.title_type, color = excluded.color,
-                fuel_type = excluded.fuel_type, transmission = excluded.transmission, drive_type = excluded.drive_type,
-                body_style = excluded.body_style, primary_damage = excluded.primary_damage,
-                secondary_damage = excluded.secondary_damage, seller_type = excluded.seller_type,
-                engine_layout = excluded.engine_layout, cylinders = excluded.cylinders, loss_type = excluded.loss_type,
-                start_code = excluded.start_code, auction_state = excluded.auction_state, auction_at = excluded.auction_at,
-                lot_status = excluded.lot_status, lot_sub_status = excluded.lot_sub_status,
-                location_display = excluded.location_display, location_state = excluded.location_state,
-                facility_id = excluded.facility_id, odometer = excluded.odometer,
-                current_bid_usd = excluded.current_bid_usd, buy_now_usd = excluded.buy_now_usd,
-                provider_estimate_from = excluded.provider_estimate_from, provider_estimate_to = excluded.provider_estimate_to,
-                engine_size_liters = excluded.engine_size_liters, horsepower = excluded.horsepower,
-                has_key = excluded.has_key, has_photos = excluded.has_photos, media_has_360 = excluded.media_has_360,
-                is_buy_now = excluded.is_buy_now, is_special_title = excluded.is_special_title, is_active = true,
-                observed_at = excluded.observed_at, payload = excluded.payload,
-                search_text = excluded.search_text, updated_at = now();
+        var observedAtUtc = expectedObservedAt.ToUniversalTime();
+        var additional = vehicle.AdditionalData is null
+            ? new Dictionary<string, JsonElement>()
+            : new Dictionary<string, JsonElement>(vehicle.AdditionalData);
+        additional["copart_media_resolution"] = JsonSerializer.SerializeToElement(resolutionStatus);
+        var enriched = vehicle with { AdditionalData = additional };
+        var rawJson = JsonSerializer.Serialize(enriched);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+
+        await EnsureSchemaAsync(cancellationToken);
+        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using (var update = connection.CreateCommand())
+        {
+            update.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            update.CommandText = """
+                update auction_lots
+                set media_photos_count = @media_photos_count,
+                    media_has_360 = @media_has_360,
+                    updated_at = now()
+                where lot_key = @lot_key
+                  and platform = 'copart'
+                  and observed_at = @observed_at;
+                """;
+            AddParameter(update, "lot_key", identity);
+            AddParameter(update, "media_photos_count", enriched.Media?.ThumbnailsCount);
+            AddParameter(update, "media_has_360", enriched.Media?.Has360);
+            AddParameter(update, "observed_at", observedAtUtc);
+            if (await update.ExecuteNonQueryAsync(cancellationToken) != 1) return false;
+        }
+
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            insert.CommandText = """
+                insert into auction_lot_versions (
+                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    sale_price_usd, lot_status, lot_sub_status, payload)
+                values (
+                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
+                on conflict (lot_key, payload_hash) do nothing;
+                """;
+            AddParameter(insert, "lot_key", identity);
+            AddParameter(insert, "observed_at", observedAtUtc);
+            AddParameter(insert, "payload_hash", payloadHash);
+            AddParameter(insert, "raw_blob_name", blobName);
+            AddParameter(insert, "current_bid_usd", enriched.Pricing?.CurrentBidUsd);
+            AddParameter(insert, "sale_price_usd", enriched.Pricing?.SalePriceUsd);
+            AddParameter(insert, "lot_status", enriched.Auction?.LotStatus);
+            AddParameter(insert, "lot_sub_status", enriched.Auction?.LotSubStatus);
+            AddParameter(insert, "payload", rawJson);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, enriched, rawJson);
+        logger.LogInformation("Resolved Copart media for inventory lot {LotKey} with {PhotoCount} photos.", identity, enriched.Media?.Photos?.Count ?? 0);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartTitleMappingCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        var limit = Math.Clamp(maximum, 1, 10_000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lots.lot_key, lots.observed_at, versions.payload::text
+            from auction_lots lots
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) versions on true
+            where lots.platform = 'copart'
+              and (
+                  coalesce(versions.payload ->> 'source_title_mapping_version', '') <> @mapping_version
+                  or coalesce(versions.payload ->> 'title_taxonomy_version', '') <> @taxonomy_version
+              )
+            order by lots.lot_key
+            limit @limit;
             """;
-        AddParameter(projection, "lot_key", lotKey);
-        AddParameter(projection, "platform", vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown");
-        AddParameter(projection, "lot_number", vehicle.LotNumber);
-        AddParameter(projection, "vin", vehicle.Vin);
-        AddParameter(projection, "title", vehicle.Title);
-        AddParameter(projection, "year", vehicle.Year);
-        AddParameter(projection, "make", vehicle.Make);
-        AddParameter(projection, "model", vehicle.Model);
-        AddParameter(projection, "vehicle_type", vehicle.VehicleType);
-        AddParameter(projection, "title_type", titleType);
-        AddParameter(projection, "color", vehicle.Color ?? vehicle.VehicleSpecs?.ExteriorColor);
-        AddParameter(projection, "fuel_type", vehicle.FuelType ?? vehicle.VehicleSpecs?.FuelType);
-        AddParameter(projection, "transmission", vehicle.Transmission ?? vehicle.VehicleSpecs?.Transmission);
-        AddParameter(projection, "drive_type", vehicle.DriveType ?? vehicle.VehicleSpecs?.DriveType);
-        AddParameter(projection, "body_style", vehicle.VehicleSpecs?.BodyStyle ?? vehicle.Details?.VehicleDescription?.BodyStyle);
-        AddParameter(projection, "primary_damage", vehicle.Damage ?? vehicle.Condition?.PrimaryDamage);
-        AddParameter(projection, "secondary_damage", vehicle.Condition?.SecondaryDamage);
-        AddParameter(projection, "seller_type", vehicle.Seller?.Type);
-        AddParameter(projection, "engine_layout", vehicle.VehicleSpecs?.Engine?.Layout);
-        AddParameter(projection, "cylinders", vehicle.Details?.VehicleDescription?.Cylinders);
-        AddParameter(projection, "loss_type", vehicle.Condition?.Loss);
-        AddParameter(projection, "start_code", vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label);
-        AddParameter(projection, "auction_state", vehicle.Auction?.State);
-        AddParameter(projection, "auction_at", vehicle.Auction?.AuctionAt);
-        AddParameter(projection, "lot_status", vehicle.Auction?.LotStatus);
-        AddParameter(projection, "lot_sub_status", vehicle.Auction?.LotSubStatus);
-        AddParameter(projection, "location_display", vehicle.Location?.Display);
-        AddParameter(projection, "location_state", vehicle.Location?.State);
-        AddParameter(projection, "facility_id", vehicle.Location?.FacilityId);
-        AddParameter(projection, "odometer", vehicle.Odometer);
-        AddParameter(projection, "current_bid_usd", vehicle.Pricing?.CurrentBidUsd);
-        AddParameter(projection, "buy_now_usd", vehicle.Pricing?.BuyNowUsd);
-        AddParameter(projection, "provider_estimate_from", vehicle.Pricing?.EstimatedCost?.FromUsd);
-        AddParameter(projection, "provider_estimate_to", vehicle.Pricing?.EstimatedCost?.ToUsd);
-        AddParameter(projection, "engine_size_liters", engineSize);
-        AddParameter(projection, "horsepower", vehicle.VehicleSpecs?.Engine?.Horsepower);
-        AddParameter(projection, "has_key", vehicle.Condition?.HasKey);
-        AddParameter(projection, "has_photos", hasPhotos);
-        AddParameter(projection, "media_has_360", vehicle.Media?.Has360);
-        AddParameter(projection, "is_buy_now", vehicle.Auction?.IsBuyNow == true || vehicle.Pricing?.BuyNowUsd is not null);
-        AddParameter(projection, "is_special_title", specialTitle);
-        AddParameter(projection, "observed_at", observedAt);
-        AddParameter(projection, "payload", payloadJson);
-        AddParameter(projection, "search_text", string.Join(' ', new[] { lotKey, vehicle.LotNumber, vehicle.Vin, vehicle.Title, vehicle.Make, vehicle.Model, sourceTitle, titleType }.Where(value => !string.IsNullOrWhiteSpace(value))));
-        await projection.ExecuteNonQueryAsync(cancellationToken);
+        AddParameter(command, "mapping_version", CopartTitleCatalog.Version);
+        AddParameter(command, "taxonomy_version", CopartTitleMapper.TaxonomyVersion);
+        AddParameter(command, "limit", limit);
+        var result = new List<StoredVehicleSnapshot>(limit);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var identity = reader.GetString(0);
+            var observedAt = reader.GetFieldValue<DateTimeOffset>(1);
+            var rawJson = reader.GetString(2);
+            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (vehicle is not null) result.Add(new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson));
+        }
+        return result;
+    }
+
+    public async Task<bool> UpdateCopartTitleMappingAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Copart title mapping can only update Copart inventory.");
+
+        var observedAtUtc = expectedObservedAt.ToUniversalTime();
+        var rawJson = JsonSerializer.Serialize(vehicle);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
+        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        await EnsureSchemaAsync(cancellationToken);
+        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using (var update = connection.CreateCommand())
+        {
+            update.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            update.CommandText = """
+                update auction_lots
+                set title = @title,
+                    updated_at = now()
+                where lot_key = @lot_key
+                  and platform = 'copart'
+                  and observed_at = @observed_at;
+                """;
+            AddParameter(update, "title", vehicle.Title);
+            AddParameter(update, "lot_key", identity);
+            AddParameter(update, "observed_at", observedAtUtc);
+            if (await update.ExecuteNonQueryAsync(cancellationToken) != 1) return false;
+        }
+
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            insert.CommandText = """
+                insert into auction_lot_versions (
+                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    sale_price_usd, lot_status, lot_sub_status, payload)
+                values (
+                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
+                on conflict (lot_key, payload_hash) do nothing;
+                """;
+            AddParameter(insert, "lot_key", identity);
+            AddParameter(insert, "observed_at", observedAtUtc);
+            AddParameter(insert, "payload_hash", payloadHash);
+            AddParameter(insert, "raw_blob_name", blobName);
+            AddParameter(insert, "current_bid_usd", vehicle.Pricing?.CurrentBidUsd);
+            AddParameter(insert, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
+            AddParameter(insert, "lot_status", vehicle.Auction?.LotStatus);
+            AddParameter(insert, "lot_sub_status", vehicle.Auction?.LotSubStatus);
+            AddParameter(insert, "payload", rawJson);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        _recent[identity] = new StoredVehicleSnapshot(identity, observedAtUtc, vehicle, rawJson);
+        return true;
+    }
+
+    public async Task<int> RecordCopartAuctionObservationsAsync(IReadOnlyList<CopartAuctionObservation> observations, CancellationToken cancellationToken)
+    {
+        if (observations.Count == 0) return 0;
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+
+        var values = new List<string>(observations.Count);
+        for (var index = 0; index < observations.Count; index++)
+        {
+            var observation = observations[index];
+            values.Add($"(@snapshot_sha{index}, @downloaded_at{index}, @lot_key{index}, @lot_number{index}, @auction_at{index}, @current_bid{index}, @buy_now{index}, @sale_price{index}, @lot_status{index}, @lot_sub_status{index}, @payload_hash{index})");
+            AddParameter(command, $"snapshot_sha{index}", observation.SnapshotSha256);
+            AddParameter(command, $"downloaded_at{index}", observation.SnapshotDownloadedAt.ToUniversalTime());
+            AddParameter(command, $"lot_key{index}", observation.LotKey);
+            AddParameter(command, $"lot_number{index}", observation.LotNumber);
+            AddParameter(command, $"auction_at{index}", observation.AuctionAt?.ToUniversalTime());
+            AddParameter(command, $"current_bid{index}", observation.CurrentBidUsd);
+            AddParameter(command, $"buy_now{index}", observation.BuyNowUsd);
+            AddParameter(command, $"sale_price{index}", observation.SalePriceUsd);
+            AddParameter(command, $"lot_status{index}", observation.LotStatus);
+            AddParameter(command, $"lot_sub_status{index}", observation.LotSubStatus);
+            AddParameter(command, $"payload_hash{index}", observation.PayloadHash);
+        }
+
+        command.CommandText = $"""
+            insert into copart_lot_observations (
+                snapshot_sha256, snapshot_downloaded_at, lot_key, lot_number, auction_at,
+                current_bid_usd, buy_now_usd, sale_price_usd, lot_status, lot_sub_status, payload_hash)
+            values {string.Join(",", values)}
+            on conflict (snapshot_sha256, lot_key) do nothing;
+            """;
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken)
+    {
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var allSources = string.Equals(snapshotSha256, "*", StringComparison.Ordinal);
+
+        await using (var derive = connection.CreateCommand())
+        {
+            derive.Transaction = transaction;
+            derive.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            derive.CommandText = """
+                with source as (
+                    select lot_key,
+                           auction_at,
+                           min(snapshot_downloaded_at) as first_observed_at,
+                           max(snapshot_downloaded_at) as last_observed_at,
+                           (array_agg(current_bid_usd order by snapshot_downloaded_at asc))[1] as first_bid_usd,
+                           (array_agg(current_bid_usd order by snapshot_downloaded_at desc))[1] as last_bid_usd,
+                           max(current_bid_usd) as maximum_bid_usd,
+                           (array_agg(buy_now_usd order by snapshot_downloaded_at desc))[1] as buy_now_usd,
+                           max(sale_price_usd) as sale_price_usd,
+                           (array_agg(lot_status order by snapshot_downloaded_at desc))[1] as lot_status,
+                           (array_agg(lot_sub_status order by snapshot_downloaded_at desc))[1] as lot_sub_status,
+                           count(*)::integer as observation_count
+                    from copart_lot_observations
+                    where auction_at is not null
+                      and (@all_sources or snapshot_sha256 = @snapshot_sha256)
+                    group by lot_key, auction_at
+                )
+                insert into copart_auction_attempts (
+                    lot_key, attempt_number, auction_at, first_observed_at, last_observed_at,
+                    first_bid_usd, last_bid_usd, maximum_bid_usd, buy_now_usd, sale_price_usd,
+                    outcome, evidence_level, outcome_evidence, observation_count)
+                select
+                    lot_key, 0, auction_at, first_observed_at, last_observed_at,
+                    first_bid_usd, last_bid_usd, maximum_bid_usd, buy_now_usd, sale_price_usd,
+                    case when coalesce(sale_price_usd, 0) > 0 then 'sold_confirmed' else 'scheduled' end,
+                    case when coalesce(sale_price_usd, 0) > 0 then 'source_confirmed' else 'source_observed' end,
+                    case when coalesce(sale_price_usd, 0) > 0 then 'Copart reported a positive sale price.' else null end,
+                    observation_count
+                from source
+                on conflict (lot_key, auction_at) do update set
+                    first_observed_at = least(copart_auction_attempts.first_observed_at, excluded.first_observed_at),
+                    last_observed_at = greatest(copart_auction_attempts.last_observed_at, excluded.last_observed_at),
+                    last_bid_usd = excluded.last_bid_usd,
+                    maximum_bid_usd = greatest(copart_auction_attempts.maximum_bid_usd, excluded.maximum_bid_usd),
+                    buy_now_usd = coalesce(excluded.buy_now_usd, copart_auction_attempts.buy_now_usd),
+                    sale_price_usd = coalesce(excluded.sale_price_usd, copart_auction_attempts.sale_price_usd),
+                    outcome = case when coalesce(excluded.sale_price_usd, 0) > 0 then 'sold_confirmed' else copart_auction_attempts.outcome end,
+                    evidence_level = case when coalesce(excluded.sale_price_usd, 0) > 0 then 'source_confirmed' else copart_auction_attempts.evidence_level end,
+                    outcome_evidence = case when coalesce(excluded.sale_price_usd, 0) > 0 then 'Copart reported a positive sale price.' else copart_auction_attempts.outcome_evidence end,
+                    observation_count = case when @all_sources then excluded.observation_count else copart_auction_attempts.observation_count + excluded.observation_count end,
+                    updated_at = now();
+                """;
+            AddParameter(derive, "snapshot_sha256", snapshotSha256);
+            AddParameter(derive, "all_sources", allSources);
+            await derive.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var outcomes = connection.CreateCommand())
+        {
+            outcomes.Transaction = transaction;
+            outcomes.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            outcomes.CommandText = """
+                with relisted as (
+                    select distinct on (prior.id) prior.id
+                    from copart_auction_attempts prior
+                    join copart_auction_attempts later
+                      on later.lot_key = prior.lot_key
+                     and later.auction_at > prior.auction_at
+                     and later.first_observed_at >= prior.auction_at
+                    where prior.outcome <> 'sold_confirmed'
+                    order by prior.id, later.auction_at
+                )
+                update copart_auction_attempts attempts
+                set outcome = 'relisted_inferred',
+                    evidence_level = 'inferred_from_reappearance',
+                    outcome_evidence = 'Same Copart lot reappeared after this auction date with a later auction date.',
+                    updated_at = now()
+                from relisted
+                where attempts.id = relisted.id;
+
+                update copart_auction_attempts
+                set outcome = 'unknown',
+                    evidence_level = 'insufficient_evidence',
+                    outcome_evidence = 'Auction date passed without an explicit sale result or later reappearance yet.',
+                    updated_at = now()
+                where auction_at < @finalized_at
+                  and outcome = 'scheduled';
+                """;
+            AddParameter(outcomes, "finalized_at", finalizedAt.ToUniversalTime());
+            await outcomes.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var renumber = connection.CreateCommand())
+        {
+            renumber.Transaction = transaction;
+            renumber.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            renumber.CommandText = """
+                with numbered as (
+                    select id, row_number() over (partition by lot_key order by auction_at)::integer as attempt_number
+                    from copart_auction_attempts
+                )
+                update copart_auction_attempts attempts
+                set attempt_number = numbered.attempt_number, updated_at = now()
+                from numbered
+                where attempts.id = numbered.id
+                  and attempts.attempt_number <> numbered.attempt_number;
+                """;
+            await renumber.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var signals = connection.CreateCommand())
+        {
+            signals.Transaction = transaction;
+            signals.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            signals.CommandText = """
+                with selected_lots as (
+                    select distinct lot_key
+                    from copart_lot_observations
+                    where @all_sources or snapshot_sha256 = @snapshot_sha256
+                ), facts as (
+                    select attempts.lot_key,
+                           count(*)::integer as attempt_count,
+                           count(*) filter (where attempts.outcome = 'relisted_inferred')::integer as relisted_count,
+                           min(attempts.auction_at) as first_attempt_at,
+                           max(attempts.auction_at) as last_attempt_at,
+                           (array_agg(attempts.last_bid_usd order by attempts.auction_at desc))[1] as last_bid_usd,
+                           min(attempts.maximum_bid_usd) as historical_minimum_bid_usd,
+                           max(attempts.maximum_bid_usd) as historical_maximum_bid_usd,
+                           bool_or(attempts.outcome = 'sold_confirmed') as sold_confirmed
+                    from copart_auction_attempts attempts
+                    join selected_lots on selected_lots.lot_key = attempts.lot_key
+                    group by attempts.lot_key
+                ), scored as (
+                    select *,
+                           case when sold_confirmed or relisted_count = 0 then 0 else
+                               least(relisted_count, 3) * 25 +
+                               case when attempt_count >= 3 then 20 else 0 end +
+                               case when first_attempt_at <= @finalized_at - interval '14 days' then 15 else 0 end +
+                               case when last_bid_usd is not null and historical_maximum_bid_usd is not null and last_bid_usd < historical_maximum_bid_usd then 15 else 0 end +
+                               case when historical_minimum_bid_usd is not null and historical_maximum_bid_usd > 0
+                                      and (historical_maximum_bid_usd - historical_minimum_bid_usd) / historical_maximum_bid_usd <= 0.02 then 10 else 0 end
+                           end as score
+                    from facts
+                )
+                insert into copart_lot_motivation_signals (
+                    lot_key, attempt_count, relisted_inferred_count, score, level, first_attempt_at,
+                    last_attempt_at, last_bid_usd, historical_maximum_bid_usd, score_components)
+                select lot_key, attempt_count, relisted_count, score,
+                       case when score >= 60 then 'high' when score >= 35 then 'medium' when score > 0 then 'watch' else 'none' end,
+                       first_attempt_at, last_attempt_at, last_bid_usd, historical_maximum_bid_usd,
+                       jsonb_build_object('relisted_inferred_count', relisted_count, 'attempt_count', attempt_count,
+                          'relisting_evidence_present', relisted_count > 0, 'sale_confirmed', sold_confirmed,
+                          'three_or_more_attempts', attempt_count >= 3,
+                          'first_attempt_at_least_14_days', first_attempt_at <= @finalized_at - interval '14 days',
+                          'last_bid_below_historical_maximum', coalesce(last_bid_usd < historical_maximum_bid_usd, false),
+                          'bidding_within_two_percent', coalesce(historical_minimum_bid_usd is not null and historical_maximum_bid_usd > 0
+                              and (historical_maximum_bid_usd - historical_minimum_bid_usd) / historical_maximum_bid_usd <= 0.02, false),
+                          'model_version', 'copart-auction-history-v1')
+                from scored
+                on conflict (lot_key) do update set
+                    attempt_count = excluded.attempt_count,
+                    relisted_inferred_count = excluded.relisted_inferred_count,
+                    score = excluded.score,
+                    level = excluded.level,
+                    first_attempt_at = excluded.first_attempt_at,
+                    last_attempt_at = excluded.last_attempt_at,
+                    last_bid_usd = excluded.last_bid_usd,
+                    historical_maximum_bid_usd = excluded.historical_maximum_bid_usd,
+                    score_components = excluded.score_components,
+                    updated_at = now();
+                """;
+            AddParameter(signals, "snapshot_sha256", snapshotSha256);
+            AddParameter(signals, "all_sources", allSources);
+            AddParameter(signals, "finalized_at", finalizedAt.ToUniversalTime());
+            await signals.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        var limit = Math.Clamp(maximum, 1, 250_000);
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await EnsureSchemaAsync(cancellationToken);
+
+        var candidates = 0;
+        var inserted = 0;
+        var failed = 0;
+        var failures = new List<string>();
+        var pending = new List<CopartAuctionObservation>(1_000);
+        const int batchSize = 1_000;
+
+        void RecordFailure(string message)
+        {
+            failed++;
+            if (failures.Count < 100) failures.Add(message);
+        }
+
+        async Task FlushPendingAsync()
+        {
+            if (pending.Count == 0) return;
+            inserted += await RecordCopartAuctionObservationsAsync(pending, cancellationToken);
+            pending.Clear();
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select versions.id, versions.observed_at, versions.payload_hash, versions.lot_key, versions.payload::text
+            from auction_lot_versions versions
+            join auction_lots lots on lots.lot_key = versions.lot_key
+            where lots.platform = 'copart'
+              and not exists (
+                  select 1 from copart_lot_observations observed
+                  where observed.snapshot_sha256 = concat('legacy-version-', versions.id)
+                    and observed.lot_key = versions.lot_key)
+            order by versions.id
+            limit @limit;
+            """;
+        AddParameter(command, "limit", limit);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                candidates++;
+                var versionId = reader.GetInt64(0);
+                var observedAt = reader.GetFieldValue<DateTimeOffset>(1);
+                var payloadHash = reader.GetString(2);
+                var lotKey = reader.GetString(3);
+                var rawJson = reader.GetString(4);
+                var lotNumber = lotKey.StartsWith("copart:", StringComparison.OrdinalIgnoreCase) ? lotKey["copart:".Length..] : lotKey;
+                CopartAuctionObservation? observation = null;
+
+                try
+                {
+                    var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+                    observation = vehicle is null ? null : CopartAuctionObservationFactory.Create(vehicle, $"legacy-version-{versionId}", observedAt);
+                    if (observation is null)
+                        RecordFailure($"version {versionId}: payload could not produce a Copart auction observation; retained as an idempotent placeholder.");
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    RecordFailure($"version {versionId}: {exception.Message}");
+                }
+
+                // A placeholder prevents a malformed legacy payload from being selected and retried forever.
+                // It contains no inferred auction date, bid, sale or seller data, so it cannot create an attempt or signal.
+                pending.Add(observation is null
+                    ? new CopartAuctionObservation($"legacy-version-{versionId}", observedAt, lotKey, lotNumber, null, null, null, null, null, null, payloadHash)
+                    : observation with { LotKey = lotKey, LotNumber = lotNumber, PayloadHash = payloadHash });
+
+                if (pending.Count >= batchSize) await FlushPendingAsync();
+            }
+        }
+
+        await FlushPendingAsync();
+        var finalizedAt = DateTimeOffset.UtcNow;
+        await FinalizeCopartAuctionAttemptsAsync("*", finalizedAt, cancellationToken);
+        var attemptsDerived = await CountCopartAuctionAttemptsAsync(cancellationToken);
+        if (failed > failures.Count)
+            failures.Add($"{failed - failures.Count} additional legacy payload conversion failure(s) omitted from this summary.");
+        return new CopartAuctionHistoryBackfillResult(true, candidates, inserted, attemptsDerived, failed, DateTimeOffset.UtcNow - startedAt, failures);
+    }
+
+    public async Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken)
+    {
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select
+                (select count(*) from copart_lot_observations) as observations,
+                (select count(distinct snapshot_sha256) from copart_lot_observations) as distinct_snapshots,
+                (select count(*) from copart_auction_attempts) as attempts,
+                (select count(*) from copart_lot_motivation_signals) as signals,
+                (select coalesce(jsonb_object_agg(outcome, total), '{}'::jsonb)
+                 from (select outcome, count(*)::bigint as total from copart_auction_attempts group by outcome) outcomes) as attempts_by_outcome,
+                (select coalesce(jsonb_object_agg(evidence_level, total), '{}'::jsonb)
+                 from (select evidence_level, count(*)::bigint as total from copart_auction_attempts group by evidence_level) evidence) as attempts_by_evidence,
+                (select coalesce(jsonb_object_agg(level, total), '{}'::jsonb)
+                 from (select level, count(*)::bigint as total from copart_lot_motivation_signals group by level) signal_levels) as signals_by_level;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            throw new InvalidOperationException("Copart auction-history report did not return aggregate counts.");
+
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        static IReadOnlyDictionary<string, long> ReadCounts(string raw, JsonSerializerOptions options) =>
+            JsonSerializer.Deserialize<Dictionary<string, long>>(raw, options) ?? new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        return new CopartAuctionHistoryReport(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            ReadCounts(reader.GetString(4), jsonOptions),
+            ReadCounts(reader.GetString(5), jsonOptions),
+            ReadCounts(reader.GetString(6), jsonOptions));
+    }
+
+    private async Task<int> CountCopartAuctionAttemptsAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = "select count(*) from copart_auction_attempts;";
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
     }
 
     public async Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
-        await EnsureAuditSchemaAsync(cancellationToken);
-        var runId = Guid.NewGuid();
+        var runId = start.RunId ?? Guid.NewGuid();
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -401,7 +1109,6 @@ public sealed partial class PostgresSnapshotStore(
     public async Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
-        await EnsureAuditSchemaAsync(cancellationToken);
         var failuresJson = JsonSerializer.Serialize(completion.Failures);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -423,378 +1130,11 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "status", completion.Failures.Count == 0 ? "succeeded" : "completed_with_errors");
         AddParameter(command, "failures", failuresJson);
         await command.ExecuteNonQueryAsync(cancellationToken);
-
-        await using var metrics = connection.CreateCommand();
-        metrics.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        metrics.CommandText = """
-            insert into inventory_execution_run_metrics (
-                run_id, loaded_count, marked_count, discarded_count, quarantined_count, error_count, pages_processed,
-                cycle_completed, reactivated_count, misses_incremented_count, deactivated_count, failures, updated_at)
-            values (@run_id, @loaded_count, @marked_count, @discarded_count, @quarantined_count, @error_count, @pages_processed,
-                @cycle_completed, @reactivated_count, @misses_incremented_count, @deactivated_count, cast(@failures as jsonb), now())
-            on conflict (run_id) do update set
-                loaded_count = excluded.loaded_count, marked_count = excluded.marked_count,
-                discarded_count = excluded.discarded_count, quarantined_count = excluded.quarantined_count,
-                error_count = excluded.error_count, pages_processed = excluded.pages_processed,
-                cycle_completed = excluded.cycle_completed, reactivated_count = excluded.reactivated_count,
-                misses_incremented_count = excluded.misses_incremented_count, deactivated_count = excluded.deactivated_count,
-                failures = excluded.failures, updated_at = now();
-            """;
-        AddParameter(metrics, "run_id", runId);
-        AddParameter(metrics, "loaded_count", completion.Loaded);
-        AddParameter(metrics, "marked_count", completion.Marked);
-        AddParameter(metrics, "discarded_count", completion.Discarded);
-        AddParameter(metrics, "quarantined_count", completion.Quarantined);
-        AddParameter(metrics, "error_count", completion.Errors);
-        AddParameter(metrics, "pages_processed", completion.PagesProcessed);
-        AddParameter(metrics, "cycle_completed", completion.CycleCompleted);
-        AddParameter(metrics, "reactivated_count", completion.Reconciliation?.Reactivated);
-        AddParameter(metrics, "misses_incremented_count", completion.Reconciliation?.MissesIncremented);
-        AddParameter(metrics, "deactivated_count", completion.Reconciliation?.Deactivated);
-        AddParameter(metrics, "failures", failuresJson);
-        await metrics.ExecuteNonQueryAsync(cancellationToken);
-        await RefreshSearchProjectionStatisticsIfReadyAsync(cancellationToken);
     }
 
-    public async Task RecordSyncRunEventAsync(InventorySyncRunEvent syncEvent, CancellationToken cancellationToken)
+    public async Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, bool allowInterruptedSnapshotRetry, CancellationToken cancellationToken)
     {
-        await EnsureSchemaAsync(cancellationToken);
-        await EnsureAuditSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            insert into inventory_sync_run_events (
-                run_id, platform, lot_key, lot_number, vin_masked, action, changed_fields, rule_codes, occurred_at)
-            values (
-                @run_id, @platform, @lot_key, @lot_number, @vin_masked, @action,
-                cast(@changed_fields as jsonb), cast(@rule_codes as jsonb), @occurred_at);
-            """;
-        AddParameter(command, "run_id", syncEvent.RunId);
-        AddParameter(command, "platform", syncEvent.Platform);
-        AddParameter(command, "lot_key", syncEvent.LotKey);
-        AddParameter(command, "lot_number", syncEvent.LotNumber);
-        AddParameter(command, "vin_masked", syncEvent.VinMasked);
-        AddParameter(command, "action", syncEvent.Action);
-        AddParameter(command, "changed_fields", JsonSerializer.Serialize(syncEvent.ChangedFields));
-        AddParameter(command, "rule_codes", JsonSerializer.Serialize(syncEvent.RuleCodes));
-        AddParameter(command, "occurred_at", syncEvent.OccurredAt);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    public async Task<InventoryExecutionHistoryPage> GetExecutionHistoryAsync(InventoryExecutionHistoryRequest request, CancellationToken cancellationToken)
-    {
-        await EnsureSchemaAsync(cancellationToken);
-        await EnsureAuditSchemaAsync(cancellationToken);
-        var page = Math.Max(1, request.Page);
-        var pageSize = Math.Clamp(request.PageSize, 1, 100);
-        var platform = request.Platform?.Trim().ToLowerInvariant() ?? string.Empty;
-        var status = request.Status?.Trim().ToLowerInvariant() ?? string.Empty;
-        const string runs = """
-            select base.run_id, base.provider, base.platform_scope as platform, base.state_scope as scope, base.status, base.started_at, base.finished_at,
-                   base.vehicles_observed as observed, base.requests_issued as requests, metrics.loaded_count, metrics.marked_count, metrics.discarded_count,
-                   metrics.quarantined_count, metrics.error_count, metrics.pages_processed, metrics.cycle_completed, metrics.reactivated_count,
-                   metrics.misses_incremented_count, metrics.deactivated_count, coalesce(metrics.failures, base.failures, '[]'::jsonb)::text as failures
-            from inventory_sync_runs base
-            left join inventory_execution_run_metrics metrics on metrics.run_id = base.run_id
-            union all
-            select run_id, 'copart-excel' as provider, 'copart' as platform, 'excel-snapshot' as scope, status,
-                   downloaded_at as started_at, finished_at, observed_count as observed, 0 as requests, accepted_count as loaded_count,
-                   marked_count, discarded_count, quarantined_count, error_count, null::integer as pages_processed,
-                   is_complete as cycle_completed, null::integer as reactivated_count, null::integer as misses_incremented_count,
-                   null::integer as deactivated_count, failures::text as failures
-            from copart_snapshot_manifests
-            """;
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        long total;
-        await using (var count = connection.CreateCommand())
-        {
-            count.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            count.CommandText = $"select count(*) from ({runs}) history where (@platform = '' or platform = @platform) and (@status = '' or status = @status);";
-            AddParameter(count, "platform", platform);
-            AddParameter(count, "status", status);
-            total = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-        }
-        var results = new List<InventoryExecutionSummary>();
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            command.CommandText = $"""
-                select history.*, coalesce(events.created_count, 0), coalesce(events.updated_count, 0), coalesce(events.unchanged_count, 0)
-                from ({runs}) history
-                left join lateral (
-                    select count(*) filter (where action = 'created')::int as created_count,
-                           count(*) filter (where action = 'updated')::int as updated_count,
-                           count(*) filter (where action = 'unchanged')::int as unchanged_count
-                    from inventory_sync_run_events where run_id = history.run_id
-                ) events on true
-                where (@platform = '' or platform = @platform) and (@status = '' or status = @status)
-                order by started_at desc
-                limit @limit offset @offset;
-                """;
-            AddParameter(command, "platform", platform);
-            AddParameter(command, "status", status);
-            AddParameter(command, "limit", pageSize);
-            AddParameter(command, "offset", (page - 1) * pageSize);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-                results.Add(new InventoryExecutionSummary(
-                    reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
-                    reader.GetFieldValue<DateTimeOffset>(5), ReadNullableDateTimeOffset(reader, 6), reader.GetInt32(7), reader.GetInt32(8),
-                    ReadNullableInt32(reader, 9), reader.GetInt32(20), reader.GetInt32(21), reader.GetInt32(22),
-                    ReadNullableInt32(reader, 10), ReadNullableInt32(reader, 11), ReadNullableInt32(reader, 12), ReadNullableInt32(reader, 13),
-                    ReadNullableInt32(reader, 16), ReadNullableInt32(reader, 17), ReadNullableInt32(reader, 18), ReadNullableInt32(reader, 14),
-                    reader.IsDBNull(15) ? null : reader.GetBoolean(15), ReadStringArray(reader, 19)));
-        }
-        return new InventoryExecutionHistoryPage(page, pageSize, total, Math.Max(1, (int)Math.Ceiling(total / (double)pageSize)), results);
-    }
-
-    public async Task<InventoryExecutionEventPage> GetExecutionEventsAsync(Guid runId, int page, int pageSize, CancellationToken cancellationToken)
-    {
-        await EnsureSchemaAsync(cancellationToken);
-        await EnsureAuditSchemaAsync(cancellationToken);
-        var safePage = Math.Max(1, page);
-        var safePageSize = Math.Clamp(pageSize, 1, 100);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var count = connection.CreateCommand();
-        count.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        count.CommandText = "select count(*) from inventory_sync_run_events where run_id = @run_id;";
-        AddParameter(count, "run_id", runId);
-        var total = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            select occurred_at, platform, lot_number, vin_masked, action, changed_fields::text, rule_codes::text
-            from inventory_sync_run_events where run_id = @run_id
-            order by occurred_at desc, id desc limit @limit offset @offset;
-            """;
-        AddParameter(command, "run_id", runId);
-        AddParameter(command, "limit", safePageSize);
-        AddParameter(command, "offset", (safePage - 1) * safePageSize);
-        var results = new List<InventoryExecutionEvent>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-            results.Add(new InventoryExecutionEvent(reader.GetFieldValue<DateTimeOffset>(0), reader.GetString(1), ReadNullableString(reader, 2), ReadNullableString(reader, 3), reader.GetString(4), ReadStringArray(reader, 5), ReadStringArray(reader, 6)));
-        return new InventoryExecutionEventPage(safePage, safePageSize, total, Math.Max(1, (int)Math.Ceiling(total / (double)safePageSize)), results);
-    }
-
-    public async Task<InventorySyncLease> TryAcquireLeaseAsync(string leaseName, Guid ownerRunId, DateTimeOffset acquiredAt, TimeSpan duration, CancellationToken cancellationToken)
-    {
-        await EnsureNationalSyncSchemaAsync(cancellationToken);
-        var expiresAt = acquiredAt.Add(duration);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            insert into inventory_sync_leases (lease_name, owner_run_id, expires_at, updated_at)
-            values (@lease_name, @owner_run_id, @expires_at, now())
-            on conflict (lease_name) do update set
-                owner_run_id = excluded.owner_run_id,
-                expires_at = excluded.expires_at,
-                updated_at = now()
-            where inventory_sync_leases.expires_at <= @acquired_at
-               or inventory_sync_leases.owner_run_id = @owner_run_id
-            returning owner_run_id, expires_at;
-            """;
-        AddParameter(command, "lease_name", leaseName);
-        AddParameter(command, "owner_run_id", ownerRunId);
-        AddParameter(command, "acquired_at", acquiredAt);
-        AddParameter(command, "expires_at", expiresAt);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (await reader.ReadAsync(cancellationToken))
-            return new InventorySyncLease(true, reader.GetFieldValue<DateTimeOffset>(1), reader.GetGuid(0), null);
-
-        await reader.CloseAsync();
-        await using var existing = connection.CreateCommand();
-        existing.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        existing.CommandText = "select owner_run_id, expires_at from inventory_sync_leases where lease_name = @lease_name;";
-        AddParameter(existing, "lease_name", leaseName);
-        await using var existingReader = await existing.ExecuteReaderAsync(cancellationToken);
-        if (await existingReader.ReadAsync(cancellationToken))
-            return new InventorySyncLease(false, existingReader.GetFieldValue<DateTimeOffset>(1), existingReader.GetGuid(0), "lease-active");
-        return new InventorySyncLease(false, null, null, "lease-unavailable");
-    }
-
-    public async Task ReleaseLeaseAsync(string leaseName, Guid ownerRunId, DateTimeOffset releasedAt, CancellationToken cancellationToken)
-    {
-        await EnsureNationalSyncSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = "delete from inventory_sync_leases where lease_name = @lease_name and owner_run_id = @owner_run_id;";
-        AddParameter(command, "lease_name", leaseName);
-        AddParameter(command, "owner_run_id", ownerRunId);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    public async Task<NationalSyncCheckpoint> GetNationalSyncCheckpointAsync(string streamName, CancellationToken cancellationToken)
-    {
-        await EnsureNationalSyncSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            select cycle_id, cursor, pages_completed, lots_observed, cycle_completed, initial_backfill_completed, updated_at
-            from iaai_national_sync_state
-            where stream_name = @stream_name;
-            """;
-        AddParameter(command, "stream_name", streamName);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-            return new NationalSyncCheckpoint(streamName, null, null, 0, 0, true, false, null);
-        return new NationalSyncCheckpoint(
-            streamName,
-            reader.IsDBNull(0) ? null : reader.GetGuid(0),
-            ReadNullableString(reader, 1),
-            reader.GetInt32(2),
-            reader.GetInt32(3),
-            reader.GetBoolean(4),
-            reader.GetBoolean(5),
-            reader.GetFieldValue<DateTimeOffset>(6));
-    }
-
-    public async Task<NationalSyncOperationalStatus> GetNationalSyncOperationalStatusAsync(string streamName, CancellationToken cancellationToken)
-    {
-        var checkpoint = await GetNationalSyncCheckpointAsync(streamName, cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        Guid? runId = null;
-        DateTimeOffset? startedAt = null;
-        DateTimeOffset? finishedAt = null;
-        string? status = null;
-        int? observed = null;
-        int? requests = null;
-        IReadOnlyList<string> failures = [];
-
-        await using (var run = connection.CreateCommand())
-        {
-            run.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            run.CommandText = """
-                select run_id, started_at, finished_at, status, vehicles_observed, requests_issued, failures::text
-                from inventory_sync_runs
-                where provider = 'apibara' and platform_scope = 'iaai' and state_scope = 'national-rotating'
-                order by started_at desc
-                limit 1;
-                """;
-            await using var reader = await run.ExecuteReaderAsync(cancellationToken);
-            if (await reader.ReadAsync(cancellationToken))
-            {
-                runId = reader.GetGuid(0);
-                startedAt = reader.GetFieldValue<DateTimeOffset>(1);
-                finishedAt = ReadNullableDateTimeOffset(reader, 2);
-                status = reader.GetString(3);
-                observed = reader.GetInt32(4);
-                requests = reader.GetInt32(5);
-                failures = ReadStringArray(reader, 6);
-            }
-        }
-
-        DateTimeOffset? leaseExpiresAt = null;
-        await using (var lease = connection.CreateCommand())
-        {
-            lease.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            lease.CommandText = "select expires_at from inventory_sync_leases where lease_name = 'iaai-national-sync' and expires_at > now();";
-            var value = await lease.ExecuteScalarAsync(cancellationToken);
-            if (value is DateTimeOffset expiresAt) leaseExpiresAt = expiresAt;
-        }
-
-        return new NationalSyncOperationalStatus(checkpoint, runId, startedAt, finishedAt, status, observed, requests, failures, leaseExpiresAt is not null, leaseExpiresAt);
-    }
-
-    public async Task PersistNationalSyncBatchAsync(NationalSyncBatch batch, CancellationToken cancellationToken)
-    {
-        await EnsureNationalSyncSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        var observed = batch.EligibleLotKeys.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (observed.Length > 0)
-        {
-            await using var observations = connection.CreateCommand();
-            observations.Transaction = transaction;
-            observations.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            observations.CommandText = """
-                insert into iaai_national_cycle_observations (cycle_id, lot_key, observed_at)
-                select @cycle_id, unnest(@lot_keys), @observed_at
-                on conflict (cycle_id, lot_key) do update set observed_at = excluded.observed_at;
-                """;
-            AddParameter(observations, "cycle_id", batch.CycleId);
-            AddParameter(observations, "lot_keys", observed);
-            AddParameter(observations, "observed_at", batch.ObservedAt);
-            await observations.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using var checkpoint = connection.CreateCommand();
-        checkpoint.Transaction = transaction;
-        checkpoint.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        checkpoint.CommandText = """
-            insert into iaai_national_sync_state (
-                stream_name, cycle_id, cursor, pages_completed, lots_observed, cycle_completed, initial_backfill_completed, updated_at)
-            values (@stream_name, @cycle_id, @cursor, @pages_completed, @lots_observed, @cycle_completed, @initial_backfill_completed, @updated_at)
-            on conflict (stream_name) do update set
-                cycle_id = excluded.cycle_id,
-                cursor = excluded.cursor,
-                pages_completed = excluded.pages_completed,
-                lots_observed = excluded.lots_observed,
-                cycle_completed = excluded.cycle_completed,
-                initial_backfill_completed = excluded.initial_backfill_completed,
-                updated_at = excluded.updated_at;
-            """;
-        AddParameter(checkpoint, "stream_name", batch.StreamName);
-        AddParameter(checkpoint, "cycle_id", batch.CycleId);
-        AddParameter(checkpoint, "cursor", batch.NextCursor);
-        AddParameter(checkpoint, "pages_completed", batch.PagesCompleted);
-        AddParameter(checkpoint, "lots_observed", batch.LotsObserved);
-        AddParameter(checkpoint, "cycle_completed", batch.CycleCompleted);
-        AddParameter(checkpoint, "initial_backfill_completed", batch.InitialBackfillCompleted);
-        AddParameter(checkpoint, "updated_at", batch.ObservedAt);
-        await checkpoint.ExecuteNonQueryAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    public async Task<InventoryReconciliationResult> CompleteNationalSyncCycleAsync(string streamName, Guid cycleId, DateTimeOffset completedAt, CancellationToken cancellationToken, Guid? runId = null)
-    {
-        await EnsureNationalSyncSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var observations = connection.CreateCommand();
-        observations.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        observations.CommandText = "select lot_key from iaai_national_cycle_observations where cycle_id = @cycle_id;";
-        AddParameter(observations, "cycle_id", cycleId);
-        var observed = new List<string>();
-        await using (var reader = await observations.ExecuteReaderAsync(cancellationToken))
-        {
-            while (await reader.ReadAsync(cancellationToken)) observed.Add(reader.GetString(0));
-        }
-
-        var reconciliation = await ReconcileSourceAsync("iaai", observed, true, completedAt, cancellationToken, runId);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using (var state = connection.CreateCommand())
-        {
-            state.Transaction = transaction;
-            state.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            state.CommandText = """
-                update iaai_national_sync_state
-                set cursor = null, pages_completed = 0, lots_observed = 0, cycle_completed = true, updated_at = @completed_at
-                where stream_name = @stream_name and cycle_id = @cycle_id;
-                """;
-            AddParameter(state, "stream_name", streamName);
-            AddParameter(state, "cycle_id", cycleId);
-            AddParameter(state, "completed_at", completedAt);
-            await state.ExecuteNonQueryAsync(cancellationToken);
-        }
-        await using (var cleanup = connection.CreateCommand())
-        {
-            cleanup.Transaction = transaction;
-            cleanup.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            cleanup.CommandText = "delete from iaai_national_cycle_observations where cycle_id = @cycle_id;";
-            AddParameter(cleanup, "cycle_id", cycleId);
-            await cleanup.ExecuteNonQueryAsync(cancellationToken);
-        }
-        await transaction.CommitAsync(cancellationToken);
-        return reconciliation;
-    }
-
-    public async Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, CancellationToken cancellationToken)
-    {
-        await EnsureSchemaAsync(cancellationToken);
+        await EnsureCopartSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
 
         var historicalRows = new List<int>();
@@ -828,7 +1168,35 @@ public sealed partial class PostgresSnapshotStore(
             values (
                 @sha256, @file_name, @downloaded_at, @file_size_bytes, @row_count, @processing_batch_size,
                 true, 'running', @run_id)
-            on conflict (sha256) do nothing
+            on conflict (sha256) do update set
+                file_name = excluded.file_name,
+                downloaded_at = excluded.downloaded_at,
+                file_size_bytes = excluded.file_size_bytes,
+                row_count = excluded.row_count,
+                processing_batch_size = excluded.processing_batch_size,
+                is_complete = true,
+                status = 'running',
+                run_id = excluded.run_id,
+                finished_at = null,
+                observed_count = 0,
+                accepted_count = 0,
+                discarded_count = 0,
+                quarantined_count = 0,
+                marked_count = 0,
+                error_count = 0,
+                created_count = null,
+                updated_count = null,
+                unchanged_count = null,
+                scored_inline_count = null,
+                score_skipped_unchanged_count = null,
+                score_failed_count = null,
+                inline_scoring_duration_ms = null,
+                inline_scoring_p50_ms = null,
+                inline_scoring_p95_ms = null,
+                failures = '[]'::jsonb,
+                updated_at = now()
+            where copart_snapshot_manifests.status = 'completed_with_errors'
+               or (@allow_interrupted_snapshot_retry and copart_snapshot_manifests.status = 'running')
             returning run_id;
             """;
         AddParameter(insert, "sha256", receipt.Sha256);
@@ -838,6 +1206,7 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(insert, "row_count", receipt.RowCount);
         AddParameter(insert, "processing_batch_size", receipt.ProcessingBatchSize);
         AddParameter(insert, "run_id", runId);
+        AddParameter(insert, "allow_interrupted_snapshot_retry", allowInterruptedSnapshotRetry);
         var inserted = await insert.ExecuteScalarAsync(cancellationToken);
         return inserted is null
             ? new CopartSnapshotRegistration(false, true, null, median, "F02: Copart snapshot hash was already processed.")
@@ -846,7 +1215,7 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken)
     {
-        await EnsureSchemaAsync(cancellationToken);
+        await EnsureCopartSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
@@ -859,6 +1228,15 @@ public sealed partial class PostgresSnapshotStore(
                 quarantined_count = @quarantined_count,
                 marked_count = @marked_count,
                 error_count = @error_count,
+                created_count = @created_count,
+                updated_count = @updated_count,
+                unchanged_count = @unchanged_count,
+                scored_inline_count = @scored_inline_count,
+                score_skipped_unchanged_count = @score_skipped_unchanged_count,
+                score_failed_count = @score_failed_count,
+                inline_scoring_duration_ms = @inline_scoring_duration_ms,
+                inline_scoring_p50_ms = @inline_scoring_p50_ms,
+                inline_scoring_p95_ms = @inline_scoring_p95_ms,
                 is_complete = @is_complete,
                 status = @status,
                 failures = cast(@failures as jsonb),
@@ -873,11 +1251,19 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "quarantined_count", completion.Quarantined);
         AddParameter(command, "marked_count", completion.Marked);
         AddParameter(command, "error_count", completion.Errors);
+        AddParameter(command, "created_count", completion.InlineScoring?.Created);
+        AddParameter(command, "updated_count", completion.InlineScoring?.Updated);
+        AddParameter(command, "unchanged_count", completion.InlineScoring?.Unchanged);
+        AddParameter(command, "scored_inline_count", completion.InlineScoring?.ScoredInline);
+        AddParameter(command, "score_skipped_unchanged_count", completion.InlineScoring?.ScoreSkippedUnchanged);
+        AddParameter(command, "score_failed_count", completion.InlineScoring?.ScoreFailed);
+        AddParameter(command, "inline_scoring_duration_ms", completion.InlineScoring?.InlineScoringDurationMs);
+        AddParameter(command, "inline_scoring_p50_ms", completion.InlineScoring?.InlineScoringP50Ms);
+        AddParameter(command, "inline_scoring_p95_ms", completion.InlineScoring?.InlineScoringP95Ms);
         AddParameter(command, "is_complete", completion.IsComplete);
         AddParameter(command, "status", completion.Failures.Count == 0 && completion.IsComplete ? "succeeded" : "completed_with_errors");
         AddParameter(command, "failures", JsonSerializer.Serialize(completion.Failures));
         await command.ExecuteNonQueryAsync(cancellationToken);
-        await RefreshSearchProjectionStatisticsIfReadyAsync(cancellationToken);
     }
 
     public async Task PersistProviderUsageAsync(string provider, JsonElement usage, DateTimeOffset capturedAt, CancellationToken cancellationToken)
@@ -1116,6 +1502,98 @@ public sealed partial class PostgresSnapshotStore(
             samples);
     }
 
+    public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+
+        object? manifest = null;
+        await using (var manifestCommand = connection.CreateCommand())
+        {
+            manifestCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            manifestCommand.CommandText = """
+                select left(sha256, 12), file_name, downloaded_at, row_count, observed_count,
+                       accepted_count, discarded_count, quarantined_count, marked_count, error_count,
+                       created_count, updated_count, unchanged_count, scored_inline_count,
+                       score_skipped_unchanged_count, score_failed_count, inline_scoring_duration_ms,
+                       inline_scoring_p50_ms, inline_scoring_p95_ms, status, is_complete
+                from copart_snapshot_manifests
+                order by downloaded_at desc
+                limit 1;
+                """;
+            await using var reader = await manifestCommand.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                manifest = new
+                {
+                    SnapshotShaPrefix = reader.GetString(0),
+                    FileName = reader.GetString(1),
+                    DownloadedAt = reader.GetFieldValue<DateTimeOffset>(2),
+                    RowsDeclared = reader.GetInt32(3),
+                    Observed = reader.GetInt32(4),
+                    Accepted = reader.GetInt32(5),
+                    Discarded = reader.GetInt32(6),
+                    Quarantined = reader.GetInt32(7),
+                    Marked = reader.GetInt32(8),
+                    Errors = reader.GetInt32(9),
+                    Created = ReadNullableInt32(reader, 10),
+                    Updated = ReadNullableInt32(reader, 11),
+                    Unchanged = ReadNullableInt32(reader, 12),
+                    ScoredInline = ReadNullableInt32(reader, 13),
+                    ScoreSkippedUnchanged = ReadNullableInt32(reader, 14),
+                    ScoreFailed = ReadNullableInt32(reader, 15),
+                    InlineScoringDurationMs = reader.IsDBNull(16) ? (long?)null : reader.GetInt64(16),
+                    InlineScoringP50Ms = reader.IsDBNull(17) ? (long?)null : reader.GetInt64(17),
+                    InlineScoringP95Ms = reader.IsDBNull(18) ? (long?)null : reader.GetInt64(18),
+                    Status = reader.GetString(19),
+                    IsComplete = reader.GetBoolean(20)
+                };
+            }
+        }
+
+        long totalLots;
+        long activeLots;
+        long inactiveLots;
+        await using (var lotCommand = connection.CreateCommand())
+        {
+            lotCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            lotCommand.CommandText = """
+                select count(*)::bigint,
+                       count(*) filter (where coalesce(lifecycle.is_active, true))::bigint,
+                       count(*) filter (where not coalesce(lifecycle.is_active, true))::bigint
+                from auction_lots lots
+                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+                where lots.platform = 'copart';
+                """;
+            await using var reader = await lotCommand.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            totalLots = reader.GetInt64(0);
+            activeLots = reader.GetInt64(1);
+            inactiveLots = reader.GetInt64(2);
+        }
+
+        var decisions = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        await using (var auditCommand = connection.CreateCommand())
+        {
+            auditCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            auditCommand.CommandText = """
+                select decision, count(*)::bigint
+                from eligibility_decisions
+                where lower(coalesce(auction_source, '')) = 'copart'
+                group by decision
+                order by decision;
+                """;
+            await using var reader = await auditCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) decisions[reader.GetString(0)] = reader.GetInt64(1);
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            Manifest = manifest,
+            Lots = new { Total = totalLots, Active = activeLots, Inactive = inactiveLots },
+            EligibilityDecisions = decisions
+        });
+    }
+
     public async Task<string> GetStorageDiagnosticsAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -1137,10 +1615,11 @@ public sealed partial class PostgresSnapshotStore(
         await using var relations = connection.CreateCommand();
         relations.CommandTimeout = _persistence.CommandTimeoutSeconds;
         relations.CommandText = """
-            select n.nspname, c.relname, c.relkind, c.reltuples::bigint, pg_get_userbyid(c.relowner)
+            select n.nspname, c.relname, c.relkind::text, c.reltuples::bigint, pg_get_userbyid(c.relowner)
             from pg_catalog.pg_class c
             inner join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-            where c.relname in ('auction_lots', 'auction_lot_versions', 'inventory_sync_runs', 'provider_usage_snapshots')
+            where n.nspname = 'public'
+              and (c.relname like 'inventory_%' or c.relname like 'copart_%' or c.relname like 'execution_%')
             order by n.nspname, c.relname;
             """;
 
@@ -1160,12 +1639,104 @@ public sealed partial class PostgresSnapshotStore(
             }
         }
 
+        var recentCopartRuns = new List<object>();
+        await using (var runs = connection.CreateCommand())
+        {
+            runs.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            runs.CommandText = """
+                select run_id, platform_scope, state_scope, started_at, finished_at,
+                       vehicles_observed, requests_issued, status, jsonb_array_length(failures)
+                from inventory_sync_runs
+                where provider = 'copart-excel'
+                order by started_at desc
+                limit 5;
+                """;
+            await using var reader = await runs.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                recentCopartRuns.Add(new
+                {
+                    RunId = reader.GetGuid(0),
+                    Platform = reader.GetString(1),
+                    Scope = reader.GetString(2),
+                    StartedAt = reader.GetFieldValue<DateTimeOffset>(3),
+                    FinishedAt = ReadNullableDateTimeOffset(reader, 4),
+                    Observed = reader.GetInt32(5),
+                    Requests = reader.GetInt32(6),
+                    Status = reader.GetString(7),
+                    FailureCount = reader.GetInt32(8)
+                });
+            }
+        }
+
+        long titleMapped;
+        long titleUnmapped;
+        long titleNotBackfilled;
+        await using (var titleCoverage = connection.CreateCommand())
+        {
+            titleCoverage.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            titleCoverage.CommandText = """
+                with latest as (
+                    select distinct on (lot_key) lot_key, payload
+                    from auction_lot_versions
+                    order by lot_key, observed_at desc, id desc
+                )
+                select
+                    count(*) filter (where latest.payload ->> 'source_title_mapping_version' = @mapping_version
+                                     and latest.payload ->> 'source_title_mapping' = 'mapped')::bigint as mapped,
+                    count(*) filter (where latest.payload ->> 'source_title_mapping_version' = @mapping_version
+                                     and latest.payload ->> 'source_title_mapping' = 'unmapped')::bigint as unmapped,
+                    count(*) filter (where coalesce(latest.payload ->> 'source_title_mapping_version', '') <> @mapping_version)::bigint as not_backfilled
+                from auction_lots lots
+                join latest on latest.lot_key = lots.lot_key
+                where lots.platform = 'copart';
+                """;
+            AddParameter(titleCoverage, "mapping_version", CopartTitleCatalog.Version);
+            await using var reader = await titleCoverage.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            titleMapped = reader.GetInt64(0);
+            titleUnmapped = reader.GetInt64(1);
+            titleNotBackfilled = reader.GetInt64(2);
+        }
+
+        long zeroPhotos;
+        long onePhoto;
+        long multiplePhotos;
+        await using (var photoCoverage = connection.CreateCommand())
+        {
+            photoCoverage.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            photoCoverage.CommandText = """
+                select
+                    count(*) filter (where coalesce(lots.media_photos_count, 0) = 0)::bigint as zero_photos,
+                    count(*) filter (where coalesce(lots.media_photos_count, 0) = 1)::bigint as one_photo,
+                    count(*) filter (where coalesce(lots.media_photos_count, 0) > 1)::bigint as multiple_photos
+                from auction_lots lots
+                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+                where lots.platform = 'copart'
+                  and coalesce(lifecycle.is_active, true);
+                """;
+            await using var reader = await photoCoverage.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            zeroPhotos = reader.GetInt64(0);
+            onePhoto = reader.GetInt64(1);
+            multiplePhotos = reader.GetInt64(2);
+        }
+
         return JsonSerializer.Serialize(new
         {
             Database = database,
             DatabaseUser = databaseUser,
             SearchPath = searchPath,
-            Relations = relationList
+            Relations = relationList,
+            RecentCopartRuns = recentCopartRuns,
+            CopartTitleMappingCoverage = new
+            {
+                CatalogVersion = CopartTitleCatalog.Version,
+                Mapped = titleMapped,
+                Unmapped = titleUnmapped,
+                NotBackfilled = titleNotBackfilled
+            },
+            CopartActivePhotoCoverage = new { ZeroPhotos = zeroPhotos, OnePhoto = onePhoto, MultiplePhotos = multiplePhotos }
         });
     }
 
@@ -1213,6 +1784,120 @@ public sealed partial class PostgresSnapshotStore(
         return JsonSerializer.Serialize(lots);
     }
 
+    public async Task<string> GetCopartLotMediaDiagnosticsAsync(string lotNumber, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(lotNumber)) throw new ArgumentException("Lot number is required.", nameof(lotNumber));
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lots.lot_key, lots.lot_number, lots.media_photos_count, lots.updated_at, latest.payload::text,
+                   coalesce(lifecycle.is_active, true), coalesce(lifecycle.consecutive_misses, 0)
+            from auction_lots lots
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) latest on true
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+            where lots.platform = 'copart'
+              and lots.lot_number = @lot_number
+            limit 1;
+            """;
+        AddParameter(command, "lot_number", lotNumber.Trim());
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return JsonSerializer.Serialize(new { Found = false, LotNumber = lotNumber.Trim() });
+
+        var lotKey = reader.GetString(0);
+        var storedPhotoCount = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
+        var updatedAt = reader.GetFieldValue<DateTimeOffset>(3);
+        using var payload = JsonDocument.Parse(reader.GetString(4));
+        var root = payload.RootElement;
+        var photos = root.TryGetProperty("media", out var media) && media.ValueKind == JsonValueKind.Object &&
+                     media.TryGetProperty("thumbs", out var thumbs) && thumbs.ValueKind == JsonValueKind.Array
+            ? thumbs.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Cast<string>()
+                .ToArray()
+            : [];
+        var photoHosts = photos
+            .Select(value => Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri.Host : null)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var catalogUrl = root.TryGetProperty("_raw_source", out var raw) && raw.ValueKind == JsonValueKind.Object &&
+                         raw.TryGetProperty("Image URL", out var catalog) && catalog.ValueKind == JsonValueKind.String
+            ? catalog.GetString()
+            : null;
+        var catalogHost = Uri.TryCreate(catalogUrl, UriKind.Absolute, out var catalogUri) ? catalogUri.Host : null;
+        var resolution = root.TryGetProperty("copart_media_resolution", out var status) && status.ValueKind == JsonValueKind.String
+            ? status.GetString()
+            : null;
+
+        return JsonSerializer.Serialize(new
+        {
+            Found = true,
+            LotKey = lotKey,
+            LotNumber = reader.GetString(1),
+            UpdatedAt = updatedAt,
+            StoredPhotoCount = storedPhotoCount,
+            PayloadPhotoCount = photos.Length,
+            GalleryResolved = photos.Length > 1,
+            PhotoHosts = photoHosts,
+            PhotosWithQueryString = photos.Count(value => Uri.TryCreate(value, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.Query)),
+            CatalogUrlPresent = !string.IsNullOrWhiteSpace(catalogUrl),
+            CatalogHost = catalogHost,
+            ResolutionStatus = resolution,
+            IsActive = reader.GetBoolean(5),
+            ConsecutiveMisses = reader.GetInt32(6),
+            HasMaskedVin = root.TryGetProperty("vin", out var vin) && vin.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(vin.GetString()),
+            HasSeller = root.TryGetProperty("seller", out var seller) && seller.ValueKind == JsonValueKind.Object && seller.TryGetProperty("name", out var sellerName) && sellerName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(sellerName.GetString())
+        });
+    }
+
+    public async Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(platform)) throw new ArgumentException("Platform is required.", nameof(platform));
+        if (string.IsNullOrWhiteSpace(lotNumber)) throw new ArgumentException("Lot number is required.", nameof(lotNumber));
+
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lots.lot_key, lots.observed_at, versions.payload::text
+            from auction_lots lots
+            join lateral (
+                select payload
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                order by observed_at desc, id desc
+                limit 1
+            ) versions on true
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+            where lots.platform = @platform
+              and lots.lot_number = @lot_number
+              and coalesce(lifecycle.is_active, true)
+            limit 1;
+            """;
+        AddParameter(command, "platform", platform.Trim().ToLowerInvariant());
+        AddParameter(command, "lot_number", lotNumber.Trim());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        var rawJson = reader.GetString(2);
+        var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
+        return vehicle is null ? null : new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson);
+    }
+
     public async Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
@@ -1253,941 +1938,122 @@ public sealed partial class PostgresSnapshotStore(
         return snapshots.OrderByDescending(snapshot => snapshot.ObservedAt).ToArray();
     }
 
-    public async Task<InventorySearchPage> SearchAsync(InventorySearchRequest request, CancellationToken cancellationToken)
+    public async Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        await EnsureScoringSchemaAsync(cancellationToken);
-        if (await IsSearchProjectionReadyAsync(cancellationToken))
-            return await SearchProjectionAsync(request, cancellationToken);
-        var page = Math.Max(1, request.Page);
-        var pageSize = Math.Clamp(request.PageSize, 1, 100);
-        var offset = checked((page - 1) * pageSize);
-        const string source = """
-            from (
-                select distinct on (versions.lot_key)
-                    versions.lot_key, versions.observed_at, versions.payload,
-                    lots.platform, lots.lot_number, lots.vin, lots.title, lots.year, lots.make, lots.model,
-                    lots.vehicle_type, lots.damage, lots.auction_state, lots.auction_at, lots.location_display,
-                    lots.location_state, lots.odometer, lots.current_bid_usd, lots.buy_now_usd
-                from auction_lot_versions versions
-                join auction_lots lots on lots.lot_key = versions.lot_key
-                order by versions.lot_key, versions.observed_at desc
-            ) latest
-            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = latest.lot_key
-            """;
+        var page = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 1, 100);
+        var sort = query.Sort is "bid-low" or "bid-high" ? query.Sort : "auction";
+        var platform = string.IsNullOrWhiteSpace(query.Platform) || string.Equals(query.Platform, "all", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : query.Platform.Trim().ToLowerInvariant();
+        var search = string.IsNullOrWhiteSpace(query.Search) ? null : query.Search.Trim();
+        var offset = (page - 1) * pageSize;
 
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        var where = new List<string> { "coalesce(lifecycle.is_active, true)" };
-        await using (var countCommand = connection.CreateCommand())
-        {
-            countCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            AddSearchFilters(countCommand, request, where);
-            countCommand.CommandText = $"select count(*)::int {source} where {string.Join(" and ", where)};";
-            var total = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-
-            var itemWhere = new List<string> { "coalesce(lifecycle.is_active, true)" };
-            await using var itemsCommand = connection.CreateCommand();
-            itemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            AddSearchFilters(itemsCommand, request, itemWhere);
-            itemsCommand.CommandText = $"""
-                select latest.lot_key, latest.observed_at, latest.payload::text
-                {source}
-                where {string.Join(" and ", itemWhere)}
-                order by {GetSearchOrdering(request.Sort)}, latest.lot_key asc
-                limit @limit offset @offset;
-                """;
-            AddParameter(itemsCommand, "limit", pageSize);
-            AddParameter(itemsCommand, "offset", offset);
-            var items = await ReadStoredSnapshotsAsync(itemsCommand, cancellationToken);
-            var generatedAt = items.Count == 0 ? DateTimeOffset.UtcNow : items.Max(snapshot => snapshot.ObservedAt);
-            return new InventorySearchPage(page, pageSize, total, generatedAt, items);
-        }
-    }
-
-    public async Task<InventorySearchSummary> GetInventorySearchSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken)
-    {
-        await EnsureSchemaAsync(cancellationToken);
-        await EnsureLifecycleSchemaAsync(cancellationToken);
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        if (await IsSearchProjectionReadyAsync(cancellationToken))
-        {
-            // The initial portal load has no dependent make filter. Read the
-            // snapshot statistics produced by the projection rebuild instead
-            // of repeating one count plus ~18 GROUP BY scans on every request.
-            var cachedSummary = await GetCachedProjectionSummaryAsync(request, cancellationToken);
-            if (cachedSummary is not null)
-                return cachedSummary;
-            return await GetProjectionSummaryAsync(request, cancellationToken);
-        }
-        const string source = """
-            from (
-                select distinct on (versions.lot_key)
-                    versions.lot_key, versions.observed_at, versions.payload,
-                    lots.platform, lots.lot_number, lots.vin, lots.title, lots.year, lots.make, lots.model,
-                    lots.vehicle_type, lots.damage, lots.auction_state, lots.auction_at, lots.location_display,
-                    lots.location_state, lots.odometer, lots.current_bid_usd, lots.buy_now_usd
-                from auction_lot_versions versions
-                join auction_lots lots on lots.lot_key = versions.lot_key
-                order by versions.lot_key, versions.observed_at desc
-            ) latest
-            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = latest.lot_key
-            """;
-        const string active = "coalesce(lifecycle.is_active, true)";
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var summaryCommand = connection.CreateCommand();
-        summaryCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        var summaryWhere = new List<string> { active };
-        AddSearchFilters(summaryCommand, request, summaryWhere);
-        summaryCommand.CommandText = $"select count(*)::int, max(latest.observed_at) {source} where {string.Join(" and ", summaryWhere)};";
-        var total = 0;
-        DateTimeOffset? generatedAt = null;
-        await using (var summaryReader = await summaryCommand.ExecuteReaderAsync(cancellationToken))
-        {
-            if (await summaryReader.ReadAsync(cancellationToken))
-            {
-                total = summaryReader.GetInt32(0);
-                generatedAt = summaryReader.IsDBNull(1) ? null : summaryReader.GetFieldValue<DateTimeOffset>(1);
-            }
-        }
-
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["platforms"] = "latest.platform",
-            ["makes"] = "latest.make",
-            ["models"] = "latest.model",
-            ["vehicleTypes"] = "latest.vehicle_type",
-            ["titles"] = SqlTitleCategoryExpression("latest"),
-            ["states"] = "latest.location_state",
-            ["facilities"] = "latest.location_display",
-            ["primaryDamages"] = "latest.damage",
-            ["secondaryDamages"] = "latest.payload #>> '{Condition,SecondaryDamage}'",
-            ["sellerTypes"] = "latest.payload #>> '{Seller,Type}'",
-            ["engineLayouts"] = "latest.payload #>> '{VehicleSpecs,Engine,Layout}'",
-            ["cylinders"] = "latest.payload #>> '{Details,VehicleDescription,Cylinders}'",
-            ["transmissions"] = "latest.payload #>> '{Transmission}'",
-            ["fuels"] = "latest.payload #>> '{FuelType}'",
-            ["drives"] = "latest.payload #>> '{DriveType}'",
-            ["bodyStyles"] = "coalesce(latest.payload #>> '{VehicleSpecs,BodyStyle}', latest.payload #>> '{Details,VehicleDescription,BodyStyle}')",
-            ["colors"] = "latest.payload #>> '{Color}'",
-            ["lossTypes"] = "latest.payload #>> '{Condition,Loss}'",
-            ["startCodes"] = "coalesce(latest.payload #>> '{Condition,RunCondition,Value}', latest.payload #>> '{Condition,RunCondition,Label}')",
-            ["runConditions"] = PublicRunConditionSql("latest"),
-        };
-        var facets = new Dictionary<string, IReadOnlyList<InventoryFacetValue>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (key, expression) in fields)
-        {
-            await using var facetCommand = connection.CreateCommand();
-            facetCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            var facetWhere = new List<string> { active };
-            AddSearchFilters(facetCommand, request, facetWhere);
-            facetCommand.CommandText = $"""
-                select value, count(*)::int
-                from (
-                    select nullif(btrim({expression}), '') as value
-                    {source}
-                    where {string.Join(" and ", facetWhere)}
-                ) values_to_count
-                where value is not null
-                group by value
-                order by count(*) desc, value asc
-                limit 250;
-                """;
-            await using var reader = await facetCommand.ExecuteReaderAsync(cancellationToken);
-            var values = new List<InventoryFacetValue>();
-            while (await reader.ReadAsync(cancellationToken))
-                values.Add(new InventoryFacetValue(reader.GetString(0), reader.GetInt32(1)));
-            facets[key] = values;
-        }
-
-        return new InventorySearchSummary(total, generatedAt ?? DateTimeOffset.UtcNow, facets);
-    }
-
-    private async Task<bool> IsSearchProjectionReadyAsync(CancellationToken cancellationToken)
-    {
-        var now = DateTimeOffset.UtcNow;
-        var checkedAtTicks = Interlocked.Read(ref _projectionReadyCheckedAtTicks);
-        if (checkedAtTicks > 0 && now.UtcTicks - checkedAtTicks < TimeSpan.FromSeconds(5).Ticks)
-            return _projectionReadyCache;
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = "select is_ready from inventory_search_projection_state where projection_name = 'inventory-current-v1';";
-        _projectionReadyCache = await command.ExecuteScalarAsync(cancellationToken) is true;
-        Interlocked.Exchange(ref _projectionReadyCheckedAtTicks, now.UtcTicks);
-        return _projectionReadyCache;
-    }
-
-    private async Task<InventorySearchPage> SearchProjectionAsync(InventorySearchRequest request, CancellationToken cancellationToken)
-    {
-        var page = Math.Max(1, request.Page);
-        var pageSize = Math.Clamp(request.PageSize, 1, 100);
-        var offset = checked((page - 1) * pageSize);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        // The projection carries the lifecycle state and maintains it when lifecycle changes.
-        // Filtering directly on latest.is_active preserves the partial indexes and avoids a
-        // 136k-row lifecycle join before ORDER BY/LIMIT on the default browse path.
-        var where = new List<string> { "latest.is_active" };
-        var total = 0;
-        if (IsDefaultVisibleSearch(request))
-        {
-            await using var cachedCountCommand = connection.CreateCommand();
-            cachedCountCommand.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
-            cachedCountCommand.CommandText = "select case when @exclude_special_titles then visible_row_count else row_count end from inventory_search_projection_state where projection_name = 'inventory-current-v1' and is_ready and facets_refreshed_at is not null;";
-            AddParameter(cachedCountCommand, "exclude_special_titles", request.ExcludeSpecialTitles);
-            var cachedCount = await cachedCountCommand.ExecuteScalarAsync(cancellationToken);
-            if (cachedCount is not null && cachedCount != DBNull.Value)
-                total = Convert.ToInt32(cachedCount, CultureInfo.InvariantCulture);
-        }
-        if (total == 0 && !IsKnownEmptyProjection(request))
-        {
-            await using var countCommand = connection.CreateCommand();
-            countCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            AddProjectionFilters(countCommand, request, where);
-            countCommand.CommandText = $"select count(*)::int from inventory_search_current latest left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key where {string.Join(" and ", where)};";
-            total = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-        }
-
-        var itemWhere = new List<string> { "latest.is_active" };
-        await using var itemsCommand = connection.CreateCommand();
-        itemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        AddProjectionFilters(itemsCommand, request, itemWhere);
-        itemsCommand.CommandText = $"""
-            select latest.lot_key, latest.observed_at, latest.payload::text,
-                   latest.platform, latest.lot_number, latest.vin,
-                   score.status as score_status, score.pre_grade as score_pre_grade, score.buy_score as score_buy_score,
-                   score.max_points_evaluable as score_max_points_evaluable,
-                   score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
-                   score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
-            from inventory_search_current latest
-            left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
-            where {string.Join(" and ", itemWhere)}
-            order by {GetProjectionOrdering(request.Sort)}, latest.lot_key asc
-            limit @limit offset @offset;
-            """;
-        AddParameter(itemsCommand, "limit", pageSize);
-        AddParameter(itemsCommand, "offset", offset);
-        var items = await ReadStoredSnapshotsAsync(itemsCommand, cancellationToken);
-        var generatedAt = items.Count == 0 ? DateTimeOffset.UtcNow : items.Max(snapshot => snapshot.ObservedAt);
-        return new InventorySearchPage(page, pageSize, total, generatedAt, items);
-    }
-
-    private async Task<InventorySearchSummary?> GetCachedProjectionSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken)
-    {
-        if (request.Makes is { Count: > 0 })
-            return null;
-
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
         command.CommandText = """
-            select row_count, generated_at
-            from inventory_search_projection_state
-            where projection_name = 'inventory-current-v1'
-              and is_ready
-              and facets_refreshed_at is not null;
-            select facet_key, facet_value, vehicle_count
-            from inventory_search_facet_counts
-            order by facet_key, vehicle_count desc, facet_value asc;
-            """;
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-            return null;
-
-        var total = reader.GetInt64(0);
-        var generatedAt = reader.IsDBNull(1) ? DateTimeOffset.UtcNow : reader.GetFieldValue<DateTimeOffset>(1);
-        if (!await reader.NextResultAsync(cancellationToken))
-            return null;
-
-        var facets = new Dictionary<string, List<InventoryFacetValue>>(StringComparer.OrdinalIgnoreCase);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var key = reader.GetString(0);
-            if (!facets.TryGetValue(key, out var values))
-            {
-                values = [];
-                facets[key] = values;
-            }
-            values.Add(new InventoryFacetValue(reader.GetString(1), reader.GetInt32(2)));
-        }
-
-        if (facets.Count == 0)
-            return null;
-
-        return new InventorySearchSummary(
-            (int)Math.Min(int.MaxValue, total),
-            generatedAt,
-            facets.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<InventoryFacetValue>)pair.Value, StringComparer.OrdinalIgnoreCase));
-    }
-
-    private async Task<InventorySearchSummary> GetProjectionSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken)
-    {
-        var makes = request.Makes?.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-        var facets = new Dictionary<string, IReadOnlyList<InventoryFacetValue>>(StringComparer.OrdinalIgnoreCase);
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["platforms"] = "current.platform", ["makes"] = "current.make", ["models"] = "current.model",
-            ["vehicleTypes"] = "current.vehicle_type", ["titles"] = "current.title_type", ["states"] = "current.location_state",
-            ["facilities"] = "current.location_display", ["primaryDamages"] = "current.primary_damage", ["secondaryDamages"] = "current.secondary_damage",
-            ["sellerTypes"] = "current.seller_type", ["engineLayouts"] = "current.engine_layout", ["cylinders"] = "current.cylinders",
-            ["transmissions"] = "current.transmission", ["fuels"] = "current.fuel_type", ["drives"] = "current.drive_type",
-            ["bodyStyles"] = "current.body_style", ["colors"] = "current.color", ["lossTypes"] = "current.loss_type", ["startCodes"] = "current.start_code", ["runConditions"] = PublicRunConditionSql("current")
-        };
-
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        var makeClause = makes.Length == 0 ? string.Empty : " and lower(coalesce(current.make, '')) = any(@makes)";
-        var source = $"from inventory_search_current current left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = current.lot_key where {ActiveLifecyclePredicate}{makeClause}";
-        var total = 0L;
-        var generatedAt = DateTimeOffset.UtcNow;
-        await using (var status = connection.CreateCommand())
-        {
-            status.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            status.CommandText = $"select count(*)::bigint, max(current.observed_at) {source};";
-            if (makes.Length > 0) AddParameter(status, "makes", makes.Select(value => value.ToLowerInvariant()).ToArray());
-            await using var reader = await status.ExecuteReaderAsync(cancellationToken);
-            if (await reader.ReadAsync(cancellationToken))
-            {
-                total = reader.GetInt64(0);
-                if (!reader.IsDBNull(1)) generatedAt = reader.GetFieldValue<DateTimeOffset>(1);
-            }
-        }
-
-        foreach (var (key, expression) in fields)
-        {
-            await using var command = connection.CreateCommand();
-            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            command.CommandText = $"select nullif(btrim({expression}), '') as value, count(*)::int {source} and nullif(btrim({expression}), '') is not null group by value order by count(*) desc, value asc limit 250;";
-            if (makes.Length > 0) AddParameter(command, "makes", makes.Select(value => value.ToLowerInvariant()).ToArray());
-            var values = new List<InventoryFacetValue>();
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken)) values.Add(new InventoryFacetValue(reader.GetString(0), reader.GetInt32(1)));
-            facets[key] = values;
-        }
-
-        return new InventorySearchSummary((int)Math.Min(int.MaxValue, total), generatedAt, facets);
-    }
-
-    private static bool IsDefaultVisibleSearch(InventorySearchRequest request)
-    {
-        static bool Empty(IReadOnlyCollection<string>? values) => values is null || values.Count == 0;
-        return string.IsNullOrWhiteSpace(request.Query)
-            && string.IsNullOrWhiteSpace(request.Platform)
-            && (string.IsNullOrWhiteSpace(request.Sort) || request.Sort is "auction")
-            && Empty(request.Makes) && Empty(request.Models) && Empty(request.VehicleTypes)
-            && Empty(request.Titles) && Empty(request.States) && Empty(request.Facilities)
-            && Empty(request.PrimaryDamages) && Empty(request.SecondaryDamages) && Empty(request.SellerTypes)
-            && Empty(request.EngineLayouts) && Empty(request.Cylinders) && Empty(request.Transmissions)
-            && Empty(request.Fuels) && Empty(request.Drives) && Empty(request.BodyStyles) && Empty(request.Colors)
-            && Empty(request.LossTypes) && Empty(request.StartCodes) && Empty(request.RunConditions)
-            && request.YearFrom is null && request.YearTo is null && request.OdometerFrom is null && request.OdometerTo is null
-            && request.PriceFrom is null && request.PriceTo is null && request.AuctionFrom is null && request.AuctionTo is null
-            && request.BuyNowOnly is null && request.WithPhotosOnly is null && request.AuctionStatus is null
-            && request.WithBidOnly is null && request.KeyMode is null && request.ProviderEstimateFrom is null && request.ProviderEstimateTo is null
-            && request.EngineSizeFrom is null && request.EngineSizeTo is null && request.HorsepowerFrom is null && request.HorsepowerTo is null
-            && request.MaxCurrentBid is null && request.PreGradeFrom is null && Empty(request.ScoringStatuses);
-    }
-
-    private static bool IsKnownEmptyProjection(InventorySearchRequest request) => request.PageSize <= 0;
-
-    private static string PublicRunConditionSql(string alias) => $"case when lower({alias}.platform) <> 'copart' then 'UNVERIFIED' when upper(replace(coalesce({alias}.start_code, ''), '&', ' AND ')) like '%RUNS AND DRIVES%' then 'RUNS_AND_DRIVES' when upper(coalesce({alias}.start_code, '')) like '%START%' then 'STARTS' when upper(coalesce({alias}.start_code, '')) like '%STATIONARY%' then 'STATIONARY' else 'UNVERIFIED' end";
-    private static string PublicRunConditionPayloadSql(string alias) => $"case when lower({alias}.platform) <> 'copart' then 'UNVERIFIED' when upper(replace(coalesce({alias}.payload #>> '{{Condition,RunCondition,Value}}', {alias}.payload #>> '{{Condition,RunCondition,Label}}', ''), '&', ' AND ')) like '%RUNS AND DRIVES%' then 'RUNS_AND_DRIVES' when upper(coalesce({alias}.payload #>> '{{Condition,RunCondition,Value}}', {alias}.payload #>> '{{Condition,RunCondition,Label}}', '')) like '%START%' then 'STARTS' when upper(coalesce({alias}.payload #>> '{{Condition,RunCondition,Value}}', {alias}.payload #>> '{{Condition,RunCondition,Label}}', '')) like '%STATIONARY%' then 'STATIONARY' else 'UNVERIFIED' end";
-
-    private static void AddProjectionFilters(NpgsqlCommand command, InventorySearchRequest request, List<string> where)
-    {
-        static string[] Values(IReadOnlyCollection<string>? values) => values?.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-        void AddAny(string parameter, IReadOnlyCollection<string>? values, string expression)
-        {
-            var selected = Values(values);
-            if (selected.Length == 0) return;
-            where.Add($"lower(coalesce({expression}, '')) = any(@{parameter})");
-            AddParameter(command, parameter, selected.Select(value => value.ToLowerInvariant()).ToArray());
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.Query))
-        {
-            where.Add("(to_tsvector('simple', latest.search_text) @@ websearch_to_tsquery('simple', @search_query) or latest.lot_number ilike @query_like or latest.vin ilike @query_like)");
-            AddParameter(command, "search_query", request.Query.Trim());
-            AddParameter(command, "query_like", $"%{request.Query.Trim()}%");
-        }
-        if (!string.IsNullOrWhiteSpace(request.Platform)) { where.Add("latest.platform = @platform"); AddParameter(command, "platform", request.Platform.Trim().ToLowerInvariant()); }
-        AddAny("makes", request.Makes, "latest.make");
-        AddAny("models", request.Models, "latest.model");
-        AddAny("vehicle_types", request.VehicleTypes, "latest.vehicle_type");
-        if (request.ExcludeSpecialTitles) where.Add("not latest.is_special_title");
-        AddAny("titles", request.Titles, "latest.title_type");
-        AddAny("states", request.States, "latest.location_state");
-        AddAny("facilities", request.Facilities, "latest.location_display");
-        AddAny("primary_damages", request.PrimaryDamages, "latest.primary_damage");
-        AddAny("secondary_damages", request.SecondaryDamages, "latest.secondary_damage");
-        AddAny("seller_types", request.SellerTypes, "latest.seller_type");
-        AddAny("engine_layouts", request.EngineLayouts, "latest.engine_layout");
-        AddAny("cylinders", request.Cylinders, "latest.cylinders");
-        AddAny("transmissions", request.Transmissions, "latest.transmission");
-        AddAny("fuels", request.Fuels, "latest.fuel_type");
-        AddAny("drives", request.Drives, "latest.drive_type");
-        AddAny("body_styles", request.BodyStyles, "latest.body_style");
-        AddAny("colors", request.Colors, "latest.color");
-        AddAny("loss_types", request.LossTypes, "latest.loss_type");
-        AddAny("start_codes", request.StartCodes, "latest.start_code");
-        AddAny("run_conditions", request.RunConditions, PublicRunConditionSql("latest"));
-        if (request.YearFrom.HasValue) { where.Add("latest.year >= @year_from"); AddParameter(command, "year_from", request.YearFrom.Value); }
-        if (request.YearTo.HasValue) { where.Add("latest.year <= @year_to"); AddParameter(command, "year_to", request.YearTo.Value); }
-        if (request.OdometerFrom.HasValue) { where.Add("latest.odometer >= @odometer_from"); AddParameter(command, "odometer_from", request.OdometerFrom.Value); }
-        if (request.OdometerTo.HasValue) { where.Add("latest.odometer <= @odometer_to"); AddParameter(command, "odometer_to", request.OdometerTo.Value); }
-        if (request.PriceFrom.HasValue) { where.Add("latest.current_bid_usd >= @price_from"); AddParameter(command, "price_from", request.PriceFrom.Value); }
-        if (request.PriceTo.HasValue) { where.Add("latest.current_bid_usd <= @price_to"); AddParameter(command, "price_to", request.PriceTo.Value); }
-        if (request.MaxCurrentBid.HasValue) { where.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @max_current_bid)"); AddParameter(command, "max_current_bid", request.MaxCurrentBid.Value); }
-        if (request.AuctionFrom.HasValue) { where.Add("latest.auction_at >= @auction_from"); AddParameter(command, "auction_from", request.AuctionFrom.Value); }
-        if (request.AuctionTo.HasValue) { where.Add("latest.auction_at <= @auction_to"); AddParameter(command, "auction_to", request.AuctionTo.Value); }
-        if (request.BuyNowOnly == true) where.Add("latest.is_buy_now");
-        if (request.WithPhotosOnly == true) where.Add("latest.has_photos");
-        if (request.WithBidOnly == true) where.Add("latest.current_bid_usd is not null");
-        if (string.Equals(request.KeyMode, "with", StringComparison.OrdinalIgnoreCase)) where.Add("latest.has_key is true");
-        if (string.Equals(request.KeyMode, "without", StringComparison.OrdinalIgnoreCase)) where.Add("latest.has_key is false");
-        if (request.ProviderEstimateFrom.HasValue) { where.Add("latest.provider_estimate_to >= @provider_estimate_from"); AddParameter(command, "provider_estimate_from", request.ProviderEstimateFrom.Value); }
-        if (request.ProviderEstimateTo.HasValue) { where.Add("latest.provider_estimate_from <= @provider_estimate_to"); AddParameter(command, "provider_estimate_to", request.ProviderEstimateTo.Value); }
-        if (request.EngineSizeFrom.HasValue) { where.Add("latest.engine_size_liters >= @engine_size_from"); AddParameter(command, "engine_size_from", request.EngineSizeFrom.Value); }
-        if (request.EngineSizeTo.HasValue) { where.Add("latest.engine_size_liters <= @engine_size_to"); AddParameter(command, "engine_size_to", request.EngineSizeTo.Value); }
-        if (request.HorsepowerFrom.HasValue) { where.Add("latest.horsepower >= @horsepower_from"); AddParameter(command, "horsepower_from", request.HorsepowerFrom.Value); }
-        if (request.HorsepowerTo.HasValue) { where.Add("latest.horsepower <= @horsepower_to"); AddParameter(command, "horsepower_to", request.HorsepowerTo.Value); }
-        if (request.PreGradeFrom.HasValue) { where.Add("score.pre_grade >= @pre_grade_from"); AddParameter(command, "pre_grade_from", request.PreGradeFrom.Value); }
-        AddAny("scoring_statuses", request.ScoringStatuses, "score.status");
-        if (string.Equals(request.AuctionStatus, "open", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.lot_status, latest.lot_sub_status)) like any(array['%open%', '%active%'])");
-        if (string.Equals(request.AuctionStatus, "live", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.lot_status, latest.lot_sub_status)) like '%live%'");
-        if (string.Equals(request.AuctionStatus, "finished", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.lot_status, latest.lot_sub_status)) like any(array['%finished%', '%ended%', '%sold%'])");
-    }
-
-    private static string GetProjectionOrdering(string? sort) => sort?.Trim().ToLowerInvariant() switch
-    {
-        "year-asc" => "latest.year asc nulls last",
-        "year-desc" => "latest.year desc nulls last",
-        "estimate-asc" => "latest.provider_estimate_from asc nulls last",
-        "estimate-desc" => "latest.provider_estimate_to desc nulls last",
-        "buy-asc" => "latest.buy_now_usd asc nulls last",
-        "buy-desc" => "latest.buy_now_usd desc nulls last",
-        "bid-asc" => "latest.current_bid_usd asc nulls last",
-        "bid-desc" => "latest.current_bid_usd desc nulls last",
-        "odometer-asc" => "latest.odometer asc nulls last",
-        "odometer-desc" => "latest.odometer desc nulls last",
-        "pregrade-asc" => "score.pre_grade asc nulls last",
-        "pregrade-desc" => "score.pre_grade desc nulls last",
-        "auction-desc" => "latest.auction_at desc nulls last",
-        _ => "latest.auction_at asc nulls last",
-    };
-
-    public async Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken)
-    {
-        var startedAt = DateTimeOffset.UtcNow;
-        var titleCategorySql = TitleFacetCategory.BuildSqlCaseExpression("title_normalized.normalized_document", "lower(lots.platform)");
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        await EnsureLifecycleSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using (var acquireLock = connection.CreateCommand())
-        {
-            acquireLock.Transaction = transaction;
-            acquireLock.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            acquireLock.CommandText = "select pg_try_advisory_xact_lock(hashtext('lsc-inventory-search-projection-v1'));";
-            if (await acquireLock.ExecuteScalarAsync(cancellationToken) is not true)
-                throw new InvalidOperationException("A search projection rebuild is already running.");
-        }
-        await using (var markBuilding = connection.CreateCommand())
-        {
-            markBuilding.Transaction = transaction;
-            markBuilding.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            markBuilding.CommandText = "update inventory_search_projection_state set is_ready = false, updated_at = now() where projection_name = 'inventory-current-v1';";
-            await markBuilding.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var rebuild = connection.CreateCommand())
-        {
-            rebuild.Transaction = transaction;
-            rebuild.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
-            rebuild.CommandText = """
-                insert into inventory_search_current (
-                    lot_key, platform, lot_number, vin, title, year, make, model, vehicle_type, title_type,
-                    color, fuel_type, transmission, drive_type, body_style, primary_damage, secondary_damage,
-                    seller_type, engine_layout, cylinders, loss_type, start_code, auction_state, auction_at,
-                    lot_status, lot_sub_status, location_display, location_state, facility_id, odometer,
-                    current_bid_usd, buy_now_usd, provider_estimate_from, provider_estimate_to, engine_size_liters,
-                    horsepower, has_key, has_photos, media_has_360, is_buy_now, is_special_title, is_active,
-                    observed_at, payload, search_text, updated_at)
-                select lots.lot_key, lower(lots.platform), lots.lot_number, lots.vin, lots.title, lots.year, lots.make, lots.model,
-                    lots.vehicle_type,
-                    title_facet.category,
-                    coalesce(lots.color, latest.payload #>> '{vehicle_specs,exterior_color}'),
-                    coalesce(lots.fuel_type, latest.payload #>> '{vehicle_specs,fuel_type}'),
-                    coalesce(lots.transmission, latest.payload #>> '{vehicle_specs,transmission}'),
-                    coalesce(lots.drive_type, latest.payload #>> '{vehicle_specs,drive_type}'),
-                    coalesce(latest.payload #>> '{vehicle_specs,body_style}', latest.payload #>> '{details,vehicle_description,BodyStyle}'),
-                    coalesce(lots.damage, latest.payload #>> '{condition,primary_damage}'),
-                    latest.payload #>> '{condition,secondary_damage}', latest.payload #>> '{seller,type}',
-                    latest.payload #>> '{vehicle_specs,engine,layout}', latest.payload #>> '{details,vehicle_description,Cylinders}',
-                    latest.payload #>> '{condition,loss}', coalesce(latest.payload #>> '{condition,run_condition,value}', latest.payload #>> '{condition,run_condition,label}'),
-                    lots.auction_state, lots.auction_at, lots.lot_status, lots.lot_sub_status, lots.location_display,
-                    lots.location_state, lots.facility_id, lots.odometer, lots.current_bid_usd, lots.buy_now_usd,
-                    case when latest.payload #>> '{pricing,estimated_cost,from}' ~ '^[0-9]+([.][0-9]+)?$' then (latest.payload #>> '{pricing,estimated_cost,from}')::numeric end,
-                    case when latest.payload #>> '{pricing,estimated_cost,to}' ~ '^[0-9]+([.][0-9]+)?$' then (latest.payload #>> '{pricing,estimated_cost,to}')::numeric end,
-                    case when latest.payload #>> '{vehicle_specs,engine,size_l}' ~ '^[0-9]+([.][0-9]+)?$' then (latest.payload #>> '{vehicle_specs,engine,size_l}')::numeric end,
-                    case when latest.payload #>> '{vehicle_specs,engine,hp}' ~ '^[0-9]+([.][0-9]+)?$' then (latest.payload #>> '{vehicle_specs,engine,hp}')::numeric end,
-                    case lower(latest.payload #>> '{condition,has_key}') when 'true' then true when 'false' then false end,
-                    coalesce(lots.media_photos_count, 0) > 0,
-                    lots.media_has_360,
-                    coalesce((latest.payload #>> '{auction,is_buy_now}')::boolean, false) or lots.buy_now_usd is not null,
-                    title_facet.category = 'SPECIAL',
-                    coalesce(lifecycle.is_active, true), latest.observed_at, latest.payload,
-                    concat_ws(' ', lots.lot_key, lots.lot_number, lots.vin, lots.title, lots.make, lots.model,
-                        title_source.document, title_facet.category),
-                    now()
+            with filtered as (
+                select lots.lot_key, lots.observed_at, latest.payload::text as payload,
+                       lots.current_bid_usd, lots.auction_at
                 from auction_lots lots
                 join lateral (
-                    select versions.observed_at, versions.payload
+                    select payload
                     from auction_lot_versions versions
                     where versions.lot_key = lots.lot_key
                     order by versions.observed_at desc
                     limit 1
                 ) latest on true
                 left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
-                cross join lateral (
-                    select coalesce(
-                        nullif(btrim(latest.payload #>> '{sale_document,name}'), ''),
-                        case when lower(lots.platform) = 'copart' then nullif(btrim(lots.title), '') end,
-                        'NO REPORTADO') as document
-                ) title_source
-                cross join lateral (
-                    select regexp_replace(
-                        regexp_replace(upper(title_source.document), '[-/_,.]+', ' ', 'g'),
-                        '\s+', ' ', 'g') as normalized_document
-                ) title_normalized
-                cross join lateral (
-                    select __TITLE_CATEGORY_SQL__ as category
-                ) title_facet
-                on conflict (lot_key) do update set
-                    platform = excluded.platform, lot_number = excluded.lot_number, vin = excluded.vin, title = excluded.title,
-                    year = excluded.year, make = excluded.make, model = excluded.model, vehicle_type = excluded.vehicle_type,
-                    title_type = excluded.title_type, color = excluded.color, fuel_type = excluded.fuel_type,
-                    transmission = excluded.transmission, drive_type = excluded.drive_type, body_style = excluded.body_style,
-                    primary_damage = excluded.primary_damage, secondary_damage = excluded.secondary_damage,
-                    seller_type = excluded.seller_type, engine_layout = excluded.engine_layout, cylinders = excluded.cylinders,
-                    loss_type = excluded.loss_type, start_code = excluded.start_code, auction_state = excluded.auction_state,
-                    auction_at = excluded.auction_at, lot_status = excluded.lot_status, lot_sub_status = excluded.lot_sub_status,
-                    location_display = excluded.location_display, location_state = excluded.location_state,
-                    facility_id = excluded.facility_id, odometer = excluded.odometer, current_bid_usd = excluded.current_bid_usd,
-                    buy_now_usd = excluded.buy_now_usd, provider_estimate_from = excluded.provider_estimate_from,
-                    provider_estimate_to = excluded.provider_estimate_to, engine_size_liters = excluded.engine_size_liters,
-                    horsepower = excluded.horsepower, has_key = excluded.has_key, has_photos = excluded.has_photos,
-                    media_has_360 = excluded.media_has_360, is_buy_now = excluded.is_buy_now,
-                    is_special_title = excluded.is_special_title, is_active = excluded.is_active,
-                    observed_at = excluded.observed_at, payload = excluded.payload,
-                    search_text = excluded.search_text, updated_at = now();
-
-                delete from inventory_search_current projection
-                where not exists (select 1 from auction_lots lots where lots.lot_key = projection.lot_key);
-                """.Replace("__TITLE_CATEGORY_SQL__", titleCategorySql, StringComparison.Ordinal);
-            await rebuild.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await RefreshSearchFacetsAsync(connection, transaction, cancellationToken);
-        long rows;
-        DateTimeOffset? generatedAt;
-        await using (var finalize = connection.CreateCommand())
-        {
-            finalize.Transaction = transaction;
-            finalize.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            finalize.CommandText = """
-                with stats as (
-                    select count(*)::bigint as rows, max(observed_at) as generated_at from inventory_search_current
-                )
-                update inventory_search_projection_state state
-                set is_ready = true, row_count = stats.rows, generated_at = stats.generated_at,
-                    facets_refreshed_at = now(), updated_at = now()
-                from stats where state.projection_name = 'inventory-current-v1'
-                returning state.row_count, state.generated_at;
-                """;
-            await using var reader = await finalize.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken)) throw new InvalidOperationException("Search projection state was not initialized.");
-            rows = reader.GetInt64(0);
-            generatedAt = reader.IsDBNull(1) ? null : reader.GetFieldValue<DateTimeOffset>(1);
-        }
-        await transaction.CommitAsync(cancellationToken);
-        _projectionReadyCache = true;
-        Interlocked.Exchange(ref _projectionReadyCheckedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
-        return new InventorySearchProjectionStatus(true, rows, generatedAt, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow - startedAt);
-    }
-
-    public async Task<InventorySearchProjectionStatus> GetSearchProjectionStatusAsync(CancellationToken cancellationToken)
-    {
-        var startedAt = DateTimeOffset.UtcNow;
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            select is_ready, row_count, generated_at, facets_refreshed_at
-            from inventory_search_projection_state
-            where projection_name = 'inventory-current-v1';
-            """;
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-            return new InventorySearchProjectionStatus(false, 0, null, null, DateTimeOffset.UtcNow - startedAt);
-        var ready = reader.GetBoolean(0);
-        _projectionReadyCache = ready;
-        Interlocked.Exchange(ref _projectionReadyCheckedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
-        return new InventorySearchProjectionStatus(
-            ready,
-            reader.GetInt64(1),
-            reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTimeOffset>(2),
-            reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
-            DateTimeOffset.UtcNow - startedAt);
-    }
-
-    public async Task<CopartTitleTaxonomyCoverage> GetCopartTitleTaxonomyCoverageAsync(CancellationToken cancellationToken)
-    {
-        const string version = "copart-title-taxonomy-v1";
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            with latest as (
-                select distinct on (versions.lot_key)
-                    versions.lot_key, versions.payload, lots.platform
-                from auction_lot_versions versions
-                join auction_lots lots on lots.lot_key = versions.lot_key
-                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = versions.lot_key
                 where coalesce(lifecycle.is_active, true)
-                order by versions.lot_key, versions.observed_at desc
+                  and (@platform is null or lots.platform = @platform)
+                  and (@search is null or concat_ws(' ', lots.lot_number, lots.title, lots.make, lots.model, latest.payload #>> '{sale_document,name}') ilike '%' || @search || '%')
+                  and (@year_from is null or lots.year >= @year_from)
+                  and (@year_to is null or lots.year <= @year_to)
+                  and (@maximum_bid is null or lots.current_bid_usd is null or lots.current_bid_usd <= @maximum_bid)
+                  and (not @require_bid or lots.current_bid_usd is not null)
+                  and (not @require_photos or coalesce(lots.media_photos_count, 0) > 0)
+                  and (@odometer_from is null or lots.odometer >= @odometer_from)
+                  and (@odometer_to is null or lots.odometer <= @odometer_to)
+                  and (@auction_from is null or (lots.auction_at at time zone 'America/New_York')::date >= @auction_from)
+                  and (@auction_to is null or (lots.auction_at at time zone 'America/New_York')::date <= @auction_to)
+                  and (@estimated_total_from is null or (lots.current_bid_usd is not null and lots.current_bid_usd + 699 >= @estimated_total_from))
+                  and (@estimated_total_to is null or (lots.current_bid_usd is not null and lots.current_bid_usd + 399 <= @estimated_total_to))
+                  and (cardinality(@makes) = 0 or lots.make = any(@makes))
+                  and (cardinality(@models) = 0 or lots.model = any(@models))
+                  and (cardinality(@facilities) = 0 or lots.facility_id = any(@facilities) or lots.location_display = any(@facilities))
+                  and (cardinality(@states) = 0 or lots.location_state = any(@states))
+                  and (cardinality(@vehicle_types) = 0 or lots.vehicle_type = any(@vehicle_types))
+                  and (cardinality(@damages) = 0 or lots.damage = any(@damages))
+                  and (cardinality(@title_types) = 0 or latest.payload #>> '{sale_document,name}' = any(@title_types))
+                  and (cardinality(@drives) = 0 or lots.drive_type = any(@drives))
+                  and (cardinality(@transmissions) = 0 or lots.transmission = any(@transmissions))
+                  and (cardinality(@fuels) = 0 or lots.fuel_type = any(@fuels))
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%CERTIFICATE OF DESTRUCTION%')
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%JUNK%')
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%NON REPAIRABLE%')
+                  and (@include_special_titles or upper(coalesce(latest.payload #>> '{sale_document,name}', '')) not like '%PARTS ONLY%')
+            ), numbered as (
+                select *, count(*) over() as total_count
+                from filtered
             )
-            select
-                count(*) filter (where lower(platform) = 'copart')::bigint,
-                count(*) filter (where lower(platform) = 'copart' and payload ->> 'title_taxonomy_version' = @version)::bigint
-            from latest;
+            select lot_key, observed_at, payload, total_count
+            from numbered
+            order by
+                case when @sort = 'bid-low' then current_bid_usd end asc nulls last,
+                case when @sort = 'bid-high' then current_bid_usd end desc nulls last,
+                case when @sort = 'auction' then auction_at end asc nulls last,
+                observed_at desc,
+                lot_key
+            limit @limit offset @offset;
             """;
-        AddParameter(command, "version", version);
+        AddParameter(command, "platform", platform);
+        AddParameter(command, "search", search);
+        AddParameter(command, "year_from", query.YearFrom);
+        AddParameter(command, "year_to", query.YearTo);
+        AddParameter(command, "maximum_bid", query.MaximumBid);
+        AddParameter(command, "require_bid", query.RequireBid);
+        AddParameter(command, "require_photos", query.RequirePhotos);
+        AddParameter(command, "odometer_from", query.OdometerFrom);
+        AddParameter(command, "odometer_to", query.OdometerTo);
+        AddParameter(command, "auction_from", query.AuctionFrom);
+        AddParameter(command, "auction_to", query.AuctionTo);
+        AddParameter(command, "estimated_total_from", query.EstimatedTotalFrom);
+        AddParameter(command, "estimated_total_to", query.EstimatedTotalTo);
+        AddParameter(command, "makes", query.Makes?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "models", query.Models?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "facilities", query.Facilities?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "states", query.States?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "vehicle_types", query.VehicleTypes?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "damages", query.Damages?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "title_types", query.TitleTypes?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "drives", query.Drives?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "transmissions", query.Transmissions?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "fuels", query.Fuels?.ToArray() ?? Array.Empty<string>());
+        AddParameter(command, "include_special_titles", query.IncludeSpecialTitles);
+        AddParameter(command, "sort", sort);
+        AddParameter(command, "limit", pageSize);
+        AddParameter(command, "offset", offset);
+
+        var vehicles = new List<StoredVehicleSnapshot>(pageSize);
+        long total = 0;
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken)) return new CopartTitleTaxonomyCoverage(version, 0, 0, 0m, false, DateTimeOffset.UtcNow);
-        var total = reader.GetInt64(0);
-        var classified = reader.GetInt64(1);
-        var coverage = total == 0 ? 0m : decimal.Round(classified * 100m / total, 2);
-        return new CopartTitleTaxonomyCoverage(version, total, classified, coverage, total > 0 && coverage >= 95m, DateTimeOffset.UtcNow);
-    }
-
-    private async Task RefreshSearchFacetsAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
-    {
-        await using var facets = connection.CreateCommand();
-        facets.Transaction = transaction;
-        facets.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 300);
-        facets.CommandText = $"""
-            delete from inventory_search_facet_counts;
-            with expanded as (
-                select facet_key, nullif(btrim(facet_value), '') as facet_value
-                from inventory_search_current current
-                cross join lateral (values
-                    ('platforms', current.platform), ('makes', current.make), ('models', current.model),
-                    ('vehicleTypes', current.vehicle_type), ('titles', current.title_type), ('states', current.location_state),
-                    ('facilities', current.location_display), ('primaryDamages', current.primary_damage),
-                    ('secondaryDamages', current.secondary_damage), ('sellerTypes', current.seller_type),
-                    ('engineLayouts', current.engine_layout), ('cylinders', current.cylinders),
-                    ('transmissions', current.transmission), ('fuels', current.fuel_type), ('drives', current.drive_type),
-                    ('bodyStyles', current.body_style), ('colors', current.color), ('lossTypes', current.loss_type),
-                    ('startCodes', current.start_code),
-                    ('runConditions', {PublicRunConditionSql("current")})
-                ) facets(facet_key, facet_value)
-                where current.is_active
-            ), counts as (
-                select facet_key, facet_value, count(*)::int as vehicle_count
-                from expanded where facet_value is not null group by facet_key, facet_value
-            ), ranked as (
-                select counts.*, row_number() over (partition by facet_key order by vehicle_count desc, facet_value asc) as rank
-                from counts
-            )
-            insert into inventory_search_facet_counts (facet_key, facet_value, vehicle_count, generated_at)
-            select facet_key, facet_value, vehicle_count, now() from ranked where rank <= 250;
-            """;
-        await facets.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private async Task RefreshSearchProjectionStatisticsIfReadyAsync(CancellationToken cancellationToken)
-    {
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        if (!await IsSearchProjectionReadyAsync(cancellationToken)) return;
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await RefreshSearchFacetsAsync(connection, transaction, cancellationToken);
-        await using var state = connection.CreateCommand();
-        state.Transaction = transaction;
-        state.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        state.CommandText = """
-            with stats as (
-                select count(*)::bigint as rows,
-                       count(*) filter (where not is_special_title)::bigint as visible_rows,
-                       max(observed_at) as generated_at
-                from inventory_search_current where is_active
-            )
-            update inventory_search_projection_state projection
-            set row_count = stats.rows, visible_row_count = stats.visible_rows, generated_at = stats.generated_at,
-                facets_refreshed_at = now(), updated_at = now()
-            from stats where projection.projection_name = 'inventory-current-v1';
-            """;
-        await state.ExecuteNonQueryAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    public async Task<StoredVehicleSnapshot?> GetByLotAsync(string lotNumber, CancellationToken cancellationToken)
-    {
-        await EnsureSchemaAsync(cancellationToken);
-        await EnsureLifecycleSchemaAsync(cancellationToken);
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        if (await IsSearchProjectionReadyAsync(cancellationToken))
-        {
-            await using var projectionConnection = await OpenConnectionAsync(cancellationToken);
-            await using var projectionCommand = projectionConnection.CreateCommand();
-            projectionCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            projectionCommand.CommandText = """
-                select current.lot_key, current.observed_at, current.payload::text, current.platform, current.lot_number, current.vin
-                from inventory_search_current current
-                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = current.lot_key
-                where current.lot_number = @lot_number and coalesce(lifecycle.is_active, current.is_active)
-                order by observed_at desc limit 1;
-                """;
-            AddParameter(projectionCommand, "lot_number", lotNumber.Trim());
-            return (await ReadStoredSnapshotsAsync(projectionCommand, cancellationToken)).SingleOrDefault();
-        }
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            select versions.lot_key, versions.observed_at, versions.payload::text,
-                   lots.platform, lots.lot_number, lots.vin
-            from auction_lot_versions versions
-            join auction_lots lots on lots.lot_key = versions.lot_key
-            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = versions.lot_key
-            where lots.lot_number = @lot_number
-              and coalesce(lifecycle.is_active, true)
-            order by versions.observed_at desc
-            limit 1;
-            """;
-        AddParameter(command, "lot_number", lotNumber.Trim());
-        return (await ReadStoredSnapshotsAsync(command, cancellationToken)).SingleOrDefault();
-    }
-
-    public async Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(platform)) throw new ArgumentException("Platform is required.", nameof(platform));
-        if (string.IsNullOrWhiteSpace(lotNumber)) throw new ArgumentException("Lot number is required.", nameof(lotNumber));
-
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        if (await IsSearchProjectionReadyAsync(cancellationToken))
-        {
-            await using var projectionConnection = await OpenConnectionAsync(cancellationToken);
-            await using var projectionCommand = projectionConnection.CreateCommand();
-            projectionCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            projectionCommand.CommandText = """
-                select current.lot_key, current.observed_at, current.payload::text, current.platform, current.lot_number, current.vin
-                from inventory_search_current current
-                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = current.lot_key
-                where current.platform = @platform
-                  and current.lot_number = @lot_number
-                  and coalesce(lifecycle.is_active, current.is_active)
-                order by observed_at desc
-                limit 1;
-                """;
-            AddParameter(projectionCommand, "platform", platform.Trim().ToLowerInvariant());
-            AddParameter(projectionCommand, "lot_number", lotNumber.Trim());
-            return (await ReadStoredSnapshotsAsync(projectionCommand, cancellationToken)).SingleOrDefault();
-        }
-
-        await EnsureSchemaAsync(cancellationToken);
-        await EnsureLifecycleSchemaAsync(cancellationToken);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            select versions.lot_key, versions.observed_at, versions.payload::text,
-                   lots.platform, lots.lot_number, lots.vin
-            from auction_lot_versions versions
-            join auction_lots lots on lots.lot_key = versions.lot_key
-            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = versions.lot_key
-            where lots.platform = @platform
-              and lots.lot_number = @lot_number
-              and coalesce(lifecycle.is_active, true)
-            order by versions.observed_at desc
-            limit 1;
-            """;
-        AddParameter(command, "platform", platform.Trim().ToLowerInvariant());
-        AddParameter(command, "lot_number", lotNumber.Trim());
-        return (await ReadStoredSnapshotsAsync(command, cancellationToken)).SingleOrDefault();
-    }
-
-    private static string SqlTitleCategoryExpression(string alias)
-    {
-        var normalizedSource = "regexp_replace(upper(coalesce(nullif(btrim(" + alias + ".payload #>> '{SaleDocument,Name}'), ''), case when lower(" + alias + ".platform) = 'copart' then nullif(btrim(" + alias + ".title), '') end, 'NO REPORTADO')), '[-/_,.]+', ' ', 'g')";
-        var normalizedPlatform = "lower(coalesce(" + alias + ".platform, ''))";
-        return TitleFacetCategory.BuildSqlCaseExpression(normalizedSource, normalizedPlatform);
-    }
-
-    private static void AddSearchFilters(NpgsqlCommand command, InventorySearchRequest request, List<string> where)
-    {
-        static string[] Values(IReadOnlyCollection<string>? values) => values?.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-        void AddAny(string parameter, IReadOnlyCollection<string>? values, string expression)
-        {
-            var selected = Values(values);
-            if (selected.Length == 0) return;
-            where.Add($"lower(coalesce({expression}, '')) = any(@{parameter})");
-            AddParameter(command, parameter, selected.Select(value => value.ToLowerInvariant()).ToArray());
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.Query))
-        {
-            where.Add("concat_ws(' ', latest.lot_key, latest.lot_number, latest.vin, latest.make, latest.model, latest.title, latest.payload #>> '{SaleDocument,Name}') ilike @query");
-            AddParameter(command, "query", $"%{request.Query.Trim()}%");
-        }
-        if (!string.IsNullOrWhiteSpace(request.Platform))
-        {
-            where.Add("lower(latest.platform) = @platform");
-            AddParameter(command, "platform", request.Platform.Trim().ToLowerInvariant());
-        }
-        AddAny("makes", request.Makes, "latest.make");
-        AddAny("models", request.Models, "latest.model");
-        AddAny("vehicle_types", request.VehicleTypes, "latest.vehicle_type");
-        var titleCategory = SqlTitleCategoryExpression("latest");
-        if (request.ExcludeSpecialTitles) where.Add($"{titleCategory} <> 'SPECIAL'");
-        AddAny("titles", request.Titles, titleCategory);
-        AddAny("title_categories", request.TitleCategories, "latest.payload ->> 'title_category'");
-        AddAny("states", request.States, "latest.location_state");
-        AddAny("facilities", request.Facilities, "latest.location_display");
-        AddAny("primary_damages", request.PrimaryDamages, "latest.damage");
-        AddAny("secondary_damages", request.SecondaryDamages, "latest.payload #>> '{Condition,SecondaryDamage}'");
-        AddAny("seller_types", request.SellerTypes, "latest.payload #>> '{Seller,Type}'");
-        AddAny("engine_layouts", request.EngineLayouts, "latest.payload #>> '{VehicleSpecs,Engine,Layout}'");
-        AddAny("cylinders", request.Cylinders, "latest.payload #>> '{Details,VehicleDescription,Cylinders}'");
-        AddAny("transmissions", request.Transmissions, "latest.payload #>> '{Transmission}'");
-        AddAny("fuels", request.Fuels, "latest.payload #>> '{FuelType}'");
-        AddAny("drives", request.Drives, "latest.payload #>> '{DriveType}'");
-        AddAny("body_styles", request.BodyStyles, "latest.payload #>> '{BodyStyle}'");
-        AddAny("colors", request.Colors, "latest.payload #>> '{Color}'");
-        AddAny("loss_types", request.LossTypes, "latest.payload #>> '{LossType}'");
-        AddAny("start_codes", request.StartCodes, "latest.payload #>> '{StartCode}'");
-        AddAny("run_conditions", request.RunConditions, PublicRunConditionPayloadSql("latest"));
-        if (request.YearFrom.HasValue) { where.Add("latest.year >= @year_from"); AddParameter(command, "year_from", request.YearFrom.Value); }
-        if (request.YearTo.HasValue) { where.Add("latest.year <= @year_to"); AddParameter(command, "year_to", request.YearTo.Value); }
-        if (request.OdometerFrom.HasValue) { where.Add("latest.odometer >= @odometer_from"); AddParameter(command, "odometer_from", request.OdometerFrom.Value); }
-        if (request.OdometerTo.HasValue) { where.Add("latest.odometer <= @odometer_to"); AddParameter(command, "odometer_to", request.OdometerTo.Value); }
-        if (request.PriceFrom.HasValue) { where.Add("latest.current_bid_usd >= @price_from"); AddParameter(command, "price_from", request.PriceFrom.Value); }
-        if (request.PriceTo.HasValue) { where.Add("latest.current_bid_usd <= @price_to"); AddParameter(command, "price_to", request.PriceTo.Value); }
-        if (request.MaxCurrentBid.HasValue) { where.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @max_current_bid)"); AddParameter(command, "max_current_bid", request.MaxCurrentBid.Value); }
-        if (request.AuctionFrom.HasValue) { where.Add("latest.auction_at >= @auction_from"); AddParameter(command, "auction_from", request.AuctionFrom.Value); }
-        if (request.AuctionTo.HasValue) { where.Add("latest.auction_at <= @auction_to"); AddParameter(command, "auction_to", request.AuctionTo.Value); }
-        if (request.BuyNowOnly == true) where.Add("(latest.buy_now_usd is not null or lower(coalesce(latest.payload #>> '{Auction,IsBuyNow}', 'false')) = 'true')");
-        if (request.WithPhotosOnly == true) where.Add("(coalesce(jsonb_array_length(latest.payload #> '{Media,Photos}'), 0) > 0 or coalesce(jsonb_array_length(latest.payload #> '{Media,Items}'), 0) > 0)");
-        if (request.WithBidOnly == true) where.Add("latest.current_bid_usd is not null");
-        if (string.Equals(request.KeyMode, "with", StringComparison.OrdinalIgnoreCase)) where.Add("lower(coalesce(latest.payload #>> '{Condition,HasKey}', '')) = 'true'");
-        if (string.Equals(request.KeyMode, "without", StringComparison.OrdinalIgnoreCase)) where.Add("lower(coalesce(latest.payload #>> '{Condition,HasKey}', '')) = 'false'");
-        if (request.ProviderEstimateFrom.HasValue) { where.Add("nullif(latest.payload #>> '{Pricing,EstimatedCost,ToUsd}', '')::numeric >= @provider_estimate_from"); AddParameter(command, "provider_estimate_from", request.ProviderEstimateFrom.Value); }
-        if (request.ProviderEstimateTo.HasValue) { where.Add("nullif(latest.payload #>> '{Pricing,EstimatedCost,FromUsd}', '')::numeric <= @provider_estimate_to"); AddParameter(command, "provider_estimate_to", request.ProviderEstimateTo.Value); }
-        if (request.EngineSizeFrom.HasValue) { where.Add("nullif(latest.payload #>> '{VehicleSpecs,Engine,SizeLiters}', '')::numeric >= @engine_size_from"); AddParameter(command, "engine_size_from", request.EngineSizeFrom.Value); }
-        if (request.EngineSizeTo.HasValue) { where.Add("nullif(latest.payload #>> '{VehicleSpecs,Engine,SizeLiters}', '')::numeric <= @engine_size_to"); AddParameter(command, "engine_size_to", request.EngineSizeTo.Value); }
-        if (request.HorsepowerFrom.HasValue) { where.Add("nullif(latest.payload #>> '{VehicleSpecs,Engine,Horsepower}', '')::numeric >= @horsepower_from"); AddParameter(command, "horsepower_from", request.HorsepowerFrom.Value); }
-        if (request.HorsepowerTo.HasValue) { where.Add("nullif(latest.payload #>> '{VehicleSpecs,Engine,Horsepower}', '')::numeric <= @horsepower_to"); AddParameter(command, "horsepower_to", request.HorsepowerTo.Value); }
-        if (string.Equals(request.AuctionStatus, "open", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.payload #>> '{Auction,LotStatus}', latest.payload #>> '{Auction,LotSubStatus}')) like any(array['%open%', '%active%'])");
-        if (string.Equals(request.AuctionStatus, "live", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.payload #>> '{Auction,LotStatus}', latest.payload #>> '{Auction,LotSubStatus}')) like '%live%'");
-        if (string.Equals(request.AuctionStatus, "finished", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.payload #>> '{Auction,LotStatus}', latest.payload #>> '{Auction,LotSubStatus}')) like any(array['%finished%', '%ended%', '%sold%'])");
-    }
-
-    private static string GetSearchOrdering(string? sort) => sort?.Trim().ToLowerInvariant() switch
-    {
-        "year-asc" => "latest.year asc nulls last",
-        "year-desc" => "latest.year desc nulls last",
-        "estimate-asc" => "nullif(latest.payload #>> '{Pricing,EstimatedCost,FromUsd}', '')::numeric asc nulls last",
-        "estimate-desc" => "nullif(latest.payload #>> '{Pricing,EstimatedCost,ToUsd}', '')::numeric desc nulls last",
-        "buy-asc" => "latest.buy_now_usd asc nulls last",
-        "buy-desc" => "latest.buy_now_usd desc nulls last",
-        "bid-asc" => "latest.current_bid_usd asc nulls last",
-        "bid-desc" => "latest.current_bid_usd desc nulls last",
-        "odometer-asc" => "latest.odometer asc nulls last",
-        "odometer-desc" => "latest.odometer desc nulls last",
-        "auction-desc" => "latest.auction_at desc nulls last",
-        _ => "latest.auction_at asc nulls last",
-    };
-
-    private static string? ReadOptionalString(NpgsqlDataReader reader, string column)
-    {
-        for (var index = 0; index < reader.FieldCount; index++)
-        {
-            if (!string.Equals(reader.GetName(index), column, StringComparison.OrdinalIgnoreCase)) continue;
-            return reader.IsDBNull(index) ? null : reader.GetString(index);
-        }
-        return null;
-    }
-
-    private static decimal? ReadOptionalDecimal(NpgsqlDataReader reader, string column)
-    {
-        for (var index = 0; index < reader.FieldCount; index++)
-        {
-            if (!string.Equals(reader.GetName(index), column, StringComparison.OrdinalIgnoreCase)) continue;
-            return reader.IsDBNull(index) ? null : reader.GetDecimal(index);
-        }
-        return null;
-    }
-
-    private static DateTimeOffset? ReadOptionalDateTimeOffset(NpgsqlDataReader reader, string column)
-    {
-        for (var index = 0; index < reader.FieldCount; index++)
-        {
-            if (!string.Equals(reader.GetName(index), column, StringComparison.OrdinalIgnoreCase)) continue;
-            return reader.IsDBNull(index) ? null : reader.GetFieldValue<DateTimeOffset>(index);
-        }
-        return null;
-    }
-
-    private static string? PreferPersisted(string? persisted, string? payload) =>
-        string.IsNullOrWhiteSpace(persisted) ? payload : persisted;
-
-    private static async Task<List<StoredVehicleSnapshot>> ReadStoredSnapshotsAsync(NpgsqlCommand command, CancellationToken cancellationToken)
-    {
-        var snapshots = new List<StoredVehicleSnapshot>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            PropertyNameCaseInsensitive = true,
-            NumberHandling = JsonNumberHandling.AllowReadingFromString
-        };
         while (await reader.ReadAsync(cancellationToken))
         {
+            total = reader.GetInt64(3);
             var rawJson = reader.GetString(2);
             var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
             if (vehicle is not null)
-            {
-                vehicle = vehicle with
-                {
-                    Platform = PreferPersisted(ReadOptionalString(reader, "platform"), vehicle.Platform),
-                    LotNumber = PreferPersisted(ReadOptionalString(reader, "lot_number"), vehicle.LotNumber),
-                    Vin = PreferPersisted(ReadOptionalString(reader, "vin"), vehicle.Vin)
-                };
-                LscScoringSummary? scoring = null;
-                var scoreStatus = ReadOptionalString(reader, "score_status");
-                if (!string.IsNullOrWhiteSpace(scoreStatus))
-                {
-                    scoring = new LscScoringSummary(
-                        scoreStatus,
-                        ReadOptionalDecimal(reader, "score_pre_grade"),
-                        ReadOptionalDecimal(reader, "score_buy_score"),
-                        ReadOptionalDecimal(reader, "score_max_points_evaluable") ?? 0m,
-                        ReadOptionalDecimal(reader, "score_coverage_percent") ?? 0m,
-                        ReadOptionalDecimal(reader, "score_confidence_percent") ?? 0m,
-                        ReadOptionalString(reader, "score_category"),
-                        ReadOptionalString(reader, "score_policy_version") ?? "unknown",
-                        ReadOptionalDateTimeOffset(reader, "score_scored_at") ?? DateTimeOffset.MinValue);
-                }
-                snapshots.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson, scoring));
-            }
+                vehicles.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
         }
-        return snapshots;
+
+        return new InventoryPage(page, pageSize, total, Math.Max(1, (int)Math.Ceiling(total / (double)pageSize)), vehicles);
     }
 
-    public async Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken, Guid? runId = null)
+    public async Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (!isCompleteSnapshot)
@@ -2213,7 +2079,7 @@ public sealed partial class PostgresSnapshotStore(
             await backfill.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        var reactivatedLotKeys = new List<string>();
+        var reactivated = 0;
         if (observed.Length > 0)
         {
             await using var reactivate = connection.CreateCommand();
@@ -2228,14 +2094,12 @@ public sealed partial class PostgresSnapshotStore(
                     updated_at = now()
                 where platform = @platform
                   and lot_key = any(@observed)
-                  and not is_active
-                returning lot_key;
+                  and not is_active;
                 """;
             AddParameter(reactivate, "platform", normalizedPlatform);
             AddParameter(reactivate, "observed_at", observedAt);
             AddParameter(reactivate, "observed", observed);
-            await using var reader = await reactivate.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken)) reactivatedLotKeys.Add(reader.GetString(0));
+            reactivated = await reactivate.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await using var reconcile = connection.CreateCommand();
@@ -2251,47 +2115,24 @@ public sealed partial class PostgresSnapshotStore(
                 where platform = @platform
                   and is_active
                   and not (lot_key = any(@observed))
-                returning lot_key, is_active
+                returning is_active
             )
-            select lot_key, is_active from updated;
+            select count(*)::int, count(*) filter (where not is_active)::int from updated;
             """;
         AddParameter(reconcile, "platform", normalizedPlatform);
         AddParameter(reconcile, "observed_at", observedAt);
         AddParameter(reconcile, "observed", observed);
-        var incremented = 0;
-        var deactivatedLotKeys = new List<string>();
+        int incremented;
+        int deactivated;
         await using (var reader = await reconcile.ExecuteReaderAsync(cancellationToken))
         {
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                incremented++;
-                if (!reader.GetBoolean(1)) deactivatedLotKeys.Add(reader.GetString(0));
-            }
+            await reader.ReadAsync(cancellationToken);
+            incremented = reader.GetInt32(0);
+            deactivated = reader.GetInt32(1);
         }
 
         await transaction.CommitAsync(cancellationToken);
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        await using (var projectionConnection = await OpenConnectionAsync(cancellationToken))
-        {
-            await using var projectionState = projectionConnection.CreateCommand();
-            projectionState.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            projectionState.CommandText = """
-                update inventory_search_current projection
-                set is_active = lifecycle.is_active, updated_at = now()
-                from inventory_lot_lifecycle lifecycle
-                where lifecycle.platform = @platform and lifecycle.lot_key = projection.lot_key;
-                """;
-            AddParameter(projectionState, "platform", normalizedPlatform);
-            await projectionState.ExecuteNonQueryAsync(cancellationToken);
-        }
-        if (runId is not null)
-        {
-            foreach (var lotKey in reactivatedLotKeys)
-                await RecordSyncRunEventAsync(new InventorySyncRunEvent(runId.Value, normalizedPlatform, lotKey, lotKey.Split(':').LastOrDefault(), null, "reactivated", ["estado activo"], [], observedAt), cancellationToken);
-            foreach (var lotKey in deactivatedLotKeys)
-                await RecordSyncRunEventAsync(new InventorySyncRunEvent(runId.Value, normalizedPlatform, lotKey, lotKey.Split(':').LastOrDefault(), null, "deactivated", ["tres ausencias consecutivas"], [], observedAt), cancellationToken);
-        }
-        return new InventoryReconciliationResult(normalizedPlatform, true, observed.Length, reactivatedLotKeys.Count, incremented, deactivatedLotKeys.Count);
+        return new InventoryReconciliationResult(normalizedPlatform, true, observed.Length, reactivated, incremented, deactivated);
     }
 
     private async Task EnsureSchemaAsync(CancellationToken cancellationToken)
@@ -2343,37 +2184,6 @@ public sealed partial class PostgresSnapshotStore(
                     created_at timestamptz not null default now()
                 );
 
-                create table if not exists inventory_execution_run_metrics (
-                    run_id uuid primary key,
-                    loaded_count integer,
-                    marked_count integer,
-                    discarded_count integer,
-                    quarantined_count integer,
-                    error_count integer,
-                    pages_processed integer,
-                    cycle_completed boolean,
-                    reactivated_count integer,
-                    misses_incremented_count integer,
-                    deactivated_count integer,
-                    failures jsonb not null default '[]'::jsonb,
-                    updated_at timestamptz not null default now()
-                );
-
-                create table if not exists inventory_sync_run_events (
-                    id bigserial primary key,
-                    run_id uuid not null,
-                    platform text not null,
-                    lot_key text not null,
-                    lot_number text,
-                    vin_masked text,
-                    action text not null,
-                    changed_fields jsonb not null default '[]'::jsonb,
-                    rule_codes jsonb not null default '[]'::jsonb,
-                    occurred_at timestamptz not null,
-                    created_at timestamptz not null default now()
-                );
-                create index if not exists ix_inventory_sync_run_events_run_action on inventory_sync_run_events (run_id, action, occurred_at desc);
-
                 create table if not exists provider_usage_snapshots (
                     id bigserial primary key,
                     provider text not null,
@@ -2381,41 +2191,6 @@ public sealed partial class PostgresSnapshotStore(
                     usage jsonb not null,
                     created_at timestamptz not null default now()
                 );
-
-                insert into schema_migrations (migration_id)
-                values ('002_iaai_national_sync')
-                on conflict (migration_id) do nothing;
-
-                create table if not exists inventory_sync_leases (
-                    lease_name text primary key,
-                    owner_run_id uuid not null,
-                    expires_at timestamptz not null,
-                    updated_at timestamptz not null default now()
-                );
-
-                create table if not exists iaai_national_sync_state (
-                    stream_name text primary key,
-                    cycle_id uuid,
-                    cursor text,
-                    pages_completed integer not null default 0,
-                    lots_observed integer not null default 0,
-                    cycle_completed boolean not null default true,
-                    initial_backfill_completed boolean not null default false,
-                    updated_at timestamptz not null default now()
-                );
-
-                alter table iaai_national_sync_state
-                    add column if not exists initial_backfill_completed boolean not null default false;
-
-                create table if not exists iaai_national_cycle_observations (
-                    cycle_id uuid not null,
-                    lot_key text not null,
-                    observed_at timestamptz not null,
-                    primary key (cycle_id, lot_key)
-                );
-
-                create index if not exists ix_iaai_national_cycle_observations_cycle on iaai_national_cycle_observations (cycle_id);
-                create index if not exists ix_inventory_sync_leases_expires on inventory_sync_leases (expires_at);
 
                 create table if not exists copart_snapshot_manifests (
                     sha256 text primary key,
@@ -2434,10 +2209,29 @@ public sealed partial class PostgresSnapshotStore(
                     quarantined_count integer not null default 0,
                     marked_count integer not null default 0,
                     error_count integer not null default 0,
+                    created_count integer,
+                    updated_count integer,
+                    unchanged_count integer,
+                    scored_inline_count integer,
+                    score_skipped_unchanged_count integer,
+                    score_failed_count integer,
+                    inline_scoring_duration_ms bigint,
+                    inline_scoring_p50_ms bigint,
+                    inline_scoring_p95_ms bigint,
                     failures jsonb not null default '[]'::jsonb,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
+
+                alter table copart_snapshot_manifests add column if not exists created_count integer;
+                alter table copart_snapshot_manifests add column if not exists updated_count integer;
+                alter table copart_snapshot_manifests add column if not exists unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists scored_inline_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_skipped_unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_failed_count integer;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_duration_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p50_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p95_ms bigint;
 
                 create index if not exists ix_copart_snapshot_manifests_status_downloaded on copart_snapshot_manifests (status, downloaded_at desc);
 
@@ -2527,138 +2321,150 @@ public sealed partial class PostgresSnapshotStore(
         }
     }
 
-    private async Task EnsureAuditSchemaAsync(CancellationToken cancellationToken)
+    private async Task EnsureCopartAuctionHistorySchemaAsync(CancellationToken cancellationToken)
     {
-        if (_auditSchemaInitialized) return;
-        await AuditSchemaLock.WaitAsync(cancellationToken);
+        if (_copartAuctionHistorySchemaInitialized) return;
+        await CopartAuctionHistorySchemaLock.WaitAsync(cancellationToken);
         try
         {
-            if (_auditSchemaInitialized) return;
+            if (_copartAuctionHistorySchemaInitialized) return;
             await using var connection = await OpenConnectionAsync(cancellationToken);
             await using var command = connection.CreateCommand();
             command.CommandTimeout = _persistence.CommandTimeoutSeconds;
             command.CommandText = """
-                create table if not exists inventory_execution_run_metrics (
-                    run_id uuid primary key, loaded_count integer, marked_count integer, discarded_count integer,
-                    quarantined_count integer, error_count integer, pages_processed integer, cycle_completed boolean,
-                    reactivated_count integer, misses_incremented_count integer, deactivated_count integer,
-                    failures jsonb not null default '[]'::jsonb, updated_at timestamptz not null default now()
-                );
-                create table if not exists inventory_sync_run_events (
-                    id bigserial primary key, run_id uuid not null, platform text not null, lot_key text not null,
-                    lot_number text, vin_masked text, action text not null,
-                    changed_fields jsonb not null default '[]'::jsonb, rule_codes jsonb not null default '[]'::jsonb,
-                    occurred_at timestamptz not null, created_at timestamptz not null default now()
-                );
-                create index if not exists ix_inventory_sync_run_events_run_action on inventory_sync_run_events (run_id, action, occurred_at desc);
-                """;
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            _auditSchemaInitialized = true;
+            create table if not exists copart_lot_observations (
+                snapshot_sha256 text not null,
+                snapshot_downloaded_at timestamptz not null,
+                lot_key text not null,
+                lot_number text not null,
+                auction_at timestamptz,
+                current_bid_usd numeric,
+                buy_now_usd numeric,
+                sale_price_usd numeric,
+                lot_status text,
+                lot_sub_status text,
+                payload_hash text not null,
+                created_at timestamptz not null default now(),
+                primary key (snapshot_sha256, lot_key)
+            );
+            create index if not exists ix_copart_lot_observations_lot_auction
+                on copart_lot_observations (lot_key, auction_at, snapshot_downloaded_at);
+            create index if not exists ix_copart_lot_observations_snapshot
+                on copart_lot_observations (snapshot_sha256, snapshot_downloaded_at);
+
+            create table if not exists copart_auction_attempts (
+                id bigserial primary key,
+                lot_key text not null,
+                attempt_number integer not null default 0,
+                auction_at timestamptz not null,
+                first_observed_at timestamptz not null,
+                last_observed_at timestamptz not null,
+                first_bid_usd numeric,
+                last_bid_usd numeric,
+                maximum_bid_usd numeric,
+                buy_now_usd numeric,
+                sale_price_usd numeric,
+                outcome text not null,
+                evidence_level text not null,
+                outcome_evidence text,
+                observation_count integer not null default 1,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                unique (lot_key, auction_at)
+            );
+            create index if not exists ix_copart_auction_attempts_lot_date
+                on copart_auction_attempts (lot_key, auction_at);
+            create index if not exists ix_copart_auction_attempts_outcome_date
+                on copart_auction_attempts (outcome, auction_at desc);
+
+            create table if not exists copart_lot_motivation_signals (
+                lot_key text primary key,
+                attempt_count integer not null,
+                relisted_inferred_count integer not null,
+                score integer not null,
+                level text not null,
+                first_attempt_at timestamptz,
+                last_attempt_at timestamptz,
+                last_bid_usd numeric,
+                historical_maximum_bid_usd numeric,
+                score_components jsonb not null default '{}'::jsonb,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now()
+            );
+            create index if not exists ix_copart_lot_motivation_signals_score
+                on copart_lot_motivation_signals (score desc, last_attempt_at desc);
+            """;
+                    await command.ExecuteNonQueryAsync(cancellationToken);
+            _copartAuctionHistorySchemaInitialized = true;
         }
-        finally { AuditSchemaLock.Release(); }
+        finally
+        {
+            CopartAuctionHistorySchemaLock.Release();
+        }
     }
 
-    private async Task EnsureSearchProjectionSchemaAsync(CancellationToken cancellationToken)
+    private async Task EnsureCopartSchemaAsync(CancellationToken cancellationToken)
+
     {
-        if (_searchProjectionSchemaInitialized) return;
-        await SearchProjectionSchemaLock.WaitAsync(cancellationToken);
+        if (_copartSchemaInitialized) return;
+        await CopartSchemaLock.WaitAsync(cancellationToken);
         try
         {
-            if (_searchProjectionSchemaInitialized) return;
+            if (_copartSchemaInitialized) return;
             await using var connection = await OpenConnectionAsync(cancellationToken);
             await using var command = connection.CreateCommand();
-            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
             command.CommandText = """
-                create table if not exists inventory_search_current (
-                    lot_key text primary key,
-                    platform text not null,
-                    lot_number text,
-                    vin text,
-                    title text,
-                    year integer,
-                    make text,
-                    model text,
-                    vehicle_type text,
-                    title_type text,
-                    color text,
-                    fuel_type text,
-                    transmission text,
-                    drive_type text,
-                    body_style text,
-                    primary_damage text,
-                    secondary_damage text,
-                    seller_type text,
-                    engine_layout text,
-                    cylinders text,
-                    loss_type text,
-                    start_code text,
-                    auction_state text,
-                    auction_at timestamptz,
-                    lot_status text,
-                    lot_sub_status text,
-                    location_display text,
-                    location_state text,
-                    facility_id text,
-                    odometer numeric,
-                    current_bid_usd numeric,
-                    buy_now_usd numeric,
-                    provider_estimate_from numeric,
-                    provider_estimate_to numeric,
-                    engine_size_liters numeric,
-                    horsepower numeric,
-                    has_key boolean,
-                    has_photos boolean not null default false,
-                    media_has_360 boolean,
-                    is_buy_now boolean not null default false,
-                    is_special_title boolean not null default false,
-                    is_active boolean not null default true,
-                    observed_at timestamptz not null,
-                    payload jsonb not null,
-                    search_text text not null default '',
+                create table if not exists copart_snapshot_manifests (
+                    sha256 text primary key,
+                    file_name text not null,
+                    downloaded_at timestamptz not null,
+                    file_size_bytes bigint not null,
+                    row_count integer not null,
+                    processing_batch_size integer not null,
+                    is_complete boolean not null,
+                    status text not null,
+                    run_id uuid not null unique,
+                    finished_at timestamptz,
+                    observed_count integer not null default 0,
+                    accepted_count integer not null default 0,
+                    discarded_count integer not null default 0,
+                    quarantined_count integer not null default 0,
+                    marked_count integer not null default 0,
+                    error_count integer not null default 0,
+                    created_count integer,
+                    updated_count integer,
+                    unchanged_count integer,
+                    scored_inline_count integer,
+                    score_skipped_unchanged_count integer,
+                    score_failed_count integer,
+                    inline_scoring_duration_ms bigint,
+                    inline_scoring_p50_ms bigint,
+                    inline_scoring_p95_ms bigint,
+                    failures jsonb not null default '[]'::jsonb,
+                    created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
-                create index if not exists ix_inventory_search_active_auction on inventory_search_current (auction_at, lot_key) where is_active;
-                create index if not exists ix_inventory_search_active_observed on inventory_search_current (observed_at desc, lot_key) where is_active;
-                create index if not exists ix_inventory_search_platform_auction on inventory_search_current (platform, auction_at, lot_key) where is_active;
-                create index if not exists ix_inventory_search_make_model on inventory_search_current (lower(make), lower(model), lot_key) where is_active;
-                create index if not exists ix_inventory_search_year on inventory_search_current (year, lot_key) where is_active;
-                create index if not exists ix_inventory_search_bid on inventory_search_current (current_bid_usd, lot_key) where is_active;
-                create index if not exists ix_inventory_search_buy_now on inventory_search_current (buy_now_usd, lot_key) where is_active;
-                create index if not exists ix_inventory_search_odometer on inventory_search_current (odometer, lot_key) where is_active;
-                create index if not exists ix_inventory_search_state on inventory_search_current (lower(location_state), lot_key) where is_active;
-                create index if not exists ix_inventory_search_facility on inventory_search_current (lower(location_display), lot_key) where is_active;
-                create index if not exists ix_inventory_search_title_type on inventory_search_current (lower(title_type), lot_key) where is_active;
-                create index if not exists ix_inventory_search_primary_damage on inventory_search_current (lower(primary_damage), lot_key) where is_active;
-                create index if not exists ix_inventory_search_fulltext on inventory_search_current using gin (to_tsvector('simple', search_text));
+                alter table copart_snapshot_manifests add column if not exists created_count integer;
+                alter table copart_snapshot_manifests add column if not exists updated_count integer;
+                alter table copart_snapshot_manifests add column if not exists unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists scored_inline_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_skipped_unchanged_count integer;
+                alter table copart_snapshot_manifests add column if not exists score_failed_count integer;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_duration_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p50_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists inline_scoring_p95_ms bigint;
 
-                create table if not exists inventory_search_projection_state (
-                    projection_name text primary key,
-                    schema_version integer not null,
-                    is_ready boolean not null default false,
-                    row_count bigint not null default 0,
-                    visible_row_count bigint not null default 0,
-                    generated_at timestamptz,
-                    facets_refreshed_at timestamptz,
-                    updated_at timestamptz not null default now()
-                );
-                alter table inventory_search_projection_state add column if not exists visible_row_count bigint not null default 0;
-                insert into inventory_search_projection_state (projection_name, schema_version, is_ready)
-                values ('inventory-current-v1', 1, false)
-                on conflict (projection_name) do nothing;
-
-                create table if not exists inventory_search_facet_counts (
-                    facet_key text not null,
-                    facet_value text not null,
-                    vehicle_count integer not null,
-                    generated_at timestamptz not null,
-                    primary key (facet_key, facet_value)
-                );
-                create index if not exists ix_inventory_search_facets_key_count on inventory_search_facet_counts (facet_key, vehicle_count desc, facet_value);
+                create index if not exists ix_copart_snapshot_manifests_status_downloaded
+                    on copart_snapshot_manifests (status, downloaded_at desc);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
-            _searchProjectionSchemaInitialized = true;
+            _copartSchemaInitialized = true;
         }
-        finally { SearchProjectionSchemaLock.Release(); }
+        finally
+        {
+            CopartSchemaLock.Release();
+        }
     }
 
     private async Task EnsureEligibilitySchemaAsync(CancellationToken cancellationToken)
@@ -2749,7 +2555,15 @@ public sealed partial class PostgresSnapshotStore(
         var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
         var blobClient = containerClient.GetBlobClient(blobName);
 
-        await blobClient.UploadAsync(BinaryData.FromString(rawJson), overwrite: false, cancellationToken: cancellationToken);
+        try
+        {
+            await blobClient.UploadAsync(BinaryData.FromString(rawJson), overwrite: false, cancellationToken: cancellationToken);
+        }
+        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status409Conflict ||
+                                                    string.Equals(exception.ErrorCode, "BlobAlreadyExists", StringComparison.OrdinalIgnoreCase))
+        {
+            // Content-addressed payloads are immutable. A retry that produces the same hash already has the audit blob.
+        }
     }
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
@@ -2757,7 +2571,14 @@ public sealed partial class PostgresSnapshotStore(
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(string database, CancellationToken cancellationToken)
     {
-        var accessToken = await GetDatabaseAccessTokenAsync(cancellationToken);
+        var accessToken = _persistence.AccessToken;
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            var token = await _credential.GetTokenAsync(
+                new TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]),
+                cancellationToken);
+            accessToken = token.Token;
+        }
 
         var connectionString = new NpgsqlConnectionStringBuilder
         {
@@ -2775,38 +2596,11 @@ public sealed partial class PostgresSnapshotStore(
         return connection;
     }
 
-    private async Task<string> GetDatabaseAccessTokenAsync(CancellationToken cancellationToken)
-    {
-        if (!string.IsNullOrWhiteSpace(_persistence.AccessToken)) return _persistence.AccessToken;
-        var cached = _cachedDatabaseAccessToken;
-        if (!string.IsNullOrWhiteSpace(cached.Token) && cached.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
-            return cached.Token;
-
-        await _databaseTokenLock.WaitAsync(cancellationToken);
-        try
-        {
-            cached = _cachedDatabaseAccessToken;
-            if (!string.IsNullOrWhiteSpace(cached.Token) && cached.ExpiresOn > DateTimeOffset.UtcNow.AddMinutes(5))
-                return cached.Token;
-            _cachedDatabaseAccessToken = await _credential.GetTokenAsync(
-                new TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]),
-                cancellationToken);
-            return _cachedDatabaseAccessToken.Token;
-        }
-        finally
-        {
-            _databaseTokenLock.Release();
-        }
-    }
-
     private static void AddParameter(NpgsqlCommand command, string name, object? value) =>
         command.Parameters.AddWithValue(name, value ?? DBNull.Value);
 
     private static string? ReadNullableString(NpgsqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
-
-    private static IReadOnlyList<string> ReadStringArray(NpgsqlDataReader reader, int ordinal) =>
-        reader.IsDBNull(ordinal) ? [] : JsonSerializer.Deserialize<string[]>(reader.GetString(ordinal)) ?? [];
 
     private static decimal? ReadNullableDecimal(NpgsqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetDecimal(ordinal);
@@ -2816,31 +2610,6 @@ public sealed partial class PostgresSnapshotStore(
 
     private static int? ReadNullableInt32(NpgsqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetInt32(ordinal);
-
-    private static string? MaskVin(string? vin)
-    {
-        if (string.IsNullOrWhiteSpace(vin)) return null;
-        var normalized = vin.Trim();
-        return normalized.Length <= 4 ? normalized : string.Concat(Enumerable.Repeat('*', normalized.Length - 4)) + normalized[^4..];
-    }
-
-    private static IReadOnlyList<string> DescribeChangedFields(AuctionVehicle? previous, AuctionVehicle current)
-    {
-        if (previous is null) return ["snapshot"];
-        var changed = new List<string>();
-        void Compare(string name, object? left, object? right) { if (!Equals(left, right)) changed.Add(name); }
-        Compare("puja actual", previous.Pricing?.CurrentBidUsd, current.Pricing?.CurrentBidUsd);
-        Compare("Buy Now", previous.Pricing?.BuyNowUsd, current.Pricing?.BuyNowUsd);
-        Compare("precio vendido", previous.Pricing?.SalePriceUsd, current.Pricing?.SalePriceUsd);
-        Compare("estado del lote", previous.Auction?.LotStatus, current.Auction?.LotStatus);
-        Compare("subestado", previous.Auction?.LotSubStatus, current.Auction?.LotSubStatus);
-        Compare("fecha de subasta", previous.Auction?.AuctionAt, current.Auction?.AuctionAt);
-        Compare("odómetro", previous.Odometer, current.Odometer);
-        Compare("daño", previous.Damage, current.Damage);
-        Compare("título", previous.SaleDocument?.Name ?? previous.Title, current.SaleDocument?.Name ?? current.Title);
-        Compare("fotos", previous.Media?.ThumbnailsCount, current.Media?.ThumbnailsCount);
-        return changed.Count == 0 ? ["snapshot"] : changed;
-    }
 
     private static string QuoteIdentifier(string identifier) =>
         $"\"{identifier.Replace("\"", "\"\"")}\"";

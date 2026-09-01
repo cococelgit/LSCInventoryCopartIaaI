@@ -60,6 +60,42 @@ public sealed class CopartExcelSnapshotProcessorTests
     }
 
     [Fact]
+    public async Task Copart_run_skips_cleanly_when_processing_lease_is_held()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+        await using var heldLease = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.NotNull(heldLease);
+
+        var result = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1)), CancellationToken.None);
+
+        Assert.False(result.Processed);
+        Assert.False(result.IsDuplicate);
+        Assert.Equal("SKIPPED_LOCK_HELD: another Copart snapshot processor is active.", result.RejectionReason);
+        Assert.Equal(0, result.Observed);
+        Assert.Empty(await store.GetRecentAsync(10, CancellationToken.None));
+        var run = Assert.Single(store.SyncRuns.Values);
+        Assert.Equal("skipped_lock_held", run.Start.State);
+        Assert.Equal(0, run.Completion!.VehiclesObserved);
+        Assert.Empty(run.Completion.Failures);
+    }
+
+    [Fact]
+    public async Task Copart_processing_lease_is_released_after_disposal()
+    {
+        var store = new InMemorySnapshotStore();
+        var first = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.NotNull(first);
+        var blocked = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.Null(blocked);
+
+        await first!.DisposeAsync();
+        await using var second = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.NotNull(second);
+    }
+
+    [Fact]
     public async Task Failed_snapshot_hash_can_retry_but_successful_hash_remains_idempotent()
     {
         var store = new InMemorySnapshotStore();
@@ -120,6 +156,131 @@ public sealed class CopartExcelSnapshotProcessorTests
     }
 
     [Fact]
+    public async Task Eligible_copart_lot_is_persisted_with_canonical_pregrade_inline()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        var result = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1)), CancellationToken.None);
+        var score = await store.GetScoreByLotAsync("12345678", CancellationToken.None);
+
+        Assert.True(result.Processed);
+        Assert.True(result.IsComplete);
+        Assert.Equal(1, result.Accepted);
+        Assert.NotNull(score);
+        Assert.Equal("lsc_pre_grade_v2", score!.PolicyVersion);
+        Assert.Equal("PRE_GRADED", score.Status);
+        Assert.Equal(1, result.InlineScoring!.Created);
+        Assert.Equal(1, result.InlineScoring.ScoredInline);
+        Assert.Equal(0, result.InlineScoring.ScoreFailed);
+    }
+
+    [Fact]
+    public async Task Eligible_copart_snapshot_persists_canonical_title_taxonomy_and_metrics()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        var result = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, titleCode: "BS")), CancellationToken.None);
+        var snapshot = Assert.Single(await store.GetRecentAsync(10, CancellationToken.None));
+
+        Assert.True(result.Processed);
+        Assert.Equal("SALVAGE", snapshot.Vehicle.AdditionalData!["title_category"].GetString());
+        Assert.Equal("CLASSIFIED", snapshot.Vehicle.AdditionalData["title_review_status"].GetString());
+        Assert.Equal(CopartTitleMapper.TaxonomyVersion, snapshot.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
+        Assert.Equal("BS", snapshot.Vehicle.AdditionalData["source_title_raw"].GetString());
+        Assert.NotNull(result.TitleTaxonomy);
+        Assert.Equal(1, result.TitleTaxonomy!.Classified);
+        Assert.Equal(0, result.TitleTaxonomy.Unverified);
+        Assert.Equal(0, result.TitleTaxonomy.ReviewRequired);
+        Assert.Equal(1, result.TitleTaxonomy.CategoryCounts["SALVAGE"]);
+    }
+
+    [Fact]
+    public async Task Marked_copart_lot_is_persisted_with_provisional_score_and_flags()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        var result = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "No Information")), CancellationToken.None);
+        var score = await store.GetScoreByLotAsync("12345678", CancellationToken.None);
+
+        Assert.True(result.Processed);
+        Assert.Equal(1, result.Accepted);
+        Assert.Equal(1, result.Marked);
+        Assert.NotNull(score);
+        Assert.Equal("PRE_GRADED_WITH_FLAGS", score!.Status);
+        Assert.NotNull(score.PreGrade);
+        Assert.Contains("M04", score.ReasonCodes);
+        Assert.Equal("lsc_pre_grade_v2", score.PolicyVersion);
+        Assert.Equal(1, result.InlineScoring!.ScoredInline);
+    }
+
+    [Fact]
+    public async Task Reprocessed_equivalent_copart_payload_skips_scoring_without_changing_scored_at()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+        var csv = BuildCsv(1);
+
+        await processor.ProcessAsync(CreateSnapshot(csv), CancellationToken.None);
+        var before = await store.GetScoreByLotAsync("12345678", CancellationToken.None);
+        var second = await processor.ProcessAsync(CreateSnapshot(csv.Replace("\n", "\r\n", StringComparison.Ordinal)), CancellationToken.None);
+        var after = await store.GetScoreByLotAsync("12345678", CancellationToken.None);
+
+        Assert.True(second.Processed);
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.Equal(before!.InputHash, after!.InputHash);
+        Assert.Equal(before.ScoredAt, after.ScoredAt);
+        Assert.Equal(1, second.InlineScoring!.Unchanged);
+        Assert.Equal(1, second.InlineScoring.ScoreSkippedUnchanged);
+        Assert.Equal(0, second.InlineScoring.ScoredInline);
+    }
+
+    [Fact]
+    public async Task Relevant_copart_input_change_recalculates_inline_score()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Runs and Drives")), CancellationToken.None);
+        var before = await store.GetScoreByLotAsync("12345678", CancellationToken.None);
+        var second = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Starts")), CancellationToken.None);
+        var after = await store.GetScoreByLotAsync("12345678", CancellationToken.None);
+
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.NotEqual(before!.InputHash, after!.InputHash);
+        Assert.Equal(1, second.InlineScoring!.Updated);
+        Assert.Equal(1, second.InlineScoring.ScoredInline);
+        Assert.Equal(0, second.InlineScoring.ScoreSkippedUnchanged);
+    }
+
+    [Fact]
+    public async Task Inline_scoring_persistence_failure_does_not_publish_row_and_blocks_reconciliation()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore { FailNextCopartInlineScoringPersistence = true };
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        var result = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1)), CancellationToken.None);
+
+        Assert.False(result.IsComplete);
+        Assert.Equal(1, result.Errors);
+        Assert.Equal(0, result.Accepted);
+        Assert.Null(result.Reconciliation);
+        Assert.Equal(1, result.InlineScoring!.ScoreFailed);
+        Assert.Empty(await store.GetRecentAsync(10, CancellationToken.None));
+        Assert.Null(await store.GetScoreByLotAsync("12345678", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Missing_vin_is_audited_and_not_persisted()
     {
         var options = new OptionsWrapper<CopartExcelOptions>(new CopartExcelOptions
@@ -142,8 +303,22 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal(1, result.Discarded);
         Assert.Empty(persisted);
         Assert.Equal(0, store.CopartAuctionObservationCount);
+        Assert.Null(await store.GetScoreByLotAsync("12345678", CancellationToken.None));
+        Assert.NotNull(result.TitleTaxonomy);
+        Assert.Empty(result.TitleTaxonomy!.CategoryCounts);
+        Assert.Equal(0, result.TitleTaxonomy.Classified + result.TitleTaxonomy.Unverified + result.TitleTaxonomy.ReviewRequired);
         Assert.Equal(1, audit.Total);
     }
+
+    private static IOptions<CopartExcelOptions> TestOptions() => new OptionsWrapper<CopartExcelOptions>(new CopartExcelOptions
+    {
+        MinimumFileSizeKilobytes = 0,
+        MaximumFileSizeMegabytes = 8,
+        MinimumRowsForCompleteSnapshot = 1,
+        ProcessingBatchSize = 10,
+        MinimumRowCountRatioToRecentMedian = 0.70m,
+        RecentSnapshotCountForBaseline = 3
+    });
 
     private sealed class ThrowingSnapshotSource : ICopartExcelSnapshotSource
     {
@@ -157,12 +332,12 @@ public sealed class CopartExcelSnapshotProcessorTests
         return new CopartSnapshotEnvelope("salesdata.csv", Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), DateTimeOffset.UtcNow, new MemoryStream(bytes));
     }
 
-    private static string BuildCsv(int rows, string vin = "1HGCM82633A004352", string runDrives = "Runs and Drives")
+    private static string BuildCsv(int rows, string vin = "1HGCM82633A004352", string runDrives = "Runs and Drives", string titleCode = "AQ")
     {
         const string header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail\n";
         var builder = new StringBuilder(header);
         for (var index = 0; index < rows; index++)
-            builder.Append($"{12345678 + index},{vin},2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
+            builder.Append($"{12345678 + index},{vin},2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,{titleCode},none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
         return builder.ToString();
     }
 }

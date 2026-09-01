@@ -41,7 +41,7 @@ public sealed class CopartTitleBackfillProcessorTests
         Assert.Equal("Clear Title", persisted.Vehicle.Title);
         Assert.Equal("mapped", persisted.Vehicle.AdditionalData!["source_title_mapping"].GetString());
         Assert.Equal("CLEAN", persisted.Vehicle.AdditionalData["title_category"].GetString());
-        Assert.Equal("copart-title-taxonomy-v1", persisted.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
+        Assert.Equal(CopartTitleMapper.TaxonomyVersion, persisted.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
         Assert.Equal("copart-title-backfill", run.Start.Provider);
         Assert.NotNull(run.Completion);
     }
@@ -75,7 +75,7 @@ public sealed class CopartTitleBackfillProcessorTests
         Assert.Equal(1, result.Candidates);
         Assert.Equal(1, result.Mapped);
         Assert.Equal("CLEAN", refreshed.Vehicle.AdditionalData!["title_category"].GetString());
-        Assert.Equal(CopartTitleTaxonomy.Version, refreshed.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
+        Assert.Equal(CopartTitleMapper.TaxonomyVersion, refreshed.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
     }
 
     [Fact]

@@ -6,19 +6,19 @@ readonly RESOURCE_GROUP="rg-lsc-inventory-prod"
 readonly REGISTRY_NAME="acrlscinvprodeus2"
 readonly REGISTRY_LOGIN_SERVER="acrlscinvprodeus2.azurecr.io"
 readonly IMAGE_REPOSITORY="lsc-inventory-engine"
-readonly IMAGE_TAG="inventory-api-integrated-r32-search-index-correct-source"
+readonly IMAGE_TAG="inventory-api-integrated-r33-copart-deser"
 readonly API_NAME="ca-lsc-inventory-api-prod"
 readonly IAAI_JOB_NAME="job-lsc-iaai-pilot-prod"
 readonly COPART_JOB_NAME="job-lsc-copart-excel-prod"
 readonly COPART_AUTO_JOB_NAME="job-lsc-copart-auto-prod"
 readonly GENERIC_JOB_NAME="job-lsc-inventory-ingestion-prod"
-readonly EXPECTED_API_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:inventory-api-integrated-r31-search-index-git-context"
+readonly EXPECTED_API_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:inventory-api-integrated-r32-search-index-correct-source"
 readonly EXPECTED_IAAI_IMAGE="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:iaai-cursor-recovery-r14"
 readonly EXPECTED_IAAI_CRON="15,45 * * * *"
 readonly EXPECTED_COPART_AUTO_ARGS='["--copart-excel-run"]'
-readonly SOURCE_CONTEXT_URL="https://github.com/cococelgit/LSCInventoryCopartIaaI.git#e4d2dc820997d955d09e5425bcfd9f809157c83d"
+readonly SOURCE_CONTEXT_URL="https://github.com/cococelgit/LSCInventoryCopartIaaI.git#manus/api-search-r33-source"
 
-fail() { printf 'API_R32_SEARCH_CORRECT_SOURCE_ERROR: %s\n' "$*" >&2; exit 1; }
+fail() { printf 'API_R33_COPART_DESER_ERROR: %s\n' "$*" >&2; exit 1; }
 app_field() { az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_NAME" --query "$1" --output tsv; }
 job_field() { az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$1" --query "$2" --output tsv; }
 fingerprint_app() {
@@ -64,7 +64,7 @@ generic_template_before="$(fingerprint_job "$GENERIC_JOB_NAME" properties.templa
 generic_configuration_before="$(fingerprint_job "$GENERIC_JOB_NAME" properties.configuration)"
 generic_identity_before="$(fingerprint_job "$GENERIC_JOB_NAME" identity)"
 
-[[ "$api_image_before" == "$EXPECTED_API_IMAGE" ]] || fail "Expected current r31 API image; found: ${api_image_before:-empty}"
+[[ "$api_image_before" == "$EXPECTED_API_IMAGE" ]] || fail "Expected current r32 API image; found: ${api_image_before:-empty}"
 [[ "$api_mode_before" == "Single" ]] || fail "Expected API Single revision mode; found: ${api_mode_before:-empty}"
 [[ "$api_sync_before" == "false" ]] || fail "Expected Sync__Enabled=false; found: ${api_sync_before:-empty}"
 [[ "$api_migrations_before" == "false" ]] || fail "Expected Persistence__RunMigrations=false; found: ${api_migrations_before:-empty}"
@@ -75,9 +75,9 @@ generic_identity_before="$(fingerprint_job "$GENERIC_JOB_NAME" identity)"
 [[ "$generic_trigger_before" == "Manual" ]] || fail "Expected generic job to remain Manual; found: ${generic_trigger_before:-empty}"
 
 image_ref="${REGISTRY_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-printf 'API_R32_BUILD_START image=%s git_context=%s\n' "$image_ref" "$SOURCE_CONTEXT_URL"
+printf 'API_R33_BUILD_START image=%s git_context=%s\n' "$image_ref" "$SOURCE_CONTEXT_URL"
 az acr build --registry "$REGISTRY_NAME" --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" --file Dockerfile "$SOURCE_CONTEXT_URL"
-printf 'API_R32_UPDATE_START\n'
+printf 'API_R33_UPDATE_START\n'
 az containerapp update --resource-group "$RESOURCE_GROUP" --name "$API_NAME" --image "$image_ref" --output none
 
 api_image_after="$(app_field 'properties.template.containers[0].image')"
@@ -111,7 +111,7 @@ generic_template_after="$(fingerprint_job "$GENERIC_JOB_NAME" properties.templat
 generic_configuration_after="$(fingerprint_job "$GENERIC_JOB_NAME" properties.configuration)"
 generic_identity_after="$(fingerprint_job "$GENERIC_JOB_NAME" identity)"
 
-[[ "$api_image_after" == "$image_ref" ]] || fail "API image was not updated to r32 correct source build"
+[[ "$api_image_after" == "$image_ref" ]] || fail "API image was not updated to r33 Copart deserialization build"
 [[ "$api_mode_after" == "$api_mode_before" && "$api_identity_after" == "$api_identity_before" && "$api_secrets_after" == "$api_secrets_before" && "$api_ingress_after" == "$api_ingress_before" && "$api_scale_after" == "$api_scale_before" && "$api_sync_after" == "$api_sync_before" && "$api_migrations_after" == "$api_migrations_before" && "$api_warmup_after" == "$api_warmup_before" ]] || fail "API configuration changed unexpectedly"
 [[ "$iaai_image_after" == "$iaai_image_before" && "$iaai_trigger_after" == "$iaai_trigger_before" && "$iaai_cron_after" == "$iaai_cron_before" && "$iaai_template_after" == "$iaai_template_before" && "$iaai_identity_after" == "$iaai_identity_before" && "$iaai_secrets_after" == "$iaai_secrets_before" ]] || fail "IAAI job changed unexpectedly"
 [[ "$copart_template_after" == "$copart_template_before" && "$copart_configuration_after" == "$copart_configuration_before" && "$copart_identity_after" == "$copart_identity_before" ]] || fail "Copart Excel job changed unexpectedly"
@@ -119,5 +119,5 @@ generic_identity_after="$(fingerprint_job "$GENERIC_JOB_NAME" identity)"
 [[ "$generic_trigger_after" == "$generic_trigger_before" && "$generic_template_after" == "$generic_template_before" && "$generic_configuration_after" == "$generic_configuration_before" && "$generic_identity_after" == "$generic_identity_before" ]] || fail "Generic job changed unexpectedly"
 
 curl --fail --silent --show-error --retry 12 --retry-delay 5 "https://${api_fqdn}/healthz" >/dev/null || fail "New API revision did not pass healthz"
-printf 'API_R32_DEPLOY_COMPLETED\nAPI_IMAGE=%s\nAPI_REVISION=%s\nAPI_READY_REVISION=%s\nAPI_STATE=%s\n' "$api_image_after" "$api_revision_after" "$api_ready_after" "$api_state_after"
+printf 'API_R33_DEPLOY_COMPLETED\nAPI_IMAGE=%s\nAPI_REVISION=%s\nAPI_READY_REVISION=%s\nAPI_STATE=%s\n' "$api_image_after" "$api_revision_after" "$api_ready_after" "$api_state_after"
 printf 'IAAI_JOB_CHANGED=false\nCOPART_JOB_CHANGED=false\nCOPART_AUTO_JOB_CHANGED=false\nGENERIC_JOB_CHANGED=false\nCOPART_APIBARA_ENABLED=false\nMIGRATIONS_ENABLED=false\nPROJECTION_REBUILD_STARTED=false\n'

@@ -231,3 +231,49 @@
 - [x] Mantener D09 desactivada y no crear descartes automáticos a partir de categorías normalizadas.
 - [x] Cubrir títulos clean, branded, salvage, rebuilt, no reparable, export, documento, variante estatal, desconocido e IAAI sin modificación.
 - [x] Redactar handoff técnico para que el API exponga los campos sin recalcular taxonomía. Validación local: `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 105/105 y `pnpm check` aprobó; no se ejecutó job ni despliegue.
+
+## Grading inline Copart
+
+- [x] Integrar el baseline canónico `lsc_pre_grade_v1` del commit aprobado `5428b3f`, sin copiar ni modificar la fórmula.
+- [x] Persistir cada lote Copart elegible junto con su resultado canónico de grading en una transacción PostgreSQL antes de que la proyección quede visible.
+- [x] Conservar idempotencia por `policy_version` e `input_hash`; un score vigente conserva `scored_at` y se marca como `scoreSkippedUnchanged`.
+- [x] Mantener descartes/cuarentenas fuera de grading inline y conservar `MARCAR` con su resultado `MANUAL_REVIEW`.
+- [x] Registrar en el manifiesto Copart `created`, `updated`, `unchanged`, `scoredInline`, `scoreSkippedUnchanged`, `scoreFailed`, duración acumulada y p50/p95; las corridas históricas permanecen como `N/D`.
+- [x] Cubrir Copart elegible, marcado, payload idéntico, cambio relevante y fallo atómico mediante pruebas. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 118/118 y `pnpm check` aprobó. No se ejecutó ningún Job ni deployment.
+
+- [x] Desplegar la imagen de grading inline exclusivamente al job `job-lsc-copart-excel-prod` y verificar el control idempotente: el snapshot SHA `41e7b6bfd862…` ya estaba completado, por lo que no se reprocesó ni duplicó información.
+- [x] Ejecutar `scoring_backfill` exclusivo de Copart: 0 candidatos, 0 scores nuevos, 0 fallos y 0 pendientes; el reporte posterior confirmó cobertura completa de los 63,926 Copart activos con política `lsc_pre_grade_v1`.
+- [x] Verificar antes/después de las ejecuciones que `ca-lsc-inventory-api-prod` permanece en `acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r66-title-taxonomy-readonly`.
+
+## PR Copart: taxonomía canónica y media HD controlada
+
+- [x] Reemplazar la taxonomía Copart paralela por `TitleFacetCategory` canónico, preservando el título/código fuente y clasificando solo después de elegibilidad.
+- [x] Persistir `source_title_raw`, categoría, flags, estado de revisión y versión únicamente para lotes Copart aceptados; IAAI permanece sin cambios y D09 sigue desactivada.
+- [x] Mantener el backfill de títulos en la misma autoridad canónica, sin ejecutar backfill dentro de este PR.
+- [x] Fortalecer el enriquecimiento de media separado: galería por secuencia, preferencia HD, preservación de referencias originales, 404/URL inválida/transitorio controlados y métricas runtime.
+- [x] Cubrir taxonomía, idempotencia, IAAI, HD, secuencia, galería completa, 404, URL inválida, transitorio e independencia de media frente a elegibilidad/scoring.
+- [ ] Abrir PR de código y pruebas sin desplegar, ejecutar jobs, cambiar cron, API, IAAI, Apibara, secretos, identidad ni infraestructura.
+
+## Buy Now Copart: precio estrictamente positivo
+
+- [x] Normalizar `Buy-It-Now Price` exclusivamente en el adaptador Copart: solo un decimal mayor que cero se persiste como `buy_now_usd`; cero, negativo, vacío o inválido se convierten a `null`.
+- [x] Mantener `CurrentBidUsd = 0` válido y separado de Buy Now, sin cambiar IAAI ni el limpiador genérico.
+- [x] Cubrir Buy Now positivo, cero, negativo, vacío, inválido y puja cero con pruebas deterministas. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 129/129 y `pnpm check` aprobó.
+- [ ] El agente de API/portal debe filtrar, contar y mostrar Buy Now mediante `buy_now_usd > 0` antes de paginar; este cambio no despliega API ni jobs.
+
+## Copart Pre-Grade v2 con banderas
+
+- [x] Mantener IAAI en `lsc_pre_grade_v1` y aplicar `lsc_pre_grade_v2` exclusivamente a Copart.
+- [x] Convertir incertidumbres Copart no bloqueantes (`M02`, `M04`, `M07` y demás `MARCAR`) en `PRE_GRADED_WITH_FLAGS` con pre-grado numérico, confianza, penalidades y códigos explicables.
+- [x] Conservar `DISCARDED` y cuarentenas sin nota numérica; no modificar D01–D10, D09, fuentes, media, Buy Now ni reconciliación.
+- [x] Corregir el reconocimiento de `RUNS_AND_DRIVES` normalizado como condición mecánica afirmativa sin usar `DriveType`.
+- [x] Hacer que persistencia, backfill y cobertura exclusivos de Copart detecten el cambio de política v1 → v2; el estado compartido calcula versión esperada por plataforma para no reencolar Copart v2 como pendiente.
+- [x] Validar con 134/134 pruebas .NET y `pnpm check`; simulación del snapshot de referencia a fecha de venta válida: 61,109 lotes elegibles pasarían a `PRE_GRADED_WITH_FLAGS`, frente a no recibir pre-grado v1 por M04/M07. No se ejecutó job ni despliegue.
+- [x] Preparar `PROMPT_API_AGENT_COPART_PRE_GRADE_V2.md` para notificar compatibilidad de contrato y presentación al agente de API antes de promover v2.
+
+## Métricas de persistencia por ejecución Copart
+- [x] Identificar si cada persistencia de lote Copart fue alta nueva, actualización o sin cambio, sin alterar elegibilidad, historial ni lifecycle.
+- [x] Confirmar que los conteos de altas, actualizaciones y sin cambio se persisten en el manifiesto de cada snapshot Copart completo; exponerlos en auditoría mediante unión por `run_id`, sin migración general.
+- [x] Mantener `N/D` para duplicados, lock ocupado, snapshots inválidos e invocaciones sin procesamiento por filas.
+- [x] Añadir pruebas de conteo por resultado de persistencia y de no-op seguro.
+- [x] Ejecutar validación .NET y TypeScript, revisar el diff y publicar únicamente los cambios Copart autorizados. La promoción queda bloqueada hasta que el API interno implemente la unión de auditoría.
