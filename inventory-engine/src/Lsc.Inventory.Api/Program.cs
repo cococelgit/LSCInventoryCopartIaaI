@@ -630,7 +630,8 @@ if (copartFileIndex >= 0)
     await using var content = snapshot.Content;
     var result = await processor.ProcessAsync(snapshot, CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
-    if (!result.Processed || !result.IsComplete || result.Errors > 0)
+    var isExpectedNoOp = result.IsDuplicate || string.Equals(result.RejectionReason, "SKIPPED_LOCK_HELD: another Copart snapshot processor is active.", StringComparison.Ordinal);
+    if (!isExpectedNoOp && (!result.Processed || !result.IsComplete || result.Errors > 0))
     {
         Environment.ExitCode = 1;
     }
@@ -665,7 +666,8 @@ if (args.Contains("--copart-excel-run", StringComparer.OrdinalIgnoreCase))
     var processor = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotProcessor>();
     var result = await processor.RunLatestAsync(CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
-    if (!result.Processed || !result.IsComplete || result.Errors > 0)
+    var isExpectedNoOp = result.IsDuplicate || string.Equals(result.RejectionReason, "SKIPPED_LOCK_HELD: another Copart snapshot processor is active.", StringComparison.Ordinal);
+    if (!isExpectedNoOp && (!result.Processed || !result.IsComplete || result.Errors > 0))
     {
         Environment.ExitCode = 1;
     }
