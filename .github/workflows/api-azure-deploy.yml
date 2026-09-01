@@ -80,8 +80,16 @@ jobs:
 
       - name: Update only the Inventory API revision
         shell: bash
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          az containerapp secret set \
+            --name "$INVENTORY_API_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
+            --only-show-errors
           image="${ACR_SERVER}/${IMAGE_NAME}:api-${GITHUB_SHA}"
           az containerapp update \
             --name "$INVENTORY_API_APP_NAME" \
@@ -89,6 +97,7 @@ jobs:
             --image "$image" \
             --revision-suffix "api-${GITHUB_SHA:0:12}" \
             --set-env-vars \
+              "AuctionsApi__ApiKey=secretref:auctions-api-key" \
               "AuctionsApi__Enabled=${{ inputs.enable_auctions_api }}" \
               "AuctionsApi__AllowWrites=false" \
             --only-show-errors
@@ -101,12 +110,14 @@ jobs:
           test "$deployed_image" = "${ACR_SERVER}/${IMAGE_NAME}:api-${GITHUB_SHA}"
           echo "Deployed image: $deployed_image"
           echo "AuctionsAPI enabled: ${{ inputs.enable_auctions_api }}"
+          echo "AuctionsAPI API key: server-side secret reference"
           echo "AuctionsAPI writes: false"
           echo "Previous image for rollback: $CURRENT_API_IMAGE"
           {
             echo "### Inventory API deployment"
-            echo "- Image: \\`$deployed_image\\`"
-            echo "- AuctionsAPI enabled: \\`${{ inputs.enable_auctions_api }}\\`"
-            echo "- AuctionsAPI writes: \\`false\\`"
-            echo "- Previous image: \\`$CURRENT_API_IMAGE\\`"
+            echo "- Image: \`$deployed_image\`"
+            echo "- AuctionsAPI enabled: \`${{ inputs.enable_auctions_api }}\`"
+            echo "- AuctionsAPI API key: server-side secret reference"
+            echo "- AuctionsAPI writes: \`false\`"
+            echo "- Previous image: \`$CURRENT_API_IMAGE\`"
           } >> "$GITHUB_STEP_SUMMARY"
