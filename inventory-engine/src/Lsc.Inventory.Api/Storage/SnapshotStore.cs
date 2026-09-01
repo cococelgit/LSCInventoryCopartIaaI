@@ -10,6 +10,11 @@ namespace Lsc.Inventory.Api.Storage;
 
 public interface IInventorySnapshotStore
 {
+    /// <summary>
+    /// Acquires the single distributed processing lease used only by Copart snapshot ingestion.
+    /// A null lease means another Copart run is already processing and this invocation must skip.
+    /// </summary>
+    Task<IAsyncDisposable?> TryAcquireCopartProcessingLeaseAsync(CancellationToken cancellationToken);
     Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken);
     Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken);
     Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, bool allowInterruptedSnapshotRetry, CancellationToken cancellationToken);
@@ -363,6 +368,29 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     public int CopartAuctionObservationCount => _copartAuctionObservations.Count;
     public bool FailNextCopartInlineScoringPersistence { get; set; }
     public bool FailNextScoringPersistence { get; set; }
+    private int _copartProcessingLeaseHeld;
+
+    public Task<IAsyncDisposable?> TryAcquireCopartProcessingLeaseAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Interlocked.CompareExchange(ref _copartProcessingLeaseHeld, 1, 0) != 0)
+            return Task.FromResult<IAsyncDisposable?>(null);
+
+        return Task.FromResult<IAsyncDisposable?>(new InMemoryCopartProcessingLease(this));
+    }
+
+    private sealed class InMemoryCopartProcessingLease(InMemorySnapshotStore owner) : IAsyncDisposable
+    {
+        private InMemorySnapshotStore? _owner = owner;
+
+        public ValueTask DisposeAsync()
+        {
+            var currentOwner = Interlocked.Exchange(ref _owner, null);
+            if (currentOwner is not null)
+                Volatile.Write(ref currentOwner._copartProcessingLeaseHeld, 0);
+            return ValueTask.CompletedTask;
+        }
+    }
 
     public Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {

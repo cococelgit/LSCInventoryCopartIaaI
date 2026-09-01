@@ -60,6 +60,42 @@ public sealed class CopartExcelSnapshotProcessorTests
     }
 
     [Fact]
+    public async Task Copart_run_skips_cleanly_when_processing_lease_is_held()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+        await using var heldLease = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.NotNull(heldLease);
+
+        var result = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1)), CancellationToken.None);
+
+        Assert.False(result.Processed);
+        Assert.False(result.IsDuplicate);
+        Assert.Equal("SKIPPED_LOCK_HELD: another Copart snapshot processor is active.", result.RejectionReason);
+        Assert.Equal(0, result.Observed);
+        Assert.Empty(await store.GetRecentAsync(10, CancellationToken.None));
+        var run = Assert.Single(store.SyncRuns.Values);
+        Assert.Equal("skipped_lock_held", run.Start.State);
+        Assert.Equal(0, run.Completion!.VehiclesObserved);
+        Assert.Empty(run.Completion.Failures);
+    }
+
+    [Fact]
+    public async Task Copart_processing_lease_is_released_after_disposal()
+    {
+        var store = new InMemorySnapshotStore();
+        var first = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.NotNull(first);
+        var blocked = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.Null(blocked);
+
+        await first!.DisposeAsync();
+        await using var second = await store.TryAcquireCopartProcessingLeaseAsync(CancellationToken.None);
+        Assert.NotNull(second);
+    }
+
+    [Fact]
     public async Task Failed_snapshot_hash_can_retry_but_successful_hash_remains_idempotent()
     {
         var store = new InMemorySnapshotStore();

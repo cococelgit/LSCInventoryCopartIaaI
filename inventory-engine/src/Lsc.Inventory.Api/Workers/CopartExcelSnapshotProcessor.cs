@@ -44,11 +44,24 @@ public sealed class CopartExcelSnapshotProcessor(
 
     public async Task<CopartExcelProcessingResult> RunLatestAsync(CancellationToken cancellationToken)
     {
-        await using var lease = await snapshotSource.OpenLatestAsync(cancellationToken);
-        return await ProcessAsync(lease.Snapshot, cancellationToken);
+        await using var processingLease = await snapshotStore.TryAcquireCopartProcessingLeaseAsync(cancellationToken);
+        if (processingLease is null)
+            return await SkippedForProcessingLeaseAsync(cancellationToken);
+
+        await using var snapshotLease = await snapshotSource.OpenLatestAsync(cancellationToken);
+        return await ProcessCoreAsync(snapshotLease.Snapshot, cancellationToken);
     }
 
     public async Task<CopartExcelProcessingResult> ProcessAsync(CopartSnapshotEnvelope snapshot, CancellationToken cancellationToken)
+    {
+        await using var processingLease = await snapshotStore.TryAcquireCopartProcessingLeaseAsync(cancellationToken);
+        if (processingLease is null)
+            return await SkippedForProcessingLeaseAsync(cancellationToken);
+
+        return await ProcessCoreAsync(snapshot, cancellationToken);
+    }
+
+    private async Task<CopartExcelProcessingResult> ProcessCoreAsync(CopartSnapshotEnvelope snapshot, CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var validation = await adapter.ValidateAsync(snapshot, cancellationToken);
@@ -160,6 +173,28 @@ public sealed class CopartExcelSnapshotProcessor(
             logger.LogError(exception, "Copart snapshot {FileName} failed after {Observed} observed rows.", snapshot.FileName, state.Observed);
             return new CopartExcelProcessingResult(false, false, false, "Copart processing failed; reconciliation was blocked.", state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, null, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics());
         }
+    }
+
+    private async Task<CopartExcelProcessingResult> SkippedForProcessingLeaseAsync(CancellationToken cancellationToken)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        const string reason = "SKIPPED_LOCK_HELD: another Copart snapshot processor is active.";
+        var runId = await snapshotStore.StartSyncRunAsync(
+            new InventorySyncRunStart(
+                Provider: "copart-excel",
+                Platform: InventorySourcePolicy.CopartExcelSource,
+                State: "skipped_lock_held",
+                PagesRequested: 0,
+                PageSize: _options.ProcessingBatchSize,
+                StartedAt: startedAt),
+            cancellationToken);
+        var finishedAt = DateTimeOffset.UtcNow;
+        await snapshotStore.CompleteSyncRunAsync(
+            runId,
+            new InventorySyncRunCompletion(finishedAt, 0, 0, []),
+            cancellationToken);
+        logger.LogInformation("Copart snapshot invocation skipped because another Copart processor holds the distributed lease.");
+        return new CopartExcelProcessingResult(false, false, false, reason, 0, 0, 0, 0, 0, 0, finishedAt - startedAt, null, new Dictionary<string, int>(), new Dictionary<string, int>(), [reason]);
     }
 
     private async Task ProcessBatchAsync(IReadOnlyList<AuctionVehicle> batch, ISet<string> observedLotKeys, ProcessingState state, string snapshotSha256, DateTimeOffset snapshotDownloadedAt, CancellationToken cancellationToken)

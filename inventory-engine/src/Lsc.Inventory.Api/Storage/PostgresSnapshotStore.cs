@@ -28,6 +28,7 @@ public sealed partial class PostgresSnapshotStore(
     private static readonly SemaphoreSlim EligibilitySchemaLock = new(1, 1);
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim ScoringSchemaLock = new(1, 1);
+    private const long CopartProcessingAdvisoryLockKey = 812043557764023219L;
     private static bool _schemaInitialized;
     private static bool _copartSchemaInitialized;
     private static bool _copartAuctionHistorySchemaInitialized;
@@ -41,6 +42,65 @@ public sealed partial class PostgresSnapshotStore(
     {
         ManagedIdentityClientId = persistenceOptions.Value.ManagedIdentityClientId
     });
+
+    /// <summary>
+    /// Holds a PostgreSQL session advisory lock for the lifetime of a Copart snapshot processor.
+    /// The lock does not create schema, alter IAAI, or modify any inventory record.
+    /// </summary>
+    public async Task<IAsyncDisposable?> TryAcquireCopartProcessingLeaseAsync(CancellationToken cancellationToken)
+    {
+        var connection = await OpenConnectionAsync(cancellationToken);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = "select pg_try_advisory_lock(@lock_key);";
+            AddParameter(command, "lock_key", CopartProcessingAdvisoryLockKey);
+            var acquired = (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
+            if (!acquired)
+            {
+                await connection.DisposeAsync();
+                return null;
+            }
+
+            return new PostgresCopartProcessingLease(connection, CopartProcessingAdvisoryLockKey, logger);
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    private sealed class PostgresCopartProcessingLease(
+        NpgsqlConnection connection,
+        long lockKey,
+        ILogger logger) : IAsyncDisposable
+    {
+        private NpgsqlConnection? _connection = connection;
+
+        public async ValueTask DisposeAsync()
+        {
+            var activeConnection = Interlocked.Exchange(ref _connection, null);
+            if (activeConnection is null) return;
+
+            try
+            {
+                await using var command = activeConnection.CreateCommand();
+                command.CommandText = "select pg_advisory_unlock(@lock_key);";
+                AddParameter(command, "lock_key", lockKey);
+                await command.ExecuteNonQueryAsync();
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "Copart processing advisory lock release was deferred to database session close.");
+            }
+            finally
+            {
+                await activeConnection.DisposeAsync();
+            }
+        }
+    }
 
     public async Task BootstrapRuntimePrincipalAsync(CancellationToken cancellationToken)
     {
