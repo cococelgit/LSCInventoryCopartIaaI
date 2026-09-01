@@ -1,0 +1,101 @@
+name: Promote validated Copart image to scheduled job
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-auto-promote-image
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  COPART_MANUAL_JOB_NAME: job-lsc-copart-excel-prod
+  COPART_AUTO_JOB_NAME: job-lsc-copart-auto-prod
+  INVENTORY_API_APP_NAME: ca-lsc-inventory-api-prod
+
+jobs:
+  promote:
+    name: Promote validated Copart image only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture and validate immutable promotion baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_image_before="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          manual_image="$(az containerapp job show --name "$COPART_MANUAL_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          auto_before="$(az containerapp job show --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          auto_image_before="$(echo "$auto_before" | jq -r '.properties.template.containers[0].image')"
+          auto_cron_before="$(echo "$auto_before" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
+          auto_without_image_before="$(echo "$auto_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          test -n "$api_image_before" && test "$api_image_before" != "None"
+          test "$manual_image" != "None"
+          test "$manual_image" != "$auto_image_before"
+          case "$manual_image" in "${ACR_SERVER}/${IMAGE_NAME}:copart-"*) ;; *) echo "Manual job image is not an immutable Copart image." >&2; exit 1 ;; esac
+          test "$auto_cron_before" = "0,30 * * * *"
+          echo "API_IMAGE_BEFORE=$api_image_before" >> "$GITHUB_ENV"
+          echo "AUTO_CRON_BEFORE=$auto_cron_before" >> "$GITHUB_ENV"
+          echo "AUTO_WITHOUT_IMAGE_BEFORE=$auto_without_image_before" >> "$GITHUB_ENV"
+          echo "PROMOTED_IMAGE=$manual_image" >> "$GITHUB_ENV"
+          echo "Manual validated image: $manual_image"
+          echo "Scheduled Copart image before: $auto_image_before"
+          echo "Scheduled Copart cron before: $auto_cron_before"
+          echo "Protected API image before: $api_image_before"
+
+      - name: Update only scheduled Copart Job image
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job update \
+            --name "$COPART_AUTO_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$PROMOTED_IMAGE" \
+            --only-show-errors
+
+      - name: Verify image-only change and protected resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_image_after="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          auto_after="$(az containerapp job show --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          auto_image_after="$(echo "$auto_after" | jq -r '.properties.template.containers[0].image')"
+          auto_cron_after="$(echo "$auto_after" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
+          auto_without_image_after="$(echo "$auto_after" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          test "$api_image_after" = "$API_IMAGE_BEFORE"
+          test "$auto_image_after" = "$PROMOTED_IMAGE"
+          test "$auto_cron_after" = "$AUTO_CRON_BEFORE"
+          test "$auto_without_image_after" = "$AUTO_WITHOUT_IMAGE_BEFORE"
+          echo "Protected API image after: $api_image_after"
+          echo "Scheduled Copart image after: $auto_image_after"
+          echo "Scheduled Copart cron after: $auto_cron_after"
+          echo "Verified: only the scheduled Copart image changed. No job execution was started."
+
+      - name: Show next scheduled execution status
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job execution list \
+            --name "$COPART_AUTO_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime}' \
+            -o json
