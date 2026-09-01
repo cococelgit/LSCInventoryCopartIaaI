@@ -22,6 +22,11 @@ builder.Services
     .ValidateDataAnnotations();
 
 builder.Services
+    .AddOptions<AuctionsApiOptions>()
+    .Bind(builder.Configuration.GetSection(AuctionsApiOptions.SectionName))
+    .ValidateDataAnnotations();
+
+builder.Services
     .AddOptions<SyncOptions>()
     .Bind(builder.Configuration.GetSection(SyncOptions.SectionName))
     .ValidateDataAnnotations()
@@ -82,6 +87,16 @@ builder.Services.AddHttpClient<IApibaraClient, ApibaraClient>((serviceProvider, 
     client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
 })
 .AddResilienceHandler("apibara", pipeline =>
+{
+    pipeline.AddTimeout(TimeSpan.FromSeconds(30));
+});
+builder.Services.AddHttpClient<IAuctionsApiClient, AuctionsApiClient>((serviceProvider, client) =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AuctionsApiOptions>>().Value;
+    client.BaseAddress = new Uri(options.BaseUrl, UriKind.Absolute);
+    client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
+})
+.AddResilienceHandler("auctions-api", pipeline =>
 {
     pipeline.AddTimeout(TimeSpan.FromSeconds(30));
 });

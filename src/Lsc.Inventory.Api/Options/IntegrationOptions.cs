@@ -30,6 +30,33 @@ public sealed class ApibaraOptions
     public int RetryMaxDelayMilliseconds { get; init; } = 4000;
 }
 
+public sealed class AuctionsApiOptions
+{
+    public const string SectionName = "AuctionsApi";
+
+    [Url]
+    public string BaseUrl { get; init; } = "https://auctionsapi.com/api/";
+
+    /// <summary>
+    /// Intentionally false until the Owner authorizes an isolated shadow run.
+    /// Registering the client must never change the source used by an existing Job.
+    /// </summary>
+    public bool Enabled { get; init; }
+
+    public string ApiKey { get; init; } = string.Empty;
+
+    [Range(1, 1000)]
+    public int PageSize { get; init; } = 1000;
+
+    [Range(1, 4320)]
+    public int DefaultOverlapMinutes { get; init; } = 120;
+
+    [Range(1, 120)]
+    public int RequestTimeoutSeconds { get; init; } = 30;
+
+    public bool IsConfigured => Enabled && !string.IsNullOrWhiteSpace(ApiKey);
+}
+
 public sealed class SyncOptions
 {
     public const string SectionName = "Sync";
