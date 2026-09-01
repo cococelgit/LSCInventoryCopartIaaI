@@ -270,3 +270,10 @@
 - [x] Hacer que persistencia, backfill y cobertura exclusivos de Copart detecten el cambio de política v1 → v2; el estado compartido calcula versión esperada por plataforma para no reencolar Copart v2 como pendiente.
 - [x] Validar con 134/134 pruebas .NET y `pnpm check`; simulación del snapshot de referencia a fecha de venta válida: 61,109 lotes elegibles pasarían a `PRE_GRADED_WITH_FLAGS`, frente a no recibir pre-grado v1 por M04/M07. No se ejecutó job ni despliegue.
 - [x] Preparar `PROMPT_API_AGENT_COPART_PRE_GRADE_V2.md` para notificar compatibilidad de contrato y presentación al agente de API antes de promover v2.
+
+## Métricas de persistencia por ejecución Copart
+- [x] Identificar si cada persistencia de lote Copart fue alta nueva, actualización o sin cambio, sin alterar elegibilidad, historial ni lifecycle.
+- [x] Persistir los conteos de altas, actualizaciones y sin cambio en el manifiesto/auditoría de cada snapshot Copart completo.
+- [x] Mantener `N/D` para duplicados, lock ocupado, snapshots inválidos e invocaciones sin procesamiento por filas.
+- [x] Añadir pruebas de conteo por resultado de persistencia y de no-op seguro.
+- [x] Ejecutar validación .NET y TypeScript, revisar el diff y publicar únicamente los cambios Copart autorizados.

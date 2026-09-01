@@ -153,7 +153,14 @@ public sealed class CopartExcelSnapshotProcessor(
             }
             await snapshotStore.CompleteSyncRunAsync(
                 executionRunId,
-                new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
+                new InventorySyncRunCompletion(
+                    finishedAt,
+                    state.Observed,
+                    1,
+                    state.Failures,
+                    isComplete
+                        ? new InventoryPersistenceChangeMetrics(state.Created, state.Updated, state.Unchanged)
+                        : null),
                 cancellationToken);
 
             return new CopartExcelProcessingResult(true, false, isComplete, null, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, reconciliation, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics());
