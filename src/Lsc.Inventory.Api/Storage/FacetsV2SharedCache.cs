@@ -12,11 +12,28 @@ public interface IFacetsV2SharedCache
     bool IsConfigured { get; }
     TimeSpan TimeToLive { get; }
     TimeSpan LockTimeToLive { get; }
+    FacetsV2SharedCacheDiagnostics GetDiagnostics();
     Task<InventoryFacetsV2Response?> GetAsync(string key, CancellationToken cancellationToken);
     Task SetAsync(string key, InventoryFacetsV2Response response, CancellationToken cancellationToken);
     Task<string?> TryAcquireLockAsync(string key, CancellationToken cancellationToken);
     Task ReleaseLockAsync(string key, string ownerToken, CancellationToken cancellationToken);
 }
+
+public sealed record FacetsV2SharedCacheDiagnostics(
+    bool Configured,
+    string ConnectionState,
+    long ReadHits,
+    long ReadMisses,
+    long ReadFailures,
+    long WriteSuccesses,
+    long WriteFailures,
+    long LockAcquired,
+    long LockContention,
+    long LockFailures,
+    long LockReleaseFailures,
+    string? LastFailureStage,
+    string? LastFailureType,
+    DateTimeOffset? LastFailureAt);
 
 public sealed class DisabledFacetsV2SharedCache : IFacetsV2SharedCache
 {
@@ -24,6 +41,7 @@ public sealed class DisabledFacetsV2SharedCache : IFacetsV2SharedCache
     public bool IsConfigured => false;
     public TimeSpan TimeToLive => TimeSpan.Zero;
     public TimeSpan LockTimeToLive => TimeSpan.Zero;
+    public FacetsV2SharedCacheDiagnostics GetDiagnostics() => new(false, "disabled", 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null);
     public Task<InventoryFacetsV2Response?> GetAsync(string key, CancellationToken cancellationToken) => Task.FromResult<InventoryFacetsV2Response?>(null);
     public Task SetAsync(string key, InventoryFacetsV2Response response, CancellationToken cancellationToken) => Task.CompletedTask;
     public Task<string?> TryAcquireLockAsync(string key, CancellationToken cancellationToken) => Task.FromResult<string?>(null);
@@ -38,6 +56,19 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
     private readonly ILogger<AzureManagedRedisFacetsV2SharedCache> _logger;
     private readonly object _connectionLock = new();
     private Task<ConnectionMultiplexer>? _connectionTask;
+    private long _readHits;
+    private long _readMisses;
+    private long _readFailures;
+    private long _writeSuccesses;
+    private long _writeFailures;
+    private long _lockAcquired;
+    private long _lockContention;
+    private long _lockFailures;
+    private long _lockReleaseFailures;
+    private int _connectionState;
+    private string? _lastFailureStage;
+    private string? _lastFailureType;
+    private DateTimeOffset? _lastFailureAt;
 
     public AzureManagedRedisFacetsV2SharedCache(
         IOptions<FacetsRedisOptions> options,
@@ -50,6 +81,21 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
     public bool IsConfigured => _options.IsConfigured;
     public TimeSpan TimeToLive => TimeSpan.FromSeconds(_options.TimeToLiveSeconds);
     public TimeSpan LockTimeToLive => TimeSpan.FromMilliseconds(_options.DistributedLockMilliseconds);
+    public FacetsV2SharedCacheDiagnostics GetDiagnostics() => new(
+        IsConfigured,
+        !IsConfigured ? "disabled" : Volatile.Read(ref _connectionState) switch { 1 => "connected", 2 => "unavailable", _ => "not_attempted" },
+        Interlocked.Read(ref _readHits),
+        Interlocked.Read(ref _readMisses),
+        Interlocked.Read(ref _readFailures),
+        Interlocked.Read(ref _writeSuccesses),
+        Interlocked.Read(ref _writeFailures),
+        Interlocked.Read(ref _lockAcquired),
+        Interlocked.Read(ref _lockContention),
+        Interlocked.Read(ref _lockFailures),
+        Interlocked.Read(ref _lockReleaseFailures),
+        Volatile.Read(ref _lastFailureStage),
+        Volatile.Read(ref _lastFailureType),
+        _lastFailureAt);
 
     public async Task<InventoryFacetsV2Response?> GetAsync(string key, CancellationToken cancellationToken)
     {
@@ -59,11 +105,18 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
         try
         {
             var value = await database.StringGetAsync(CacheKey(key)).WaitAsync(cancellationToken);
-            if (!value.HasValue) return null;
+            if (!value.HasValue)
+            {
+                Interlocked.Increment(ref _readMisses);
+                return null;
+            }
+            Interlocked.Increment(ref _readHits);
             return JsonSerializer.Deserialize<InventoryFacetsV2Response>(value!, JsonOptions);
         }
         catch (Exception exception) when (IsCacheException(exception))
         {
+            Interlocked.Increment(ref _readFailures);
+            RecordFailure("read", exception);
             _logger.LogWarning(exception, "Facets V2 shared cache read failed; falling back to PostgreSQL.");
             return null;
         }
@@ -78,9 +131,12 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
         {
             var payload = JsonSerializer.Serialize(response, JsonOptions);
             await database.StringSetAsync(CacheKey(key), payload, TimeToLive).WaitAsync(cancellationToken);
+            Interlocked.Increment(ref _writeSuccesses);
         }
         catch (Exception exception) when (IsCacheException(exception))
         {
+            Interlocked.Increment(ref _writeFailures);
+            RecordFailure("write", exception);
             _logger.LogWarning(exception, "Facets V2 shared cache write failed; response remains available from PostgreSQL.");
         }
     }
@@ -94,10 +150,14 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
         try
         {
             var acquired = await database.StringSetAsync(LockKey(key), ownerToken, LockTimeToLive, When.NotExists).WaitAsync(cancellationToken);
+            if (acquired) Interlocked.Increment(ref _lockAcquired);
+            else Interlocked.Increment(ref _lockContention);
             return acquired ? ownerToken : null;
         }
         catch (Exception exception) when (IsCacheException(exception))
         {
+            Interlocked.Increment(ref _lockFailures);
+            RecordFailure("lock", exception);
             _logger.LogWarning(exception, "Facets V2 distributed lock failed; using local single-flight only.");
             return null;
         }
@@ -114,6 +174,8 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
         }
         catch (Exception exception) when (IsCacheException(exception))
         {
+            Interlocked.Increment(ref _lockReleaseFailures);
+            RecordFailure("lock_release", exception);
             _logger.LogWarning(exception, "Facets V2 distributed lock release failed; lock will expire safely.");
         }
     }
@@ -130,6 +192,7 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
                 connectionTask = _connectionTask;
             }
             var connection = await connectionTask.WaitAsync(cancellationToken);
+            Volatile.Write(ref _connectionState, 1);
             return connection.GetDatabase();
         }
         catch (Exception exception) when (IsCacheException(exception))
@@ -138,6 +201,8 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
             {
                 if (_connectionTask is { IsFaulted: true }) _connectionTask = null;
             }
+            Volatile.Write(ref _connectionState, 2);
+            RecordFailure("connect", exception);
             _logger.LogWarning(exception, "Facets V2 shared cache is unavailable; falling back to PostgreSQL.");
             return null;
         }
@@ -160,6 +225,13 @@ public sealed class AzureManagedRedisFacetsV2SharedCache : IFacetsV2SharedCache,
 
     private string CacheKey(string key) => $"{_options.KeyPrefix}{key}";
     private string LockKey(string key) => $"{_options.KeyPrefix}lock:{key}";
+
+    private void RecordFailure(string stage, Exception exception)
+    {
+        Volatile.Write(ref _lastFailureStage, stage);
+        Volatile.Write(ref _lastFailureType, exception.GetType().Name);
+        _lastFailureAt = DateTimeOffset.UtcNow;
+    }
 
     private static bool IsCacheException(Exception exception) => exception is RedisException or AuthenticationFailedException or TimeoutException or OperationCanceledException or JsonException;
 
