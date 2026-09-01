@@ -230,6 +230,7 @@ static PublicInventoryVehicle ToPublicVehicle(
     var runCondition = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)
         ? NormalizePublicRunCondition(vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label)
         : null;
+    var buyNowUsd = vehicle.Pricing?.BuyNowUsd is > 0m ? vehicle.Pricing.BuyNowUsd : null;
     return new PublicInventoryVehicle
     {
         Lot = lot,
@@ -260,11 +261,11 @@ static PublicInventoryVehicle ToPublicVehicle(
         AuctionAt = vehicle.Auction?.AuctionAt,
         LotStatus = vehicle.Auction?.LotStatus,
         LotSubStatus = vehicle.Auction?.LotSubStatus,
-        IsBuyNow = vehicle.Auction?.IsBuyNow,
+        IsBuyNow = buyNowUsd is not null,
         IsTimed = vehicle.Auction?.IsTimed,
         CurrentBidUsd = vehicle.Pricing?.CurrentBidUsd,
         PreBidUsd = vehicle.Pricing?.PreBidUsd,
-        BuyNowUsd = vehicle.Pricing?.BuyNowUsd,
+        BuyNowUsd = buyNowUsd,
         EstimatedPriceFromUsd = vehicle.Pricing?.EstimatedCost?.FromUsd,
         EstimatedPriceToUsd = vehicle.Pricing?.EstimatedCost?.ToUsd,
         EstimatedPriceText = vehicle.Pricing?.EstimatedCost?.Text,

@@ -73,4 +73,31 @@ public sealed class ListViewMediaLimitTests
         Assert.Equal(35, vehicle.Photos.Count);
         Assert.Equal(35, vehicle.Media.Count);
     }
+
+    [Fact]
+    public void Does_not_expose_a_zero_price_Copart_listing_as_Buy_Now()
+    {
+        var snapshot = new StoredVehicleSnapshot(
+            "copart:zero",
+            DateTimeOffset.UtcNow,
+            new AuctionVehicle
+            {
+                Platform = "copart",
+                LotNumber = "zero",
+                Auction = new AuctionInfo { IsBuyNow = true },
+                Pricing = new PricingInfo { BuyNowUsd = 0m }
+            },
+            "{}");
+        var entryPoint = typeof(PostgresSnapshotStore).Assembly.GetType("Program");
+        var method = entryPoint?
+            .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
+            .SingleOrDefault(candidate => candidate.Name.Contains("ToPublicVehicle", StringComparison.Ordinal));
+        Assert.NotNull(method);
+
+        var vehicle = method!.Invoke(null, [snapshot, null, null, null, null]) as PublicInventoryVehicle;
+
+        Assert.NotNull(vehicle);
+        Assert.Equal(false, vehicle.IsBuyNow);
+        Assert.Null(vehicle.BuyNowUsd);
+    }
 }
