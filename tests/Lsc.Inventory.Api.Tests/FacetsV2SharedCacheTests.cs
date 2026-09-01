@@ -16,6 +16,10 @@ public sealed class FacetsV2SharedCacheTests
             NullLogger<AzureManagedRedisFacetsV2SharedCache>.Instance);
 
         Assert.False(cache.IsConfigured);
+        var diagnostics = cache.GetDiagnostics();
+        Assert.False(diagnostics.Configured);
+        Assert.Equal("disabled", diagnostics.ConnectionState);
+        Assert.Null(diagnostics.LastFailureStage);
         Assert.Null(await cache.GetAsync("source:fingerprint", CancellationToken.None));
         Assert.Null(await cache.TryAcquireLockAsync("source:fingerprint", CancellationToken.None));
         await cache.SetAsync("source:fingerprint", CreateResponse(), CancellationToken.None);
@@ -47,6 +51,8 @@ public sealed class FacetsV2SharedCacheTests
         Assert.Equal("lsc:facets:v2:", new FacetsRedisOptions().KeyPrefix);
         Assert.Contains("redis.call('get', KEYS[1])", source, StringComparison.Ordinal);
         Assert.DoesNotContain("AccessKey", source, StringComparison.Ordinal);
+        Assert.Contains("FacetsV2SharedCacheDiagnostics", source, StringComparison.Ordinal);
+        Assert.Contains("RecordFailure", source, StringComparison.Ordinal);
     }
 
     [Fact]
