@@ -2558,6 +2558,60 @@ public sealed partial class PostgresSnapshotStore(
     [GeneratedRegex(@"(?:\.([A-Za-z_][A-Za-z0-9_]*))|(?:\[(\d+)\])", RegexOptions.CultureInvariant)]
     private static partial Regex JsonPathSegmentRegex();
 
+    public async Task<int> DeactivateArchivedLotsAsync(string platform, IReadOnlyCollection<string> lotKeys, DateTimeOffset archivedAt, CancellationToken cancellationToken, Guid? runId = null)
+    {
+        var normalizedPlatform = platform.Trim().ToLowerInvariant();
+        var keys = lotKeys.Where(key => !string.IsNullOrWhiteSpace(key)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (keys.Length == 0) return 0;
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await EnsureSearchProjectionSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var deactivated = new List<string>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+                update inventory_lot_lifecycle
+                set is_active = false,
+                    consecutive_misses = 0,
+                    deactivated_at = coalesce(deactivated_at, @archived_at),
+                    updated_at = now()
+                where platform = @platform
+                  and lot_key = any(@lot_keys)
+                  and is_active
+                returning lot_key;
+                """;
+            AddParameter(command, "platform", normalizedPlatform);
+            AddParameter(command, "archived_at", archivedAt);
+            AddParameter(command, "lot_keys", keys);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) deactivated.Add(reader.GetString(0));
+        }
+        await transaction.CommitAsync(cancellationToken);
+        await using (var projection = await OpenConnectionAsync(cancellationToken))
+        await using (var command = projection.CreateCommand())
+        {
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+                update inventory_search_current projection
+                set is_active = lifecycle.is_active, updated_at = now()
+                from inventory_lot_lifecycle lifecycle
+                where lifecycle.platform = @platform
+                  and lifecycle.lot_key = any(@lot_keys)
+                  and lifecycle.lot_key = projection.lot_key;
+                """;
+            AddParameter(command, "platform", normalizedPlatform);
+            AddParameter(command, "lot_keys", keys);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (runId is not null)
+            foreach (var lotKey in deactivated)
+                await RecordSyncRunEventAsync(new InventorySyncRunEvent(runId.Value, normalizedPlatform, lotKey, lotKey.Split(':').LastOrDefault(), null, "deactivated", ["provider-archived"], [], archivedAt), cancellationToken);
+        return deactivated.Count;
+    }
+
     public async Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken, Guid? runId = null)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();

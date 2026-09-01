@@ -37,6 +37,7 @@ public interface IIaaINationalSyncProcessor
 public sealed class IaaINationalSyncProcessor(
     IApibaraClient apibaraClient,
     IInventorySnapshotStore snapshotStore,
+    ICanonicalInventoryIngestionPipeline canonicalPipeline,
     IOptions<ApibaraOptions> apibaraOptions,
     IOptions<IaaINationalOptions> nationalOptions,
     ILogger<IaaINationalSyncProcessor> logger) : IIaaINationalSyncProcessor
@@ -183,25 +184,24 @@ public sealed class IaaINationalSyncProcessor(
                         }
                     }
 
-                    var vehicle = CanonicalVehicleCleaner.Clean(AuctionVehicleNormalizer.Normalize(providerVehicle, null, null));
-                    var eligibility = AuctionEligibilityEvaluator.Evaluate(vehicle, evaluatedAt);
-                    await snapshotStore.PersistEligibilityDecisionAsync(eligibility, evaluatedAt, cancellationToken);
+                    var ingestion = await canonicalPipeline.ProcessAsync(providerVehicle, evaluatedAt, cancellationToken, runId);
+                    var vehicle = ingestion.Vehicle;
+                    var eligibility = ingestion.Eligibility;
                     observed++;
                     foreach (var code in eligibility.DiscardReasons.Concat(eligibility.Flags).Select(reason => reason.Code))
                         rules[code] = rules.GetValueOrDefault(code) + 1;
 
-                    if (eligibility.LoadToSystem)
+                    if (ingestion.Loaded)
                     {
                         loaded++;
-                        if (eligibility.Decision == "MARCAR") marked++;
-                        await snapshotStore.PersistAsync(vehicle, evaluatedAt, cancellationToken, runId);
+                        if (ingestion.Marked) marked++;
                         var lotKey = vehicle.LotNumber ?? vehicle.Vin;
                         if (!string.IsNullOrWhiteSpace(lotKey)) eligibleLotKeys.Add($"iaai:{lotKey.Trim()}");
                     }
                     else
                     {
-                        var action = eligibility.Decision == "CUARENTENA" ? "quarantined" : "discarded";
-                        if (eligibility.Decision == "CUARENTENA") quarantined++;
+                        var action = ingestion.Quarantined ? "quarantined" : "discarded";
+                        if (ingestion.Quarantined) quarantined++;
                         else discarded++;
                         await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(
                             runId,

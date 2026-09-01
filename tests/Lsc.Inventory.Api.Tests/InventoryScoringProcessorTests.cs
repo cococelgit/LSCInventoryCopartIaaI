@@ -68,7 +68,7 @@ public sealed class InventoryScoringProcessorTests
         Year = 2012,
         Make = "Honda",
         Model = "Accord",
-        Auction = new AuctionInfo { AuctionAt = DateTimeOffset.Parse("2026-08-31T14:00:00Z") },
+        Auction = new AuctionInfo { AuctionAt = DateTimeOffset.Parse("2099-08-31T14:00:00Z") },
         Location = new VehicleLocation { State = "FL", FacilityId = "366" },
         Seller = new AuctionSeller { Name = "Insurance Company", Type = "Insurance" },
         Condition = new VehicleCondition { PrimaryDamage = "Front End", HasKey = true, RunCondition = new RunConditionInfo { Value = "RUNS AND DRIVES" } },

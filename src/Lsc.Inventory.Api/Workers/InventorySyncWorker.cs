@@ -25,6 +25,7 @@ public sealed record InventorySyncResult(
 public sealed class InventorySyncProcessor(
     IApibaraClient apibaraClient,
     IInventorySnapshotStore snapshotStore,
+    ICanonicalInventoryIngestionPipeline canonicalPipeline,
     IOptions<ApibaraOptions> apibaraOptions,
     IOptions<SyncOptions> syncOptions,
     ILogger<InventorySyncProcessor> logger) : IInventorySyncProcessor
@@ -141,19 +142,17 @@ public sealed class InventorySyncProcessor(
                                         }
                                     }
 
-                                    var eligibility = AuctionEligibilityEvaluator.Evaluate(providerVehicle);
-                                    await snapshotStore.PersistEligibilityDecisionAsync(eligibility, observedAt, cancellationToken);
+                                    var ingestion = await canonicalPipeline.ProcessAsync(providerVehicle, observedAt, cancellationToken, runId, vehicleToPersist);
                                     vehiclesObserved++;
-                                    if (!eligibility.LoadToSystem)
+                                    if (!ingestion.Loaded)
                                     {
                                         logger.LogInformation(
                                             "Discarded lot {Lot} under eligibility rules {RuleCodes}.",
-                                            eligibility.LotNumber,
-                                            string.Join(',', eligibility.DiscardReasons.Select(reason => reason.Code)));
+                                            ingestion.Eligibility.LotNumber,
+                                            string.Join(',', ingestion.Eligibility.DiscardReasons.Select(reason => reason.Code)));
                                         continue;
                                     }
 
-                                    await snapshotStore.PersistAsync(vehicleToPersist, observedAt, cancellationToken);
                                     if (!string.IsNullOrWhiteSpace(vehicleToPersist.Platform) && !string.IsNullOrWhiteSpace(vehicleToPersist.LotNumber))
                                     {
                                         previouslyStored[BuildLookupKey(vehicleToPersist.Platform, vehicleToPersist.LotNumber)] = vehicleToPersist;

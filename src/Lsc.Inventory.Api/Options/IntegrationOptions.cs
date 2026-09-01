@@ -43,6 +43,9 @@ public sealed class AuctionsApiOptions
     /// </summary>
     public bool Enabled { get; init; }
 
+    /// <summary>Second gate: even with a valid token, canonical writes stay disabled until explicitly approved.</summary>
+    public bool AllowWrites { get; init; }
+
     public string ApiKey { get; init; } = string.Empty;
 
     [Range(1, 1000)]

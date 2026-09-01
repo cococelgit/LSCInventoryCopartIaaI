@@ -41,6 +41,7 @@ public interface IInventorySnapshotStore
     Task<StoredVehicleSnapshot?> GetByLotAsync(string lotNumber, CancellationToken cancellationToken);
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
     Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken, Guid? runId = null);
+    Task<int> DeactivateArchivedLotsAsync(string platform, IReadOnlyCollection<string> lotKeys, DateTimeOffset archivedAt, CancellationToken cancellationToken, Guid? runId = null);
     Task<InventorySyncLease> TryAcquireLeaseAsync(string leaseName, Guid ownerRunId, DateTimeOffset acquiredAt, TimeSpan duration, CancellationToken cancellationToken);
     Task ReleaseLeaseAsync(string leaseName, Guid ownerRunId, DateTimeOffset releasedAt, CancellationToken cancellationToken);
     Task<NationalSyncCheckpoint> GetNationalSyncCheckpointAsync(string streamName, CancellationToken cancellationToken);
@@ -1266,6 +1267,22 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         }
 
         return Task.FromResult(new InventoryReconciliationResult(normalizedPlatform, true, observed.Count, reactivated, incremented, deactivated));
+    }
+
+    public Task<int> DeactivateArchivedLotsAsync(string platform, IReadOnlyCollection<string> lotKeys, DateTimeOffset archivedAt, CancellationToken cancellationToken, Guid? runId = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var normalizedPlatform = platform.Trim().ToLowerInvariant();
+        var keys = lotKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var deactivated = 0;
+        foreach (var entry in _lifecycle.ToArray().Where(entry => entry.Value.Platform == normalizedPlatform && keys.Contains(entry.Key)))
+        {
+            if (!entry.Value.Active) continue;
+            _lifecycle[entry.Key] = (normalizedPlatform, false, 0);
+            deactivated++;
+            if (runId is not null) _syncRunEvents.Enqueue(new InventorySyncRunEvent(runId.Value, normalizedPlatform, entry.Key, entry.Key.Split(':').LastOrDefault(), null, "deactivated", ["provider-archived"], [], archivedAt));
+        }
+        return Task.FromResult(deactivated);
     }
 
     public Task<InventorySyncLease> TryAcquireLeaseAsync(string leaseName, Guid ownerRunId, DateTimeOffset acquiredAt, TimeSpan duration, CancellationToken cancellationToken)

@@ -117,6 +117,8 @@ else
 builder.Services.AddScoped<IInventorySyncProcessor, InventorySyncProcessor>();
 builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
 builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalSyncProcessor>();
+builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInventoryIngestionPipeline>();
+builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
 builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
 builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
@@ -927,6 +929,15 @@ app.MapPost("/internal/sync/run", async (HttpContext context, IInventorySyncProc
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
     var result = await processor.RunOnceAsync(cancellationToken);
+    return Results.Ok(result);
+});
+
+app.MapPost("/internal/auctions-api/incremental", async (HttpContext context, IAuctionsApiIncrementalSyncProcessor processor, string? platform, bool? persist, CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    // A valid token and AuctionsApi:Enabled are not enough for canonical writes.
+    // The processor applies the second AllowWrites gate when persist=true.
+    var result = await processor.RunAsync(platform ?? "", persist == true, cancellationToken);
     return Results.Ok(result);
 });
 

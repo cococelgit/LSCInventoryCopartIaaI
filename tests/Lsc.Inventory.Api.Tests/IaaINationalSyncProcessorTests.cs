@@ -261,6 +261,7 @@ public sealed class IaaINationalSyncProcessorTests
     private static IaaINationalSyncProcessor CreateProcessor(IApibaraClient client, InMemorySnapshotStore store, IOptions<IaaINationalOptions> options) => new(
         client,
         store,
+        new CanonicalInventoryIngestionPipeline(store),
         Microsoft.Extensions.Options.Options.Create(new ApibaraOptions { ApiKey = "test", PageSize = 20 }),
         options,
         NullLogger<IaaINationalSyncProcessor>.Instance);
