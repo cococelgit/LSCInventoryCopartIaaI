@@ -120,6 +120,8 @@ builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalSyncProcessor
 builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInventoryIngestionPipeline>();
 builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
 builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
+builder.Services.AddSingleton<IAuctionsApiImportQueue, AuctionsApiImportQueue>();
+builder.Services.AddHostedService<AuctionsApiImportBackgroundWorker>();
 builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
 builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
@@ -942,19 +944,35 @@ app.MapPost("/internal/auctions-api/incremental", async (HttpContext context, IA
     return Results.Ok(result);
 });
 
-app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IAuctionsApiInitialImportProcessor processor, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, bool? requireFutureSaleDate, CancellationToken cancellationToken) =>
+app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IInventorySnapshotStore snapshotStore, IAuctionsApiImportQueue queue, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, bool? requireFutureSaleDate) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
-    var result = await processor.RunAsync(
-        platform ?? "",
-        maximumLots ?? 100000,
+    var normalizedPlatform = (platform ?? "").Trim().ToLowerInvariant();
+    if (normalizedPlatform is not ("copart" or "iaai")) return Results.BadRequest(new { error = "platform must be copart or iaai" });
+    var requestedMaximum = Math.Clamp(maximumLots ?? 100000, 1, 100000);
+    var runId = await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart(
+        "auctions_api",
+        normalizedPlatform,
+        persist == true ? "initial-import" : "initial-import-shadow",
+        requestedMaximum,
+        1000,
+        DateTimeOffset.UtcNow),
+        CancellationToken.None);
+    var request = new AuctionsApiImportRequest(
+        runId,
+        normalizedPlatform,
+        requestedMaximum,
         persist == true,
-        cancellationToken,
-        startPage ?? 1,
+        Math.Max(1, startPage ?? 1),
         requireSaleDate == true,
-        skipSaleDateMatches ?? 0,
+        Math.Max(0, skipSaleDateMatches ?? 0),
         requireFutureSaleDate == true);
-    return Results.Ok(result);
+    if (!queue.TryEnqueue(request))
+    {
+        await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, 0, 0, ["initial-import:queue-full"], 0, 0, 0, 0, 1, 0, false), CancellationToken.None);
+        return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+    }
+    return Results.Accepted($"/internal/auctions-api/runs/{runId}", new { runId, queued = true, persist = request.Persist, platform = normalizedPlatform });
 });
 
 if (args.Contains("--bootstrap-db", StringComparer.OrdinalIgnoreCase))
