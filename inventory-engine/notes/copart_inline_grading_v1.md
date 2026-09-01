@@ -58,3 +58,11 @@ No se modifican ni ejecutan IAAI, Apibara, `job-lsc-inventory-scoring-prod`, cro
 ## Validación local
 
 Las pruebas cubren un lote Copart elegible con score canónico, un lote `MARCAR` con score de revisión, re-proceso con el mismo hash, cambio de insumo relevante, descarte sin score y fallo de persistencia que bloquea reconciliación. La suite .NET completa y `pnpm check` deben aprobar antes de cualquier release.
+
+## Backfill manual de Copart existente
+
+El comando explícito `--copart-scoring-backfill` recupera resultados para lotes **Copart activos** cuyo score actual no existe, usa otra política o no corresponde al `observed_at` actual. Se ejecuta exclusivamente desde el workflow del job `job-lsc-copart-excel-prod` mediante el modo `scoring_backfill`.
+
+Trabaja por bloques de 500 lotes y con concurrencia máxima de 8, configurables solo con `CopartExcel__ScoringBackfillBatchSize` y `CopartExcel__ScoringBackfillConcurrency`. Para cada candidato, vuelve a aplicar la elegibilidad determinista a su snapshot persistido y escribe únicamente el resultado canónico de scoring. No descarga Excel, no cambia `auction_lots`, `auction_lot_versions`, lifecycle, media, auditoría de elegibilidad, títulos, IAAI ni `inventory_vehicle_scoring_queue`.
+
+Si una fila no puede puntuarse, el resultado registra un fallo sanitizado, termina sin bucle ocupado y la deja pendiente para una recuperación explícita posterior. El resumen se registra como `copart-scoring-backfill` en `inventory_sync_runs`.

@@ -81,6 +81,7 @@ builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotPro
 builder.Services.AddScoped<ICopartMediaEnrichmentProcessor, CopartMediaEnrichmentProcessor>();
 builder.Services.AddScoped<ICopartTitleBackfillProcessor, CopartTitleBackfillProcessor>();
 builder.Services.AddScoped<ICopartAuctionHistoryBackfillProcessor, CopartAuctionHistoryBackfillProcessor>();
+builder.Services.AddScoped<ICopartScoringBackfillProcessor, CopartScoringBackfillProcessor>();
 builder.Services.AddHostedService<InventorySyncWorker>();
 
 var app = builder.Build();
@@ -566,6 +567,25 @@ if (args.Contains("--copart-auction-history-report", StringComparer.OrdinalIgnor
     await using var scope = app.Services.CreateAsyncScope();
     var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
     Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await store.GetCopartAuctionHistoryReportAsync(CancellationToken.None)));
+    return;
+}
+
+if (args.Contains("--copart-scoring-backfill", StringComparer.OrdinalIgnoreCase))
+{
+    try
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var processor = scope.ServiceProvider.GetRequiredService<ICopartScoringBackfillProcessor>();
+        var result = await processor.RunAsync(CancellationToken.None);
+        Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+        if (result.Failed > 0 || result.Remaining > 0) Environment.ExitCode = 1;
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Copart scoring backfill fatal error: {exception}");
+        Environment.ExitCode = 1;
+    }
+
     return;
 }
 

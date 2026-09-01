@@ -54,6 +54,48 @@ public sealed partial class PostgresSnapshotStore
         return outcome;
     }
 
+    public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartScoringBackfillCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        await EnsureScoringSchemaAsync(cancellationToken);
+        var limit = Math.Clamp(maximum, 1, 2_000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+        command.CommandText = """
+            select current.lot_key, current.observed_at, current.payload::text
+            from inventory_search_current current
+            left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
+            where current.is_active
+              and lower(current.platform) = 'copart'
+              and (
+                  score.lot_key is null
+                  or score.policy_version <> @policy_version
+                  or score.source_observed_at <> current.observed_at
+              )
+            order by current.observed_at asc, current.lot_key asc
+            limit @limit;
+            """;
+        AddParameter(command, "policy_version", LscScoringPolicy.Version);
+        AddParameter(command, "limit", limit);
+        var candidates = new List<StoredVehicleSnapshot>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var rawJson = reader.GetString(2);
+            try
+            {
+                var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
+                if (vehicle is not null)
+                    candidates.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
+            }
+            catch (Exception exception) when (exception is JsonException or NotSupportedException)
+            {
+                logger.LogWarning(exception, "Skipping unreadable Copart scoring-backfill payload for lot key {LotKey}.", reader.GetString(0));
+            }
+        }
+        return candidates;
+    }
+
     public async Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
     {
         await EnsureScoringSchemaAsync(cancellationToken);

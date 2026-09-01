@@ -24,6 +24,7 @@ public interface IInventorySnapshotStore
     /// The production implementation commits the visible snapshot and score in one transaction.
     /// </summary>
     Task<CopartInlineScoringPersistenceResult> PersistCopartAcceptedWithScoringAsync(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset observedAt, CancellationToken cancellationToken);
+    Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartScoringBackfillCandidatesAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
@@ -105,6 +106,16 @@ public sealed record CopartInlineScoringPersistenceResult(
 /// Copart-only metrics captured from facts observed during one complete snapshot run.
 /// Counters are not synthesized for prior runs.
 /// </summary>
+public sealed record CopartScoringBackfillResult(
+    int Scanned,
+    int Scored,
+    int ScoreSkippedUnchanged,
+    int SkippedIneligible,
+    int Failed,
+    int Remaining,
+    TimeSpan Duration,
+    IReadOnlyList<string> Failures);
+
 public sealed record CopartInlineScoringMetrics(
     int Created,
     int Updated,
@@ -322,6 +333,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     public IReadOnlyDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> SyncRuns => _syncRuns;
     public int CopartAuctionObservationCount => _copartAuctionObservations.Count;
     public bool FailNextCopartInlineScoringPersistence { get; set; }
+    public bool FailNextScoringPersistence { get; set; }
 
     public Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken)
     {
@@ -510,6 +522,28 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         return Task.FromResult(new CopartInlineScoringPersistenceResult(snapshotChange, true, false, score, duration));
     }
 
+    public Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartScoringBackfillCandidatesAsync(int maximum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var candidates = _snapshots.Values
+            .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
+            .Where(snapshot =>
+            {
+                var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle, snapshot.ObservedAt);
+                if (!eligibility.LoadToSystem) return false;
+                var inputHash = LscVehicleScoringEngine.CreateInputHash(snapshot.Vehicle, eligibility);
+                return !_scores.TryGetValue(snapshot.Identity, out var score) ||
+                       !string.Equals(score.PolicyVersion, LscScoringPolicy.Version, StringComparison.Ordinal) ||
+                       !string.Equals(score.InputHash, inputHash, StringComparison.Ordinal) ||
+                       score.ScoredAt < snapshot.ObservedAt;
+            })
+            .OrderBy(snapshot => snapshot.ObservedAt)
+            .ThenBy(snapshot => snapshot.Identity, StringComparer.Ordinal)
+            .Take(Math.Clamp(maximum, 1, 10_000))
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<StoredVehicleSnapshot>>(candidates);
+    }
+
     public Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -616,6 +650,11 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     public Task<LscVehicleScoringResult> PersistScoringResultAsync(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset sourceObservedAt, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (FailNextScoringPersistence)
+        {
+            FailNextScoringPersistence = false;
+            throw new InvalidOperationException("Injected scoring persistence failure.");
+        }
         var outcome = LscVehicleScoringEngine.Evaluate(vehicle, eligibility, sourceObservedAt);
         var identity = string.Join(':', vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", vehicle.LotNumber?.Trim() ?? vehicle.Vin?.Trim() ?? "unknown");
         _scores[identity] = outcome;
