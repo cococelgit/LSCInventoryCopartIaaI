@@ -2,6 +2,11 @@ name: Promote validated Copart image to scheduled job
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Immutable Copart image tag to promote; leave empty only to promote the dedicated manual-job image.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ env:
   AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
   IMAGE_NAME: lsc-inventory-engine
   COPART_MANUAL_JOB_NAME: job-lsc-copart-excel-prod
@@ -50,14 +56,28 @@ jobs:
           auto_without_image_before="$(echo "$auto_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
           test -n "$api_image_before" && test "$api_image_before" != "None"
           test "$manual_image" != "None"
-          test "$manual_image" != "$auto_image_before"
-          case "$manual_image" in "${ACR_SERVER}/${IMAGE_NAME}:copart-"*) ;; *) echo "Manual job image is not an immutable Copart image." >&2; exit 1 ;; esac
           test "$auto_cron_before" = "0,30 * * * *"
+
+          requested_tag='${{ inputs.image_tag }}'
+          if [ -n "$requested_tag" ]; then
+            if ! [[ "$requested_tag" =~ ^copart-[0-9a-f]{40}$ ]]; then
+              echo "Requested image tag must be an immutable Copart SHA tag." >&2
+              exit 1
+            fi
+            az acr repository show --name "$ACR_NAME" --image "$IMAGE_NAME:$requested_tag" --query digest -o tsv >/dev/null
+            promoted_image="${ACR_SERVER}/${IMAGE_NAME}:${requested_tag}"
+            echo "Validated requested immutable Copart image: $promoted_image"
+          else
+            case "$manual_image" in "${ACR_SERVER}/${IMAGE_NAME}:copart-"*) ;; *) echo "Manual job image is not an immutable Copart image." >&2; exit 1 ;; esac
+            promoted_image="$manual_image"
+            echo "Validated dedicated manual-job image: $promoted_image"
+          fi
+
+          test "$promoted_image" != "$auto_image_before"
           echo "API_IMAGE_BEFORE=$api_image_before" >> "$GITHUB_ENV"
           echo "AUTO_CRON_BEFORE=$auto_cron_before" >> "$GITHUB_ENV"
           echo "AUTO_WITHOUT_IMAGE_BEFORE=$auto_without_image_before" >> "$GITHUB_ENV"
-          echo "PROMOTED_IMAGE=$manual_image" >> "$GITHUB_ENV"
-          echo "Manual validated image: $manual_image"
+          echo "PROMOTED_IMAGE=$promoted_image" >> "$GITHUB_ENV"
           echo "Scheduled Copart image before: $auto_image_before"
           echo "Scheduled Copart cron before: $auto_cron_before"
           echo "Protected API image before: $api_image_before"
