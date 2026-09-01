@@ -97,7 +97,7 @@ jobs:
             --name "$INVENTORY_API_APP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --image "$image" \
-            --revision-suffix "api-${GITHUB_SHA:0:12}" \
+            --revision-suffix "api-${GITHUB_SHA:0:8}-${GITHUB_RUN_NUMBER}" \
             --set-env-vars \
               "AuctionsApi__ApiKey=secretref:auctions-api-key" \
               "AuctionsApi__Enabled=${{ inputs.enable_auctions_api }}" \
