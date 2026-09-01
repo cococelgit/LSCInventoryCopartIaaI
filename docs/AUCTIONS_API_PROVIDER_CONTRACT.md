@@ -20,4 +20,4 @@ The feature is disabled unless `AuctionsApi:Enabled=true` and a non-empty API ke
 
 ## Verification
 
-The API branch `manus/api-r71-multi-provider` contains the implementation. The latest commit is `bd3beb7`. The suite passes with 183 tests and the Release build completes without warnings.
+The API branch `manus/api-r71-multi-provider` contains the implementation. The latest integration commit is `25ca575` (with the canonical pipeline refactor in `bd3beb7`). The suite passes with 183 tests and the Release build completes without warnings.
