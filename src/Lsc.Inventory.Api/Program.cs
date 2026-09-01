@@ -942,7 +942,7 @@ app.MapPost("/internal/auctions-api/incremental", async (HttpContext context, IA
     return Results.Ok(result);
 });
 
-app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IAuctionsApiInitialImportProcessor processor, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, CancellationToken cancellationToken) =>
+app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IAuctionsApiInitialImportProcessor processor, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, bool? requireFutureSaleDate, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
     var result = await processor.RunAsync(
@@ -952,7 +952,8 @@ app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context,
         cancellationToken,
         startPage ?? 1,
         requireSaleDate == true,
-        skipSaleDateMatches ?? 0);
+        skipSaleDateMatches ?? 0,
+        requireFutureSaleDate == true);
     return Results.Ok(result);
 });
 
