@@ -2014,7 +2014,7 @@ public sealed partial class PostgresSnapshotStore(
                     coalesce(lots.drive_type, latest.payload #>> '{vehicle_specs,drive_type}'),
                     coalesce(latest.payload #>> '{vehicle_specs,body_style}', latest.payload #>> '{details,vehicle_description,BodyStyle}'),
                     coalesce(lots.damage, latest.payload #>> '{condition,primary_damage}'),
-                    latest.payload #>> '{condition,secondary_damage}', {SqlSellerTypePayloadExpression("latest")},
+                    latest.payload #>> '{condition,secondary_damage}', __SELLER_TYPE_SQL__,
                     latest.payload #>> '{vehicle_specs,engine,layout}', latest.payload #>> '{details,vehicle_description,Cylinders}',
                     latest.payload #>> '{condition,loss}', coalesce(latest.payload #>> '{condition,run_condition,value}', latest.payload #>> '{condition,run_condition,label}'),
                     lots.auction_state, lots.auction_at, lots.lot_status, lots.lot_sub_status, lots.location_display,
@@ -2076,7 +2076,9 @@ public sealed partial class PostgresSnapshotStore(
 
                 delete from inventory_search_current projection
                 where not exists (select 1 from auction_lots lots where lots.lot_key = projection.lot_key);
-                """.Replace("__TITLE_CATEGORY_SQL__", titleCategorySql, StringComparison.Ordinal);
+                """
+                .Replace("__TITLE_CATEGORY_SQL__", titleCategorySql, StringComparison.Ordinal)
+                .Replace("__SELLER_TYPE_SQL__", SqlSellerTypePayloadExpression("latest"), StringComparison.Ordinal);
             await rebuild.ExecuteNonQueryAsync(cancellationToken);
         }
 
