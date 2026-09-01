@@ -9,7 +9,7 @@ on:
         default: false
         type: boolean
       allow_auctions_writes:
-        description: "Allow canonical writes from AuctionsAPI; must remain false for the first rollout"
+        description: "Allow canonical writes from AuctionsAPI for one explicitly authorized manual rollout; default false"
         required: true
         default: false
         type: boolean
@@ -69,12 +69,14 @@ jobs:
             --file Dockerfile \
             .
 
-      - name: Enforce safe first rollout flags
+      - name: Enforce explicit write flag
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ inputs.allow_auctions_writes }}" == "true" ]]; then
-            echo "Canonical AuctionsAPI writes are not allowed in this deployment workflow." >&2
+          echo "AuctionsAPI canonical writes requested: ${{ inputs.allow_auctions_writes }}"
+          # Manual workflow_dispatch input only; default remains false.
+          if [[ "${{ inputs.allow_auctions_writes }}" != "true" && "${{ inputs.allow_auctions_writes }}" != "false" ]]; then
+            echo "Invalid write flag." >&2
             exit 2
           fi
 
@@ -99,7 +101,7 @@ jobs:
             --set-env-vars \
               "AuctionsApi__ApiKey=secretref:auctions-api-key" \
               "AuctionsApi__Enabled=${{ inputs.enable_auctions_api }}" \
-              "AuctionsApi__AllowWrites=false" \
+              "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
             --only-show-errors
 
       - name: Verify deployed revision and safe flags
@@ -111,13 +113,13 @@ jobs:
           echo "Deployed image: $deployed_image"
           echo "AuctionsAPI enabled: ${{ inputs.enable_auctions_api }}"
           echo "AuctionsAPI API key: server-side secret reference"
-          echo "AuctionsAPI writes: false"
+          echo "AuctionsAPI writes: ${{ inputs.allow_auctions_writes }}"
           echo "Previous image for rollback: $CURRENT_API_IMAGE"
           {
             echo "### Inventory API deployment"
             echo "- Image: \`$deployed_image\`"
             echo "- AuctionsAPI enabled: \`${{ inputs.enable_auctions_api }}\`"
             echo "- AuctionsAPI API key: server-side secret reference"
-            echo "- AuctionsAPI writes: \`false\`"
+            echo "- AuctionsAPI writes: \`${{ inputs.allow_auctions_writes }}\`"
             echo "- Previous image: \`$CURRENT_API_IMAGE\`"
           } >> "$GITHUB_STEP_SUMMARY"
