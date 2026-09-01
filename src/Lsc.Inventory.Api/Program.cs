@@ -942,10 +942,17 @@ app.MapPost("/internal/auctions-api/incremental", async (HttpContext context, IA
     return Results.Ok(result);
 });
 
-app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IAuctionsApiInitialImportProcessor processor, string? platform, int? maximumLots, bool? persist, int? startPage, CancellationToken cancellationToken) =>
+app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IAuctionsApiInitialImportProcessor processor, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
-    var result = await processor.RunAsync(platform ?? "", maximumLots ?? 100000, persist == true, cancellationToken, startPage ?? 1);
+    var result = await processor.RunAsync(
+        platform ?? "",
+        maximumLots ?? 100000,
+        persist == true,
+        cancellationToken,
+        startPage ?? 1,
+        requireSaleDate == true,
+        skipSaleDateMatches ?? 0);
     return Results.Ok(result);
 });
 

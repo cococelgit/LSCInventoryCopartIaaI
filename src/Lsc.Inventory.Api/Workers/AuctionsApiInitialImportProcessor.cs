@@ -18,11 +18,14 @@ public sealed record AuctionsApiInitialImportResult(
     int PagesProcessed,
     int RequestsIssued,
     IReadOnlyList<string> Failures,
-    IReadOnlyDictionary<string, int> DiscardReasonCounts);
+    IReadOnlyDictionary<string, int> DiscardReasonCounts,
+    int SourceRowsScanned,
+    int MissingSaleDateSkipped,
+    int SaleDateMatchesSkipped);
 
 public interface IAuctionsApiInitialImportProcessor
 {
-    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1);
+    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0);
 }
 
 /// <summary>
@@ -39,12 +42,13 @@ public sealed class AuctionsApiInitialImportProcessor(
 {
     private readonly AuctionsApiOptions _options = options.Value;
 
-    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1)
+    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (normalizedPlatform is not ("copart" or "iaai")) throw new ArgumentOutOfRangeException(nameof(platform));
         if (maximumLots is < 1 or > 100000) throw new ArgumentOutOfRangeException(nameof(maximumLots), "Initial import must be between 1 and 100000 lots.");
         if (startPage is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(startPage));
+        if (skipSaleDateMatches is < 0 or > 100000) throw new ArgumentOutOfRangeException(nameof(skipSaleDateMatches));
         if (!_options.IsConfigured) throw new InvalidOperationException("AuctionsAPI initial import is disabled until the production configuration is explicitly enabled.");
         maximumLots = Math.Min(maximumLots, _options.InitialImportMaxLots);
         if (persist && !_options.AllowWrites) throw new InvalidOperationException("AuctionsAPI canonical writes are disabled until the Owner explicitly approves activation.");
@@ -53,6 +57,9 @@ public sealed class AuctionsApiInitialImportProcessor(
         var runId = await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart("auctions_api", normalizedPlatform, persist ? "initial-import" : "initial-import-shadow", maximumLots, _options.PageSize, startedAt), cancellationToken);
         var failures = new List<string>();
         var observed = 0;
+        var sourceRowsScanned = 0;
+        var missingSaleDateSkipped = 0;
+        var saleDateMatchesSkipped = 0;
         var loaded = 0;
         var marked = 0;
         var discarded = 0;
@@ -71,6 +78,17 @@ public sealed class AuctionsApiInitialImportProcessor(
                 pages++;
                 foreach (var vehicle in AuctionsApiIncrementalSyncProcessor.MapRows(AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data), normalizedPlatform))
                 {
+                    sourceRowsScanned++;
+                    if (requireSaleDate && vehicle.Auction?.AuctionAt is null)
+                    {
+                        missingSaleDateSkipped++;
+                        continue;
+                    }
+                    if (requireSaleDate && saleDateMatchesSkipped < skipSaleDateMatches)
+                    {
+                        saleDateMatchesSkipped++;
+                        continue;
+                    }
                     if (observed >= maximumLots) break;
                     observed++;
                     var result = await canonicalPipeline.ProcessAsync(vehicle, DateTimeOffset.UtcNow, cancellationToken, runId, persist: persist);
@@ -101,7 +119,7 @@ public sealed class AuctionsApiInitialImportProcessor(
             if (requests >= _options.InitialImportMaxRequests && observed < maximumLots) failures.Add("initial-import:request-cap-reached");
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, observed, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), cancellationToken);
-            return new(runId, normalizedPlatform, persist, maximumLots, observed, loaded, marked, discarded, quarantined, pages, requests, failures, discardReasonCounts);
+            return new(runId, normalizedPlatform, persist, maximumLots, observed, loaded, marked, discarded, quarantined, pages, requests, failures, discardReasonCounts, sourceRowsScanned, missingSaleDateSkipped, saleDateMatchesSkipped);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
