@@ -240,3 +240,7 @@
 - [x] Mantener descartes/cuarentenas fuera de grading inline y conservar `MARCAR` con su resultado `MANUAL_REVIEW`.
 - [x] Registrar en el manifiesto Copart `created`, `updated`, `unchanged`, `scoredInline`, `scoreSkippedUnchanged`, `scoreFailed`, duración acumulada y p50/p95; las corridas históricas permanecen como `N/D`.
 - [x] Cubrir Copart elegible, marcado, payload idéntico, cambio relevante y fallo atómico mediante pruebas. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 118/118 y `pnpm check` aprobó. No se ejecutó ningún Job ni deployment.
+
+- [x] Desplegar la imagen de grading inline exclusivamente al job `job-lsc-copart-excel-prod` y verificar el control idempotente: el snapshot SHA `41e7b6bfd862…` ya estaba completado, por lo que no se reprocesó ni duplicó información.
+- [x] Ejecutar `scoring_backfill` exclusivo de Copart: 0 candidatos, 0 scores nuevos, 0 fallos y 0 pendientes; el reporte posterior confirmó cobertura completa de los 63,926 Copart activos con política `lsc_pre_grade_v1`.
+- [x] Verificar antes/después de las ejecuciones que `ca-lsc-inventory-api-prod` permanece en `acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r66-title-taxonomy-readonly`.
