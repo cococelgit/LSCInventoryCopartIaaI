@@ -194,6 +194,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
         return new AuctionVehicle
         {
             Platform = InventorySourcePolicy.CopartExcelSource,
+            SourceProvider = "excel",
             LotNumber = Get(row, "Lot number"),
             Vin = Get(row, "VIN"),
             Title = titleType,

@@ -42,6 +42,10 @@ public sealed record AuctionVehicle
     [JsonPropertyName("platform")]
     public string? Platform { get; init; }
 
+    // Internal provenance only. API projections must gate this field by role.
+    [JsonPropertyName("source_provider")]
+    public string? SourceProvider { get; init; }
+
     [JsonPropertyName("lot_number")]
     public string? LotNumber { get; init; }
 

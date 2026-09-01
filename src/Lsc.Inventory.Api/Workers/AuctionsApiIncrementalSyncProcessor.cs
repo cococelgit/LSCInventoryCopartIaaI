@@ -239,6 +239,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         var payload = new Dictionary<string, object?>
         {
             ["platform"] = platform,
+            ["source_provider"] = "auctionsapi",
             ["lot_number"] = Scalar(lotRow, "lot", "lot_number", "lot.number", "external_id", "id"),
             ["vin"] = Scalar(lotRow, "vin") ?? Scalar(vehicleRow, "vin"),
             ["year"] = Number(vehicleRow, "year"),

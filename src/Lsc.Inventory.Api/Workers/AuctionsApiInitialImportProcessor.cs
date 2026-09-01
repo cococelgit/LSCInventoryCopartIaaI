@@ -25,7 +25,7 @@ public sealed record AuctionsApiInitialImportResult(
 
 public interface IAuctionsApiInitialImportProcessor
 {
-    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0);
+    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false);
 }
 
 /// <summary>
@@ -42,7 +42,7 @@ public sealed class AuctionsApiInitialImportProcessor(
 {
     private readonly AuctionsApiOptions _options = options.Value;
 
-    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0)
+    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (normalizedPlatform is not ("copart" or "iaai")) throw new ArgumentOutOfRangeException(nameof(platform));
@@ -65,6 +65,9 @@ public sealed class AuctionsApiInitialImportProcessor(
         var discarded = 0;
         var quarantined = 0;
         var discardReasonCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var saleDateNotFutureSkipped = 0;
+        var easternZone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var businessDate = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, easternZone).Date;
         var pages = 0;
         var requests = 0;
         var page = startPage;
@@ -79,12 +82,17 @@ public sealed class AuctionsApiInitialImportProcessor(
                 foreach (var vehicle in AuctionsApiIncrementalSyncProcessor.MapRows(AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data), normalizedPlatform))
                 {
                     sourceRowsScanned++;
-                    if (requireSaleDate && vehicle.Auction?.AuctionAt is null)
+                    if ((requireSaleDate || requireFutureSaleDate) && vehicle.Auction?.AuctionAt is null)
                     {
                         missingSaleDateSkipped++;
                         continue;
                     }
-                    if (requireSaleDate && saleDateMatchesSkipped < skipSaleDateMatches)
+                    if (requireFutureSaleDate && vehicle.Auction!.AuctionAt!.Value.Date <= businessDate)
+                    {
+                        saleDateNotFutureSkipped++;
+                        continue;
+                    }
+                    if ((requireSaleDate || requireFutureSaleDate) && saleDateMatchesSkipped < skipSaleDateMatches)
                     {
                         saleDateMatchesSkipped++;
                         continue;
@@ -119,7 +127,7 @@ public sealed class AuctionsApiInitialImportProcessor(
             if (requests >= _options.InitialImportMaxRequests && observed < maximumLots) failures.Add("initial-import:request-cap-reached");
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, observed, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), cancellationToken);
-            return new(runId, normalizedPlatform, persist, maximumLots, observed, loaded, marked, discarded, quarantined, pages, requests, failures, discardReasonCounts, sourceRowsScanned, missingSaleDateSkipped, saleDateMatchesSkipped);
+            return new(runId, normalizedPlatform, persist, maximumLots, observed, loaded, marked, discarded, quarantined, pages, requests, failures, discardReasonCounts, sourceRowsScanned, missingSaleDateSkipped, saleDateMatchesSkipped + saleDateNotFutureSkipped);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
