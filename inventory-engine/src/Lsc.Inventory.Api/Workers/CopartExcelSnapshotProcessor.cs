@@ -24,7 +24,8 @@ public sealed record CopartExcelProcessingResult(
     IReadOnlyDictionary<string, int> DiscardRuleCounts,
     IReadOnlyDictionary<string, int> FlagRuleCounts,
     IReadOnlyList<string> Failures,
-    CopartInlineScoringMetrics? InlineScoring = null);
+    CopartInlineScoringMetrics? InlineScoring = null,
+    CopartTitleTaxonomyMetrics? TitleTaxonomy = null);
 
 public interface ICopartExcelSnapshotProcessor
 {
@@ -124,7 +125,7 @@ public sealed class CopartExcelSnapshotProcessor(
 
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteCopartSnapshotAsync(registration.RunId!.Value,
-                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, isComplete, state.Failures, state.BuildInlineScoringMetrics()),
+                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, isComplete, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics()),
                 cancellationToken);
             if (isComplete)
             {
@@ -142,7 +143,7 @@ public sealed class CopartExcelSnapshotProcessor(
                 new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
                 cancellationToken);
 
-            return new CopartExcelProcessingResult(true, false, isComplete, null, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, reconciliation, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics());
+            return new CopartExcelProcessingResult(true, false, isComplete, null, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, reconciliation, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics());
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -157,7 +158,7 @@ public sealed class CopartExcelSnapshotProcessor(
                 new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
                 cancellationToken);
             logger.LogError(exception, "Copart snapshot {FileName} failed after {Observed} observed rows.", snapshot.FileName, state.Observed);
-            return new CopartExcelProcessingResult(false, false, false, "Copart processing failed; reconciliation was blocked.", state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, null, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics());
+            return new CopartExcelProcessingResult(false, false, false, "Copart processing failed; reconciliation was blocked.", state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, null, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics());
         }
     }
 
@@ -200,6 +201,7 @@ public sealed class CopartExcelSnapshotProcessor(
 
                 state.Accepted++;
                 state.RecordInlineScoring(outcome.Persistence!);
+                state.RecordTaxonomy(outcome.Vehicle!);
                 if (outcome.Evaluation.Decision == "MARCAR") state.Marked++;
                 if (!string.IsNullOrWhiteSpace(outcome.Vehicle!.LotNumber))
                 {
@@ -224,7 +226,10 @@ public sealed class CopartExcelSnapshotProcessor(
             await snapshotStore.PersistEligibilityDecisionAsync(evaluation, DateTimeOffset.UtcNow, cancellationToken);
             CopartInlineScoringPersistenceResult? persistence = null;
             if (evaluation.LoadToSystem)
+            {
+                vehicle = CopartTitleMapper.ApplyTaxonomy(vehicle);
                 persistence = await snapshotStore.PersistCopartAcceptedWithScoringAsync(vehicle, evaluation, DateTimeOffset.UtcNow, cancellationToken);
+            }
             return new RowProcessingOutcome(rowNumber, vehicle, evaluation, persistence, null);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -255,6 +260,10 @@ public sealed class CopartExcelSnapshotProcessor(
         public int ScoredInline { get; private set; }
         public int ScoreSkippedUnchanged { get; private set; }
         public int ScoreFailed { get; set; }
+        public int TaxonomyClassified { get; private set; }
+        public int TaxonomyUnverified { get; private set; }
+        public int TaxonomyReviewRequired { get; private set; }
+        private readonly Dictionary<string, int> _taxonomyCategoryCounts = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<long> _inlineScoringDurationsMs = [];
 
         public void RecordInlineScoring(CopartInlineScoringPersistenceResult result)
@@ -272,6 +281,28 @@ public sealed class CopartExcelSnapshotProcessor(
             }
             if (result.ScoreSkippedUnchanged) ScoreSkippedUnchanged++;
         }
+
+        public void RecordTaxonomy(AuctionVehicle vehicle)
+        {
+            if (vehicle.AdditionalData is null ||
+                !vehicle.AdditionalData.TryGetValue("title_category", out var categoryElement) ||
+                categoryElement.ValueKind != System.Text.Json.JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(categoryElement.GetString())) return;
+
+            var category = categoryElement.GetString()!;
+            _taxonomyCategoryCounts[category] = _taxonomyCategoryCounts.GetValueOrDefault(category) + 1;
+            var reviewStatus = vehicle.AdditionalData.TryGetValue("title_review_status", out var reviewElement) &&
+                               reviewElement.ValueKind == System.Text.Json.JsonValueKind.String
+                ? reviewElement.GetString()
+                : null;
+            if (string.Equals(reviewStatus, CopartTitleMapper.UnverifiedReviewStatus, StringComparison.OrdinalIgnoreCase)) TaxonomyUnverified++;
+            else if (string.Equals(reviewStatus, CopartTitleMapper.ReviewRequiredStatus, StringComparison.OrdinalIgnoreCase)) TaxonomyReviewRequired++;
+            else TaxonomyClassified++;
+        }
+
+        public CopartTitleTaxonomyMetrics BuildTaxonomyMetrics() =>
+            new(TaxonomyClassified, TaxonomyUnverified, TaxonomyReviewRequired,
+                new Dictionary<string, int>(_taxonomyCategoryCounts, StringComparer.OrdinalIgnoreCase));
 
         public CopartInlineScoringMetrics BuildInlineScoringMetrics()
         {

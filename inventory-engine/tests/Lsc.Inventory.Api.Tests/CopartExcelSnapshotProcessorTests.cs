@@ -141,6 +141,28 @@ public sealed class CopartExcelSnapshotProcessorTests
     }
 
     [Fact]
+    public async Task Eligible_copart_snapshot_persists_canonical_title_taxonomy_and_metrics()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        var result = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, titleCode: "BS")), CancellationToken.None);
+        var snapshot = Assert.Single(await store.GetRecentAsync(10, CancellationToken.None));
+
+        Assert.True(result.Processed);
+        Assert.Equal("SALVAGE", snapshot.Vehicle.AdditionalData!["title_category"].GetString());
+        Assert.Equal("CLASSIFIED", snapshot.Vehicle.AdditionalData["title_review_status"].GetString());
+        Assert.Equal(CopartTitleMapper.TaxonomyVersion, snapshot.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
+        Assert.Equal("BS", snapshot.Vehicle.AdditionalData["source_title_raw"].GetString());
+        Assert.NotNull(result.TitleTaxonomy);
+        Assert.Equal(1, result.TitleTaxonomy!.Classified);
+        Assert.Equal(0, result.TitleTaxonomy.Unverified);
+        Assert.Equal(0, result.TitleTaxonomy.ReviewRequired);
+        Assert.Equal(1, result.TitleTaxonomy.CategoryCounts["SALVAGE"]);
+    }
+
+    [Fact]
     public async Task Marked_copart_lot_is_persisted_with_manual_review_score()
     {
         var options = TestOptions();
@@ -243,6 +265,9 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Empty(persisted);
         Assert.Equal(0, store.CopartAuctionObservationCount);
         Assert.Null(await store.GetScoreByLotAsync("12345678", CancellationToken.None));
+        Assert.NotNull(result.TitleTaxonomy);
+        Assert.Empty(result.TitleTaxonomy!.CategoryCounts);
+        Assert.Equal(0, result.TitleTaxonomy.Classified + result.TitleTaxonomy.Unverified + result.TitleTaxonomy.ReviewRequired);
         Assert.Equal(1, audit.Total);
     }
 
@@ -268,12 +293,12 @@ public sealed class CopartExcelSnapshotProcessorTests
         return new CopartSnapshotEnvelope("salesdata.csv", Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), DateTimeOffset.UtcNow, new MemoryStream(bytes));
     }
 
-    private static string BuildCsv(int rows, string vin = "1HGCM82633A004352", string runDrives = "Runs and Drives")
+    private static string BuildCsv(int rows, string vin = "1HGCM82633A004352", string runDrives = "Runs and Drives", string titleCode = "AQ")
     {
         const string header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail\n";
         var builder = new StringBuilder(header);
         for (var index = 0; index < rows; index++)
-            builder.Append($"{12345678 + index},{vin},2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,AQ,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
+            builder.Append($"{12345678 + index},{vin},2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,{titleCode},none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
         return builder.ToString();
     }
 }

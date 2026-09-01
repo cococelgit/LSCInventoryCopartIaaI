@@ -8,7 +8,7 @@ public sealed record CopartMediaResolution(
     bool Resolved,
     int GalleryImages,
     int HdImages,
-    string? Failure);
+    string? FailureCode);
 
 public interface ICopartMediaResolver
 {
@@ -16,16 +16,16 @@ public interface ICopartMediaResolver
 }
 
 /// <summary>
-/// Resolves the image catalog exposed by the approved Copart snapshot's Image URL.
-/// Only direct HTTPS image links from Copart are persisted; endpoint URLs and query values are never published.
+/// Resolves the image catalog exposed by the approved Copart snapshot's Image URL. It is only used
+/// by the separately invoked enrichment worker; it is never called by the critical snapshot load.
 /// </summary>
 public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolver
 {
     public async Task<CopartMediaResolution> ResolveAsync(AuctionVehicle vehicle, CancellationToken cancellationToken)
     {
-        var catalogUrl = ReadCatalogUrl(vehicle);
+        var catalogUrl = ReadCatalogUrl(vehicle, out var catalogUrlInvalid);
         if (catalogUrl is null)
-            return new CopartMediaResolution(vehicle, false, 0, 0, "No approved Copart image catalog URL was supplied by the snapshot.");
+            return new CopartMediaResolution(vehicle, false, 0, 0, catalogUrlInvalid ? "INVALID_URL" : "MISSING_CATALOG_URL");
 
         try
         {
@@ -33,19 +33,15 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
             request.Headers.Accept.ParseAdd("application/json");
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
             if (!response.IsSuccessStatusCode)
-                return new CopartMediaResolution(vehicle, false, 0, 0, $"Copart media catalog returned HTTP {(int)response.StatusCode}.");
+                return new CopartMediaResolution(vehicle, false, 0, 0,
+                    response.StatusCode == System.Net.HttpStatusCode.NotFound ? "NOT_FOUND_404" : $"HTTP_{(int)response.StatusCode}");
             if (response.Content.Headers.ContentType?.MediaType?.Contains("json", StringComparison.OrdinalIgnoreCase) != true)
-                return new CopartMediaResolution(vehicle, false, 0, 0, "Copart media catalog did not return JSON.");
+                return new CopartMediaResolution(vehicle, false, 0, 0, "INVALID_CATALOG_RESPONSE");
 
             using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
-            var resolved = ResolveGallery(document.RootElement, out var rejectedHosts);
+            var resolved = ResolveGallery(document.RootElement, out var invalidLinks);
             if (resolved.Photos.Count == 0)
-            {
-                var hostSuffix = rejectedHosts.Count == 0
-                    ? string.Empty
-                    : $" Rejected HTTPS hosts: {string.Join(",", rejectedHosts)}.";
-                return new CopartMediaResolution(vehicle, false, 0, 0, $"Copart media catalog contained no approved direct image links.{hostSuffix}");
-            }
+                return new CopartMediaResolution(vehicle, false, 0, 0, invalidLinks > 0 ? "INVALID_URL" : "INCOMPLETE_GALLERY");
 
             var media = new MediaInfo
             {
@@ -57,14 +53,13 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return new CopartMediaResolution(vehicle, false, 0, 0, $"Copart media request failed: {exception.GetType().Name}.");
+            return new CopartMediaResolution(vehicle, false, 0, 0, $"REQUEST_{exception.GetType().Name.ToUpperInvariant()}");
         }
     }
 
-    private static (IReadOnlyList<string> Photos, int HdImages) ResolveGallery(JsonElement root, out IReadOnlyList<string> rejectedHosts)
+    private static (IReadOnlyList<string> Photos, int HdImages) ResolveGallery(JsonElement root, out int invalidLinks)
     {
-        var rejected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        rejectedHosts = Array.Empty<string>();
+        invalidLinks = 0;
         if (!root.TryGetProperty("lotImages", out var lotImages) || lotImages.ValueKind != JsonValueKind.Array)
             return (Array.Empty<string>(), 0);
 
@@ -83,7 +78,11 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
             string? thumbnail = null;
             foreach (var link in links.EnumerateArray())
             {
-                if (!TryReadImageLink(link, rejected, out var url, out var isThumbnail, out var isHd)) continue;
+                if (!TryReadImageLink(link, out var url, out var isThumbnail, out var isHd))
+                {
+                    invalidLinks++;
+                    continue;
+                }
                 if (isHd && hd is null) hd = url;
                 else if (!isThumbnail && standard is null) standard = url;
                 else if (thumbnail is null) thumbnail = url;
@@ -101,11 +100,10 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
             photos.Add(selected);
             if (sequence.Hd == selected) hdImages++;
         }
-        rejectedHosts = rejected.OrderBy(host => host, StringComparer.OrdinalIgnoreCase).Take(10).ToArray();
         return (photos, hdImages);
     }
 
-    private static bool TryReadImageLink(JsonElement link, ISet<string> rejectedHosts, out string url, out bool isThumbnail, out bool isHd)
+    private static bool TryReadImageLink(JsonElement link, out string url, out bool isThumbnail, out bool isHd)
     {
         url = string.Empty;
         isThumbnail = link.TryGetProperty("isThumbNail", out var thumbnail) && thumbnail.ValueKind == JsonValueKind.True;
@@ -114,27 +112,26 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
         var value = candidate.GetString()?.Trim();
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
             !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment)) return false;
-        if (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase))
-        {
-            rejectedHosts.Add(uri.Host);
-            return false;
-        }
+        if (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)) return false;
 
-        // Keep the original approved HTTPS URL only inside the private vehicle payload. The public API replaces it
-        // with a signed first-party proxy URL, so query values never reach the browser.
+        // The original approved URL remains only in the private payload. Public API media remains proxy-backed.
         url = uri.ToString();
         return true;
     }
 
-    private static string? ReadCatalogUrl(AuctionVehicle vehicle)
+    private static string? ReadCatalogUrl(AuctionVehicle vehicle, out bool invalid)
     {
+        invalid = false;
         if (vehicle.RawSource is not { } rawSource || rawSource.ValueKind != JsonValueKind.Object ||
             !rawSource.TryGetProperty("Image URL", out var candidate) || candidate.ValueKind != JsonValueKind.String) return null;
         var value = candidate.GetString()?.Trim();
-        return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-               (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
-               (uri.Host is "inventoryv2.copart.io" or "inventoryv2.copart.com")
-            ? uri.ToString()
-            : null;
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
+            uri.Host is not ("inventoryv2.copart.io" or "inventoryv2.copart.com"))
+        {
+            invalid = true;
+            return null;
+        }
+        return uri.ToString();
     }
 }

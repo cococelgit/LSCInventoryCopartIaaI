@@ -47,8 +47,7 @@ public sealed class CopartExcelSnapshotAdapterTests
         Assert.Equal("Clear Title", mappedVehicle.SaleDocument!.Name);
         Assert.Equal("AQ", mappedVehicle.AdditionalData!["source_title_type_code"].GetString());
         Assert.Equal("mapped", mappedVehicle.AdditionalData["source_title_mapping"].GetString());
-        Assert.Equal("CLEAN", mappedVehicle.AdditionalData["title_category"].GetString());
-        Assert.Equal("STANDARD", mappedVehicle.AdditionalData["title_review_status"].GetString());
+        Assert.False(mappedVehicle.AdditionalData.ContainsKey("title_category"));
         Assert.True(AuctionEligibilityEvaluator.Evaluate(mappedVehicle, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).LoadToSystem);
     }
 
@@ -66,8 +65,7 @@ public sealed class CopartExcelSnapshotAdapterTests
         var evaluation = AuctionEligibilityEvaluator.Evaluate(unmappedVehicle, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         Assert.Equal("M02", unmappedVehicle.Title);
         Assert.Equal("unmapped", unmappedVehicle.AdditionalData!["source_title_mapping"].GetString());
-        Assert.Equal("OTHER_UNVERIFIED", unmappedVehicle.AdditionalData["title_category"].GetString());
-        Assert.Equal("DOCUMENT_REVIEW", unmappedVehicle.AdditionalData["title_review_status"].GetString());
+        Assert.False(unmappedVehicle.AdditionalData.ContainsKey("title_category"));
         Assert.True(evaluation.LoadToSystem);
         Assert.Contains(evaluation.Flags, flag => flag.Code == "M02");
     }

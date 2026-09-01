@@ -594,7 +594,7 @@ public sealed partial class PostgresSnapshotStore(
             limit @limit;
             """;
         AddParameter(command, "mapping_version", CopartTitleCatalog.Version);
-        AddParameter(command, "taxonomy_version", CopartTitleTaxonomy.Version);
+        AddParameter(command, "taxonomy_version", CopartTitleMapper.TaxonomyVersion);
         AddParameter(command, "limit", limit);
         var result = new List<StoredVehicleSnapshot>(limit);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };

@@ -88,7 +88,8 @@ public sealed record CopartSnapshotCompletion(
     int Errors,
     bool IsComplete,
     IReadOnlyList<string> Failures,
-    CopartInlineScoringMetrics? InlineScoring = null);
+    CopartInlineScoringMetrics? InlineScoring = null,
+    CopartTitleTaxonomyMetrics? TitleTaxonomy = null);
 
 public sealed record StoredVehicleSnapshot(
     string Identity,
@@ -123,6 +124,12 @@ public sealed record CopartScoringBackfillResult(
     TimeSpan Duration,
     IReadOnlyList<string> Failures);
 
+public sealed record CopartTitleTaxonomyMetrics(
+    int Classified,
+    int Unverified,
+    int ReviewRequired,
+    IReadOnlyDictionary<string, int> CategoryCounts);
+
 public sealed record CopartInlineScoringMetrics(
     int Created,
     int Updated,
@@ -134,6 +141,20 @@ public sealed record CopartInlineScoringMetrics(
     long? InlineScoringP50Ms,
     long? InlineScoringP95Ms);
 
+public sealed record CopartMediaEnrichmentMetrics(
+    int Candidates,
+    int Resolved,
+    int AlreadyComplete,
+    int Failed,
+    int GalleryCount,
+    int HdImages,
+    int ThumbnailOnly,
+    int NotFound404,
+    int InvalidUrl,
+    long MediaResolutionDurationMs,
+    long? MediaResolutionP50Ms,
+    long? MediaResolutionP95Ms);
+
 public sealed record CopartMediaEnrichmentResult(
     bool Processed,
     int Candidates,
@@ -141,7 +162,8 @@ public sealed record CopartMediaEnrichmentResult(
     int AlreadyComplete,
     int Failed,
     TimeSpan Duration,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures,
+    CopartMediaEnrichmentMetrics? Metrics = null);
 
 public sealed record CopartTitleBackfillResult(
     bool Processed,
@@ -706,7 +728,6 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         cancellationToken.ThrowIfCancellationRequested();
         var candidates = _snapshots.Values
             .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
-            .Where(snapshot => snapshot.Vehicle.AdditionalData is null || !snapshot.Vehicle.AdditionalData.ContainsKey("copart_media_resolution"))
             .Where(snapshot => snapshot.Vehicle.Media?.Photos?.Count is <= 1 or null)
             .OrderByDescending(snapshot => snapshot.ObservedAt)
             .Take(Math.Clamp(maximum, 1, 10000))
@@ -738,7 +759,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
                 !string.Equals(mappingVersion.GetString(), CopartTitleCatalog.Version, StringComparison.Ordinal) ||
                 !snapshot.Vehicle.AdditionalData.TryGetValue("title_taxonomy_version", out var taxonomyVersion) ||
                 taxonomyVersion.ValueKind != JsonValueKind.String ||
-                !string.Equals(taxonomyVersion.GetString(), CopartTitleTaxonomy.Version, StringComparison.Ordinal))
+                !string.Equals(taxonomyVersion.GetString(), CopartTitleMapper.TaxonomyVersion, StringComparison.Ordinal))
             .OrderBy(snapshot => snapshot.Identity, StringComparer.Ordinal)
             .Take(Math.Clamp(maximum, 1, 10_000))
             .ToArray();

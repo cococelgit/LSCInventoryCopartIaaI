@@ -510,7 +510,7 @@ if (lotMediaDiagnosticArgument is not null)
                 resolution.Resolved,
                 resolution.GalleryImages,
                 resolution.HdImages,
-                resolution.Failure
+                resolution.FailureCode
             }
         }));
     }

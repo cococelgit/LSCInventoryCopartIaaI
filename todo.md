@@ -244,3 +244,12 @@
 - [x] Desplegar la imagen de grading inline exclusivamente al job `job-lsc-copart-excel-prod` y verificar el control idempotente: el snapshot SHA `41e7b6bfd862…` ya estaba completado, por lo que no se reprocesó ni duplicó información.
 - [x] Ejecutar `scoring_backfill` exclusivo de Copart: 0 candidatos, 0 scores nuevos, 0 fallos y 0 pendientes; el reporte posterior confirmó cobertura completa de los 63,926 Copart activos con política `lsc_pre_grade_v1`.
 - [x] Verificar antes/después de las ejecuciones que `ca-lsc-inventory-api-prod` permanece en `acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r66-title-taxonomy-readonly`.
+
+## PR Copart: taxonomía canónica y media HD controlada
+
+- [x] Reemplazar la taxonomía Copart paralela por `TitleFacetCategory` canónico, preservando el título/código fuente y clasificando solo después de elegibilidad.
+- [x] Persistir `source_title_raw`, categoría, flags, estado de revisión y versión únicamente para lotes Copart aceptados; IAAI permanece sin cambios y D09 sigue desactivada.
+- [x] Mantener el backfill de títulos en la misma autoridad canónica, sin ejecutar backfill dentro de este PR.
+- [x] Fortalecer el enriquecimiento de media separado: galería por secuencia, preferencia HD, preservación de referencias originales, 404/URL inválida/transitorio controlados y métricas runtime.
+- [x] Cubrir taxonomía, idempotencia, IAAI, HD, secuencia, galería completa, 404, URL inválida, transitorio e independencia de media frente a elegibilidad/scoring.
+- [ ] Abrir PR de código y pruebas sin desplegar, ejecutar jobs, cambiar cron, API, IAAI, Apibara, secretos, identidad ni infraestructura.
