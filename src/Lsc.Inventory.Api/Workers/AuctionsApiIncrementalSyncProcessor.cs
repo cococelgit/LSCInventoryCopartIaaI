@@ -1,7 +1,5 @@
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
-using Lsc.Inventory.Api.Eligibility;
-using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Services;
 using Lsc.Inventory.Api.Storage;
@@ -30,9 +28,8 @@ public interface IAuctionsApiIncrementalSyncProcessor
 }
 
 /// <summary>
-/// Incremental AuctionsAPI adapter. It is not a replacement for the existing
-/// workers: the feature gate and caller decide whether this is shadow-only or
-/// an explicitly approved write. Partial windows never trigger reconciliation.
+/// Provider adapter only: it reads the incremental AuctionsAPI windows and
+/// maps rows to AuctionVehicle. Business rules remain in the canonical pipeline.
 /// </summary>
 public sealed class AuctionsApiIncrementalSyncProcessor(
     IAuctionsApiClient client,
@@ -54,7 +51,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
 
         var startedAt = DateTimeOffset.UtcNow;
         var runId = await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart("auctions_api", normalizedPlatform, persist ? "incremental-active" : "incremental-shadow", 2, _options.PageSize, startedAt), cancellationToken);
-        var lease = await snapshotStore.TryAcquireLeaseAsync($"auctions-api-{normalizedPlatform}-incremental", runId, startedAt, TimeSpan.FromMinutes(10), cancellationToken);
+        var leaseName = $"auctions-api-{normalizedPlatform}-incremental";
+        var lease = await snapshotStore.TryAcquireLeaseAsync(leaseName, runId, startedAt, TimeSpan.FromMinutes(10), cancellationToken);
         if (!lease.Acquired)
         {
             var skipped = new[] { lease.SkipReason ?? "lease-active" };
@@ -72,15 +70,14 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         var deactivated = 0;
         var pages = 0;
         var requests = 0;
-        var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
             var minutes = Math.Clamp(_options.DefaultOverlapMinutes, 1, 4320);
-            var activePage = await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(DomainId(normalizedPlatform), minutes, 1, _options.PageSize), cancellationToken);
-            requests++;
-            pages++;
-            foreach (var element in Rows(activePage.Data))
+            var activeWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: false, cancellationToken);
+            pages += activeWindow.Pages;
+            requests += activeWindow.Requests;
+            foreach (var element in activeWindow.Rows)
             {
                 var vehicle = DeserializeVehicle(element, normalizedPlatform);
                 if (vehicle is null || string.IsNullOrWhiteSpace(vehicle.LotNumber))
@@ -90,7 +87,6 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 }
                 changed++;
                 var lotKey = $"{normalizedPlatform}:{vehicle.LotNumber.Trim()}";
-                await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, lotKey, vehicle.LotNumber, MaskVin(vehicle.Vin), "observed", [], [], DateTimeOffset.UtcNow), cancellationToken);
                 var observedAt = DateTimeOffset.UtcNow;
                 var ingested = await canonicalPipeline.ProcessAsync(vehicle, observedAt, cancellationToken, runId, persist: persist);
                 if (!ingested.Loaded)
@@ -101,14 +97,22 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 }
                 loaded++;
                 if (ingested.Marked) marked++;
-                var saved = ingested.Persistence!;
-                await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, saved.LotKey, ingested.Vehicle.LotNumber, MaskVin(ingested.Vehicle.Vin), saved.Action, saved.ChangedFields, [], observedAt), cancellationToken);
+                if (persist)
+                {
+                    var saved = ingested.Persistence!;
+                    await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, saved.LotKey, ingested.Vehicle.LotNumber, MaskVin(ingested.Vehicle.Vin), saved.Action, saved.ChangedFields, [], observedAt), cancellationToken);
+                }
+                else
+                {
+                    await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, lotKey, vehicle.LotNumber, MaskVin(vehicle.Vin), "shadow-evaluated", [], [], observedAt), cancellationToken);
+                }
             }
 
-            var archivedPage = await client.GetArchivedLotsAsync(new AuctionsApiWindowRequest(DomainId(normalizedPlatform), minutes, 1, _options.PageSize), cancellationToken);
-            requests++;
-            pages++;
-            foreach (var element in Rows(archivedPage.Data))
+            var archivedWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: true, cancellationToken);
+            pages += archivedWindow.Pages;
+            requests += archivedWindow.Requests;
+            var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var element in archivedWindow.Rows)
             {
                 var vehicle = DeserializeVehicle(element, normalizedPlatform);
                 if (vehicle is null || string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
@@ -131,8 +135,62 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         }
         finally
         {
-            await snapshotStore.ReleaseLeaseAsync($"auctions-api-{normalizedPlatform}-incremental", runId, DateTimeOffset.UtcNow, CancellationToken.None);
+            await snapshotStore.ReleaseLeaseAsync(leaseName, runId, DateTimeOffset.UtcNow, CancellationToken.None);
         }
+    }
+
+    private async Task<WindowReadResult> ReadWindowAsync(string platform, int minutes, bool archived, CancellationToken cancellationToken)
+    {
+        var rows = new List<JsonElement>();
+        var page = 1;
+        var pages = 0;
+        var requests = 0;
+        while (page <= 1000)
+        {
+            var response = archived
+                ? await client.GetArchivedLotsAsync(new AuctionsApiWindowRequest(DomainId(platform), minutes, page, _options.PageSize), cancellationToken)
+                : await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(DomainId(platform), minutes, page, _options.PageSize), cancellationToken);
+            requests++;
+            pages++;
+            rows.AddRange(Rows(response.Data));
+            if (!HasNextPage(response.Meta, page)) break;
+            page++;
+        }
+        return new(rows, pages, requests);
+    }
+
+    private static bool HasNextPage(JsonElement meta, int currentPage)
+    {
+        if (meta.ValueKind != JsonValueKind.Object) return false;
+        if (TryBool(meta, "has_more", out var more) || TryBool(meta, "has_next", out more)) return more;
+        if (TryInt(meta, "next_page", out var next)) return next > currentPage;
+        if (TryInt(meta, "total_pages", out var total)) return total > currentPage;
+        if (TryInt(meta, "last_page", out var last)) return last > currentPage;
+        foreach (var key in new[] { "pagination", "paging" })
+            if (meta.TryGetProperty(key, out var nested) && HasNextPage(nested, currentPage)) return true;
+        return false;
+    }
+
+    private static bool TryBool(JsonElement value, string name, out bool result)
+    {
+        if (value.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            result = property.GetBoolean();
+            return true;
+        }
+        result = false;
+        return false;
+    }
+
+    private static bool TryInt(JsonElement value, string name, out int result)
+    {
+        if (value.TryGetProperty(name, out var property) && property.TryGetInt32(out var parsed))
+        {
+            result = parsed;
+            return true;
+        }
+        result = 0;
+        return false;
     }
 
     private static int DomainId(string platform) => platform == "iaai" ? 1 : 3;
@@ -167,4 +225,6 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     }
 
     private static string? MaskVin(string? vin) => string.IsNullOrWhiteSpace(vin) || vin.Length < 6 ? null : $"{vin[..3]}…{vin[^3..]}";
+
+    private sealed record WindowReadResult(IReadOnlyList<JsonElement> Rows, int Pages, int Requests);
 }
