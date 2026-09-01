@@ -20,7 +20,7 @@ Después de `CanonicalVehicleCleaner` y `AuctionEligibilityEvaluator`, y solo cu
 | `title_category` | Una de `CLEAN`, `SALVAGE`, `REBUILT`, `SPECIAL`, `UNVERIFIED` u `OTHER`. |
 | `title_flags` | Banderas explicables del clasificador canónico, por ejemplo `Salvage`, `Rebuilt`, `Theft Recovery`, `Flood` o `Document review`. |
 | `title_review_status` | `CLASSIFIED`, `UNVERIFIED` o `REVIEW_REQUIRED`. |
-| `title_taxonomy_version` | `copart-title-taxonomy-v2`. |
+| `title_taxonomy_version` | `copart-title-taxonomy-v1`. |
 
 El código y la descripción originales continúan en `source_title_type_code`, `sale_title_type_code`, `title`, `sale_document` y `title_notes`. La categoría simplificada nunca sustituye el documento fuente ni hace afirmaciones de registrabilidad.
 

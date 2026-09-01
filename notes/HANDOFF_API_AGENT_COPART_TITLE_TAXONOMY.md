@@ -1,4 +1,4 @@
-# Handoff técnico — Taxonomía canónica de títulos Copart v2
+# Handoff técnico — Taxonomía canónica de títulos Copart v1
 
 ## Estado y límites
 
@@ -16,7 +16,7 @@ Después de limpieza y elegibilidad, y solo cuando `LoadToSystem = true`, el pay
 | `title_category` | `string` | Categoría canónica compacta. |
 | `title_flags` | `string[]` | Divulgaciones explicables desde el clasificador canónico. |
 | `title_review_status` | `string` | `CLASSIFIED`, `UNVERIFIED` o `REVIEW_REQUIRED`. |
-| `title_taxonomy_version` | `string` | `copart-title-taxonomy-v2`. |
+| `title_taxonomy_version` | `string` | `copart-title-taxonomy-v1`. |
 
 Los siguientes datos fuente continúan siendo la evidencia primaria y no se reemplazan: `source_title_type_code`, `source_title_mapping`, `source_title_mapping_version`, `source_title_description_es`, `title`, `sale_document.name` y `title_notes`.
 
@@ -75,7 +75,7 @@ Ejemplo sanitizado:
 
 ## Orden de despliegue y backfill
 
-La taxonomía v2 requiere primero desplegar la imagen de ingesta Copart bajo su frontera aprobada. Los payloads históricos `v1` quedan detectables por el selector de backfill debido al cambio de versión; el backfill de títulos debe ejecutarse únicamente con aprobación separada. El API/portal no debe declarar cobertura total hasta verificar la versión v2 en los lotes requeridos.
+La taxonomía v1 requiere primero desplegar la imagen de ingesta Copart bajo su frontera aprobada. El backfill de títulos debe ejecutarse únicamente con aprobación separada para poblar los payloads históricos que aún no tengan `title_taxonomy_version`. El API/portal no debe declarar cobertura total hasta verificar la versión v1 en los lotes requeridos.
 
 ## Pruebas mínimas para API/portal
 

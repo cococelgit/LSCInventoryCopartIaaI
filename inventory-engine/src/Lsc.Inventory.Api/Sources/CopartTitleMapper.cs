@@ -10,7 +10,7 @@ namespace Lsc.Inventory.Api.Sources;
 /// </summary>
 public static class CopartTitleMapper
 {
-    public const string TaxonomyVersion = "copart-title-taxonomy-v2";
+    public const string TaxonomyVersion = "copart-title-taxonomy-v1";
     public const string ClassifiedReviewStatus = "CLASSIFIED";
     public const string UnverifiedReviewStatus = "UNVERIFIED";
     public const string ReviewRequiredStatus = "REVIEW_REQUIRED";

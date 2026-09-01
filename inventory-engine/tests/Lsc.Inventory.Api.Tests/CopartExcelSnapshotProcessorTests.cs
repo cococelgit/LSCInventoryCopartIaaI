@@ -153,7 +153,7 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.True(result.Processed);
         Assert.Equal("SALVAGE", snapshot.Vehicle.AdditionalData!["title_category"].GetString());
         Assert.Equal("CLASSIFIED", snapshot.Vehicle.AdditionalData["title_review_status"].GetString());
-        Assert.Equal("copart-title-taxonomy-v2", snapshot.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
+        Assert.Equal(CopartTitleMapper.TaxonomyVersion, snapshot.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
         Assert.Equal("BS", snapshot.Vehicle.AdditionalData["source_title_raw"].GetString());
         Assert.NotNull(result.TitleTaxonomy);
         Assert.Equal(1, result.TitleTaxonomy!.Classified);
