@@ -418,6 +418,13 @@ app.MapGet("/api/v1/inventory/title-taxonomy/status", async (HttpContext context
     return Results.Ok(await store.GetCopartTitleTaxonomyCoverageAsync(cancellationToken));
 });
 
+app.MapGet("/api/v1/inventory/internal/facets-v2/cache-status", (HttpContext context, IFacetsV2SharedCache sharedCache) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    // Intentionally excludes endpoint, identity IDs, keys, token contents, Redis commands and cached payloads.
+    return Results.Ok(sharedCache.GetDiagnostics());
+});
+
 app.MapGet("/api/v1/inventory/seller-taxonomy/audit", async (HttpContext context, IInventorySnapshotStore store, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
