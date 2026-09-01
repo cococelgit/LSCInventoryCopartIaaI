@@ -253,3 +253,10 @@
 - [x] Fortalecer el enriquecimiento de media separado: galería por secuencia, preferencia HD, preservación de referencias originales, 404/URL inválida/transitorio controlados y métricas runtime.
 - [x] Cubrir taxonomía, idempotencia, IAAI, HD, secuencia, galería completa, 404, URL inválida, transitorio e independencia de media frente a elegibilidad/scoring.
 - [ ] Abrir PR de código y pruebas sin desplegar, ejecutar jobs, cambiar cron, API, IAAI, Apibara, secretos, identidad ni infraestructura.
+
+## Buy Now Copart: precio estrictamente positivo
+
+- [x] Normalizar `Buy-It-Now Price` exclusivamente en el adaptador Copart: solo un decimal mayor que cero se persiste como `buy_now_usd`; cero, negativo, vacío o inválido se convierten a `null`.
+- [x] Mantener `CurrentBidUsd = 0` válido y separado de Buy Now, sin cambiar IAAI ni el limpiador genérico.
+- [x] Cubrir Buy Now positivo, cero, negativo, vacío, inválido y puja cero con pruebas deterministas. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 129/129 y `pnpm check` aprobó.
+- [ ] El agente de API/portal debe filtrar, contar y mostrar Buy Now mediante `buy_now_usd > 0` antes de paginar; este cambio no despliega API ni jobs.

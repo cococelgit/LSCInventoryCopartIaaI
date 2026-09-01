@@ -256,7 +256,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             Pricing = new PricingInfo
             {
                 CurrentBidUsd = ParseDecimal(Get(row, "High Bid =non-vix,Sealed=Vix")),
-                BuyNowUsd = ParseDecimal(Get(row, "Buy-It-Now Price")),
+                BuyNowUsd = ParsePositiveDecimal(Get(row, "Buy-It-Now Price")),
                 EstimatedRetailValueUsd = ParseDecimal(Get(row, "Est. Retail Value")),
                 RepairCostUsd = ParseDecimal(Get(row, "Repair cost")),
                 SalePriceUsd = null
@@ -307,6 +307,10 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
     private static int? ParseInteger(string? value) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) ? result : null;
 
     private static decimal? ParseDecimal(string? value) => decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var result) ? result : null;
+
+    // Copart uses zero to mean that no Buy-It-Now price is offered. A bid of zero remains valid elsewhere,
+    // but a Buy Now offer exists only when Copart supplies a strictly positive amount.
+    private static decimal? ParsePositiveDecimal(string? value) => ParseDecimal(value) is > 0m and var result ? result : null;
 
     private static bool? ParseYesNo(string? value) => value?.Trim().ToUpperInvariant() switch
     {
