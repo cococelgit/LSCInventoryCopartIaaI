@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": { "location": { "type": "string", "defaultValue": "eastus2" } },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "run-execution-audit-r6c",
+    "scriptUri": "https://lsc-inv-revi-zyn4tlbw.manus.space/manus-storage/federated-deploy-execution-audit-r6c_38a05bb8.sh"
+  },
+  "resources": [{
+    "type": "Microsoft.Resources/deploymentScripts",
+    "apiVersion": "2023-08-01",
+    "name": "[variables('scriptName')]",
+    "location": "[parameters('location')]",
+    "kind": "AzureCLI",
+    "identity": { "type": "userAssigned", "userAssignedIdentities": { "[variables('identityResourceId')]": {} } },
+    "properties": {
+      "forceUpdateTag": "execution-audit-r6c-guardrail",
+      "azCliVersion": "2.65.0",
+      "primaryScriptUri": "[variables('scriptUri')]",
+      "timeout": "PT30M",
+      "cleanupPreference": "OnSuccess",
+      "retentionInterval": "P1D"
+    }
+  }],
+  "outputs": {
+    "releaseScriptResourceId": { "type": "string", "value": "[resourceId('Microsoft.Resources/deploymentScripts', variables('scriptName'))]" },
+    "iaaiJobExecutionStarted": { "type": "bool", "value": false },
+    "copartApibaraEnabled": { "type": "bool", "value": false }
+  }
+}

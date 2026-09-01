@@ -1,0 +1,81 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "deploy-api-r52-20260831-visible-total-cache",
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/manus/api-r52-visible-total-cache/infra/release-assets/r52-visible-total-cache/federated-deploy-api-search-index-r52.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "forceUpdateTag": "api-r52-20260831-visible-total-cache-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT30M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiImage": {
+      "type": "string",
+      "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r52-visible-total-cache"
+    },
+    "iaaiJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "copartJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "copartAutoJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "genericJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "jobExecutionStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "copartApibaraEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "migrationsEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "projectionRebuildStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "scriptSha256": {
+      "type": "string",
+      "value": "aa97d4296ad6855f7a55edd83d7fa6fd38102730c4b7ed24075b10cca2dd1967"
+    }
+  }
+}

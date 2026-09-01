@@ -1,0 +1,77 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "deploy-api-integrated-r20-active-summary-20260828",
+    "scriptUri": "https://lsc-inv-revi-zyn4tlbw.manus.space/manus-storage/federated-deploy-api-integrated-r20_f7b342fb.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "forceUpdateTag": "api-integrated-r20-active-summary-20260828-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT30M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiImage": {
+      "type": "string",
+      "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r20-active-summary"
+    },
+    "iaaiJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "copartJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "genericJobChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "jobExecutionStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "copartApibaraEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "migrationsEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "scriptSha256": {
+      "type": "string",
+      "value": "06f5b027682d3142540eabbc893cf7c263118f5acb88b63968ed792df6e55f87"
+    },
+    "sourceSha256": {
+      "type": "string",
+      "value": "25d240baffdf3c2624fd8534d0f3994479820e03fb7577f1bfdf5ee7467eb44c"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": { "location": { "type": "string", "defaultValue": "eastus2" } },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "run-enable-audit-migrations-r7",
+    "scriptUri": "https://lsc-inv-revi-zyn4tlbw.manus.space/manus-storage/federated-enable-audit-migrations-r7_9a24f47b.sh"
+  },
+  "resources": [{
+    "type": "Microsoft.Resources/deploymentScripts",
+    "apiVersion": "2023-08-01",
+    "name": "[variables('scriptName')]",
+    "location": "[parameters('location')]",
+    "kind": "AzureCLI",
+    "identity": { "type": "userAssigned", "userAssignedIdentities": { "[variables('identityResourceId')]": {} } },
+    "properties": {
+      "forceUpdateTag": "enable-audit-migrations-r7",
+      "azCliVersion": "2.65.0",
+      "primaryScriptUri": "[variables('scriptUri')]",
+      "timeout": "PT15M",
+      "cleanupPreference": "OnSuccess",
+      "retentionInterval": "P1D"
+    }
+  }],
+  "outputs": {
+    "releaseScriptResourceId": { "type": "string", "value": "[resourceId('Microsoft.Resources/deploymentScripts', variables('scriptName'))]" },
+    "iaaiJobExecutionStarted": { "type": "bool", "value": false },
+    "copartApibaraEnabled": { "type": "bool", "value": false }
+  }
+}

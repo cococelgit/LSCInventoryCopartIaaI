@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "type": "string", "defaultValue": "eastus2" }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "deploy-api-r66-20260901-title-taxonomy-readonly",
+    "scriptUri": "https://raw.githubusercontent.com/cococelgit/LSCInventoryCopartIaaI/503d46c36bf4b2981d924377171b863e0b88f142/infra/release-assets/r66-title-taxonomy-readonly/federated-deploy-api-title-r66.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": { "[variables('identityResourceId')]": {} }
+      },
+      "properties": {
+        "forceUpdateTag": "api-r66-20260901-title-taxonomy-readonly-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT45M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiImage": { "type": "string", "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-api-integrated-r66-title-taxonomy-readonly" },
+    "redisOrAclChanged": { "type": "bool", "value": false },
+    "iaaiJobChanged": { "type": "bool", "value": false },
+    "copartJobChanged": { "type": "bool", "value": false },
+    "copartAutoJobChanged": { "type": "bool", "value": false },
+    "genericJobChanged": { "type": "bool", "value": false },
+    "scoringJobChanged": { "type": "bool", "value": false },
+    "jobExecutionStarted": { "type": "bool", "value": false },
+    "migrationsEnabled": { "type": "bool", "value": false },
+    "facetIndexMigrationStarted": { "type": "bool", "value": false },
+    "projectionRebuildStarted": { "type": "bool", "value": false },
+    "scriptSha256": { "type": "string", "value": "335d7f1b82b3c539d70d637504cb9ed06d979ff61e5b594c852ccb7d7d208b79" }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "variables": {
+    "identityName": "uai-lsc-inventory-release-afaac3d",
+    "identityResourceId": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+    "scriptName": "deploy-iaai-cursor-recovery-r14-20260828",
+    "scriptUri": "https://lsc-inv-revi-zyn4tlbw.manus.space/manus-storage/federated-deploy-iaai-cursor-recovery-r14_749dded0.sh"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('scriptName')]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "userAssigned",
+        "userAssignedIdentities": {
+          "[variables('identityResourceId')]": {}
+        }
+      },
+      "properties": {
+        "forceUpdateTag": "iaai-cursor-recovery-r14-20260828-v1",
+        "azCliVersion": "2.65.0",
+        "primaryScriptUri": "[variables('scriptUri')]",
+        "timeout": "PT45M",
+        "cleanupPreference": "OnSuccess",
+        "retentionInterval": "P1D"
+      }
+    }
+  ],
+  "outputs": {
+    "apiChanged": {
+      "type": "bool",
+      "value": false
+    },
+    "apiLegacySyncEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "iaaiJobImage": {
+      "type": "string",
+      "value": "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:iaai-cursor-recovery-r14"
+    },
+    "iaaiJobExecutionStarted": {
+      "type": "bool",
+      "value": false
+    },
+    "nationalSchemaInitializer": {
+      "type": "string",
+      "value": "isolated-create-if-not-exists"
+    },
+    "opaqueCursorRecovery": {
+      "type": "string",
+      "value": "max-once-per-execution"
+    },
+    "deterministicCursorAzureRetry": {
+      "type": "bool",
+      "value": false
+    },
+    "copartApibaraEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "migrationsEnabled": {
+      "type": "bool",
+      "value": false
+    },
+    "sourceSha256": {
+      "type": "string",
+      "value": "d203aae641a3df88621c1c8b950cbb8447ae8c3ed937fc1babdba7dc601dc307"
+    },
+    "scriptSha256": {
+      "type": "string",
+      "value": "fd0171543a73c9061daffbb4da2417444db9ed4b92e9c4aeeaeab6bdc013f176"
+    }
+  }
+}
