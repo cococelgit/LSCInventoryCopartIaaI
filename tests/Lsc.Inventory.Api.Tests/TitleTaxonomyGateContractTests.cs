@@ -14,16 +14,32 @@ public sealed class TitleTaxonomyGateContractTests
         Assert.Contains("titleCategories is { Length: > 0 }", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Measures_taxonomy_coverage_from_the_active_projection_not_version_history()
+    {
+        var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));
+        var coverageStart = source.IndexOf("GetCopartTitleTaxonomyCoverageAsync", StringComparison.Ordinal);
+        var coverageEnd = source.IndexOf("private async Task RefreshSearchFacetsAsync", coverageStart, StringComparison.Ordinal);
+        var coverage = source[coverageStart..coverageEnd];
+
+        Assert.Contains("from inventory_search_current", coverage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("where is_active", coverage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("auction_lot_versions", coverage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("distinct on", coverage, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FindRepositoryFile(string fileName)
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
+        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {
-            var candidate = directory.EnumerateFiles(fileName, SearchOption.AllDirectories).FirstOrDefault(file =>
-                file.FullName.EndsWith($"{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}Lsc.Inventory.Api{Path.DirectorySeparatorChar}{fileName}", StringComparison.OrdinalIgnoreCase) &&
-                !file.FullName.Contains($"{Path.DirectorySeparatorChar}inventory-engine{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
-            if (candidate is not null) return candidate.FullName;
-            directory = directory.Parent;
+            for (var directory = new DirectoryInfo(start); directory is not null; directory = directory.Parent)
+            {
+                var apiProjectDirectory = Path.Combine(directory.FullName, "src", "Lsc.Inventory.Api");
+                if (!Directory.Exists(apiProjectDirectory)) continue;
+
+                var candidate = Directory.EnumerateFiles(apiProjectDirectory, fileName, SearchOption.AllDirectories).FirstOrDefault();
+                if (candidate is not null) return candidate;
+            }
         }
         throw new FileNotFoundException(fileName);
     }

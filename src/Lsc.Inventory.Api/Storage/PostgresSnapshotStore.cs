@@ -2144,19 +2144,11 @@ public sealed partial class PostgresSnapshotStore(
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
-            with latest as (
-                select distinct on (versions.lot_key)
-                    versions.lot_key, versions.payload, lots.platform
-                from auction_lot_versions versions
-                join auction_lots lots on lots.lot_key = versions.lot_key
-                left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = versions.lot_key
-                where coalesce(lifecycle.is_active, true)
-                order by versions.lot_key, versions.observed_at desc
-            )
             select
                 count(*) filter (where lower(platform) = 'copart')::bigint,
                 count(*) filter (where lower(platform) = 'copart' and payload ->> 'title_taxonomy_version' = @version)::bigint
-            from latest;
+            from inventory_search_current
+            where is_active;
             """;
         AddParameter(command, "version", version);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
