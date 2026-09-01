@@ -2140,7 +2140,6 @@ public sealed partial class PostgresSnapshotStore(
     public async Task<CopartTitleTaxonomyCoverage> GetCopartTitleTaxonomyCoverageAsync(CancellationToken cancellationToken)
     {
         const string version = "copart-title-taxonomy-v1";
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;

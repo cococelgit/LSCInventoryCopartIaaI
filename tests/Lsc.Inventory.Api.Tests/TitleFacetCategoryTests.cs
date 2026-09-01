@@ -11,6 +11,7 @@ public sealed class TitleFacetCategoryTests
     [InlineData("CLEAR", TitleFacetCategory.Clean)]
     [InlineData("SALVAGE", TitleFacetCategory.Salvage)]
     [InlineData("SALVAGE - REBUILT", TitleFacetCategory.Rebuilt)]
+    [InlineData("SPECIAL", TitleFacetCategory.Special)]
     [InlineData("CERTIFICATE OF DESTRUCTION", TitleFacetCategory.Special)]
     [InlineData("CT", TitleFacetCategory.Other)]
     [InlineData("NO REPORTADO", TitleFacetCategory.Unverified)]
@@ -49,6 +50,7 @@ public sealed class TitleFacetCategoryTests
         Assert.Contains("'CT'", sql, StringComparison.Ordinal);
         Assert.Contains("'CQ'", sql, StringComparison.Ordinal);
         Assert.Contains("'CD'", sql, StringComparison.Ordinal);
+        Assert.Contains("document = 'SPECIAL' then 'SPECIAL'", sql, StringComparison.Ordinal);
         Assert.True(sql.IndexOf("then 'SPECIAL'", StringComparison.Ordinal) < sql.IndexOf("then 'REBUILT'", StringComparison.Ordinal));
         Assert.True(sql.IndexOf("then 'REBUILT'", StringComparison.Ordinal) < sql.IndexOf("then 'SALVAGE'", StringComparison.Ordinal));
     }

@@ -67,6 +67,7 @@ public static partial class TitleFacetCategory
                 when {normalizedPlatformExpression} = 'copart' and {normalizedSourceExpression} in ({salvageCodes}) then 'SALVAGE'
                 when {normalizedPlatformExpression} = 'copart' and {normalizedSourceExpression} in ({cleanCodes}) then 'CLEAN'
                 when {normalizedPlatformExpression} = 'copart' and {normalizedSourceExpression} in ({otherCodes}) then 'OTHER'
+                when {normalizedSourceExpression} = 'SPECIAL' then 'SPECIAL'
                 when {normalizedSourceExpression} ~ '(^| )(CERTIFICATE OF DESTRUCTION|JUNK|NON REPAIRABLE|PARTS ONLY|SCRAP|CRUSHED|DESTROYED)( |$)' then 'SPECIAL'
                 when {normalizedSourceExpression} ~ '(^| )(REBUILT|RECONSTRUCTED|RECON)( |$)' then 'REBUILT'
                 when {normalizedSourceExpression} ~ '(^| )(SALVAGE|REBUILDABLE)( |$)' then 'SALVAGE'
@@ -81,6 +82,7 @@ public static partial class TitleFacetCategory
     {
         var source = string.IsNullOrWhiteSpace(sourceTitle) ? "NO REPORTADO" : sourceTitle.Trim();
         if (string.IsNullOrEmpty(normalized) || normalized is "UNKNOWN" or "NO REPORTADO" or "NOT REPORTED" or "N A" or "NA") return new(Unverified, "Documento por verificar", []);
+        if (normalized == Special) return new(Special, source, ["Especial"]);
         if (ContainsAny(normalized, "CERTIFICATE OF DESTRUCTION", "JUNK", "NON REPAIRABLE", "PARTS ONLY", "SCRAP", "CRUSHED", "DESTROYED")) return new(Special, source, ["Especial"]);
         if (ContainsAny(normalized, "REBUILT", "RECONSTRUCTED", "RECON")) return new(Rebuilt, source, ["Rebuilt"]);
         if (ContainsAny(normalized, "SALVAGE", "REBUILDABLE")) return new(Salvage, source, ["Salvage"]);
