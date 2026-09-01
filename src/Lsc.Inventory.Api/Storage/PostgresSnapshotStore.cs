@@ -373,7 +373,7 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(projection, "has_key", vehicle.Condition?.HasKey);
         AddParameter(projection, "has_photos", hasPhotos);
         AddParameter(projection, "media_has_360", vehicle.Media?.Has360);
-        AddParameter(projection, "is_buy_now", vehicle.Auction?.IsBuyNow == true || vehicle.Pricing?.BuyNowUsd is not null);
+        AddParameter(projection, "is_buy_now", vehicle.Pricing?.BuyNowUsd is > 0m);
         AddParameter(projection, "is_special_title", specialTitle);
         AddParameter(projection, "observed_at", observedAt);
         AddParameter(projection, "payload", payloadJson);
@@ -1927,12 +1927,12 @@ public sealed partial class PostgresSnapshotStore(
         if (request.OdometerTo.HasValue) { where.Add("latest.odometer <= @odometer_to"); AddParameter(command, "odometer_to", request.OdometerTo.Value); }
         if (request.PriceFrom.HasValue) { where.Add("latest.current_bid_usd >= @price_from"); AddParameter(command, "price_from", request.PriceFrom.Value); }
         if (request.PriceTo.HasValue) { where.Add("latest.current_bid_usd <= @price_to"); AddParameter(command, "price_to", request.PriceTo.Value); }
+        if (request.BuyNowOnly == true || request.BuyNowFrom.HasValue || request.BuyNowTo.HasValue) where.Add("latest.buy_now_usd > 0");
         if (request.BuyNowFrom.HasValue) { where.Add("latest.buy_now_usd >= @buy_now_from"); AddParameter(command, "buy_now_from", request.BuyNowFrom.Value); }
         if (request.BuyNowTo.HasValue) { where.Add("latest.buy_now_usd <= @buy_now_to"); AddParameter(command, "buy_now_to", request.BuyNowTo.Value); }
         if (request.MaxCurrentBid.HasValue) { where.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @max_current_bid)"); AddParameter(command, "max_current_bid", request.MaxCurrentBid.Value); }
         if (request.AuctionFrom.HasValue) { where.Add("latest.auction_at >= @auction_from"); AddParameter(command, "auction_from", request.AuctionFrom.Value); }
         if (request.AuctionTo.HasValue) { where.Add("latest.auction_at <= @auction_to"); AddParameter(command, "auction_to", request.AuctionTo.Value); }
-        if (request.BuyNowOnly == true) where.Add("latest.is_buy_now");
         if (request.WithPhotosOnly == true) where.Add("latest.has_photos");
         if (request.WithBidOnly == true) where.Add("latest.current_bid_usd is not null");
         if (string.Equals(request.KeyMode, "with", StringComparison.OrdinalIgnoreCase)) where.Add("latest.has_key is true");
@@ -2026,7 +2026,7 @@ public sealed partial class PostgresSnapshotStore(
                     case lower(latest.payload #>> '{condition,has_key}') when 'true' then true when 'false' then false end,
                     coalesce(lots.media_photos_count, 0) > 0,
                     lots.media_has_360,
-                    coalesce((latest.payload #>> '{auction,is_buy_now}')::boolean, false) or lots.buy_now_usd is not null,
+                    lots.buy_now_usd > 0,
                     title_facet.category = 'SPECIAL',
                     coalesce(lifecycle.is_active, true), latest.observed_at, latest.payload,
                     concat_ws(' ', lots.lot_key, lots.lot_number, lots.vin, lots.title, lots.make, lots.model,
@@ -2364,12 +2364,12 @@ public sealed partial class PostgresSnapshotStore(
         if (request.OdometerTo.HasValue) { where.Add("latest.odometer <= @odometer_to"); AddParameter(command, "odometer_to", request.OdometerTo.Value); }
         if (request.PriceFrom.HasValue) { where.Add("latest.current_bid_usd >= @price_from"); AddParameter(command, "price_from", request.PriceFrom.Value); }
         if (request.PriceTo.HasValue) { where.Add("latest.current_bid_usd <= @price_to"); AddParameter(command, "price_to", request.PriceTo.Value); }
+        if (request.BuyNowOnly == true || request.BuyNowFrom.HasValue || request.BuyNowTo.HasValue) where.Add("latest.buy_now_usd > 0");
         if (request.BuyNowFrom.HasValue) { where.Add("latest.buy_now_usd >= @buy_now_from"); AddParameter(command, "buy_now_from", request.BuyNowFrom.Value); }
         if (request.BuyNowTo.HasValue) { where.Add("latest.buy_now_usd <= @buy_now_to"); AddParameter(command, "buy_now_to", request.BuyNowTo.Value); }
         if (request.MaxCurrentBid.HasValue) { where.Add("(latest.current_bid_usd is null or latest.current_bid_usd <= @max_current_bid)"); AddParameter(command, "max_current_bid", request.MaxCurrentBid.Value); }
         if (request.AuctionFrom.HasValue) { where.Add("latest.auction_at >= @auction_from"); AddParameter(command, "auction_from", request.AuctionFrom.Value); }
         if (request.AuctionTo.HasValue) { where.Add("latest.auction_at <= @auction_to"); AddParameter(command, "auction_to", request.AuctionTo.Value); }
-        if (request.BuyNowOnly == true) where.Add("(latest.buy_now_usd is not null or lower(coalesce(latest.payload #>> '{Auction,IsBuyNow}', 'false')) = 'true')");
         if (request.WithPhotosOnly == true) where.Add("(coalesce(jsonb_array_length(latest.payload #> '{Media,Photos}'), 0) > 0 or coalesce(jsonb_array_length(latest.payload #> '{Media,Items}'), 0) > 0)");
         if (request.WithBidOnly == true) where.Add("latest.current_bid_usd is not null");
         if (string.Equals(request.KeyMode, "with", StringComparison.OrdinalIgnoreCase)) where.Add("lower(coalesce(latest.payload #>> '{Condition,HasKey}', '')) = 'true'");

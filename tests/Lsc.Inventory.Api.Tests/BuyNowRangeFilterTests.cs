@@ -37,6 +37,31 @@ public sealed class BuyNowRangeFilterTests
     }
 
     [Fact]
+    public async Task BuyNowOnlyRequiresAPositivePriceEvenWhenTheProviderFlagIsActive()
+    {
+        var store = new InMemorySnapshotStore();
+        var observedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
+        await store.PersistAsync(new AuctionVehicle
+        {
+            Platform = "copart",
+            LotNumber = "zero-price-flagged",
+            Auction = new AuctionInfo { IsBuyNow = true },
+            Pricing = new PricingInfo { BuyNowUsd = 0m }
+        }, observedAt, CancellationToken.None);
+        await store.PersistAsync(new AuctionVehicle
+        {
+            Platform = "copart",
+            LotNumber = "positive-price",
+            Pricing = new PricingInfo { BuyNowUsd = 8_000m }
+        }, observedAt, CancellationToken.None);
+
+        var result = await store.SearchAsync(new InventorySearchRequest(1, 20, BuyNowOnly: true), CancellationToken.None);
+
+        var matching = Assert.Single(result.Items);
+        Assert.Equal("positive-price", matching.Vehicle.LotNumber);
+    }
+
+    [Fact]
     public void ProjectionFallbackAndFacetsApplyDedicatedBuyNowColumns()
     {
         var root = FindRepositoryRoot();
@@ -46,8 +71,10 @@ public sealed class BuyNowRangeFilterTests
 
         Assert.True(Count(postgres, "latest.buy_now_usd >= @buy_now_from") >= 2);
         Assert.True(Count(postgres, "latest.buy_now_usd <= @buy_now_to") >= 2);
+        Assert.True(Count(postgres, "latest.buy_now_usd > 0") >= 2);
         Assert.Contains("latest.buy_now_usd >= @facet_buy_now_from", facets);
         Assert.Contains("latest.buy_now_usd <= @facet_buy_now_to", facets);
+        Assert.Contains("latest.buy_now_usd > 0", facets);
         Assert.Contains("decimal? buyNowFrom", program);
         Assert.Contains("decimal? buyNowTo", program);
         Assert.Contains("BuyNowFrom: buyNowFrom", program);

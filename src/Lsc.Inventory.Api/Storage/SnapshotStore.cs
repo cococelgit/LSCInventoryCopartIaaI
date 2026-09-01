@@ -1186,6 +1186,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         if (request.OdometerTo.HasValue && (vehicle.Odometer ?? decimal.MaxValue) > request.OdometerTo.Value) return false;
         if (request.PriceFrom.HasValue && (vehicle.Pricing?.CurrentBidUsd ?? decimal.MinValue) < request.PriceFrom.Value) return false;
         if (request.PriceTo.HasValue && (vehicle.Pricing?.CurrentBidUsd ?? decimal.MaxValue) > request.PriceTo.Value) return false;
+        if ((request.BuyNowOnly == true || request.BuyNowFrom.HasValue || request.BuyNowTo.HasValue) && vehicle.Pricing?.BuyNowUsd is not > 0m) return false;
         if (request.BuyNowFrom.HasValue && (vehicle.Pricing?.BuyNowUsd ?? decimal.MinValue) < request.BuyNowFrom.Value) return false;
         if (request.BuyNowTo.HasValue && (vehicle.Pricing?.BuyNowUsd ?? decimal.MaxValue) > request.BuyNowTo.Value) return false;
         if (request.MaxCurrentBid.HasValue && vehicle.Pricing?.CurrentBidUsd is decimal currentBid && currentBid > request.MaxCurrentBid.Value) return false;
@@ -1206,7 +1207,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         if (string.Equals(request.AuctionStatus, "open", StringComparison.OrdinalIgnoreCase) && !status.Contains("open", StringComparison.OrdinalIgnoreCase) && !status.Contains("active", StringComparison.OrdinalIgnoreCase)) return false;
         if (string.Equals(request.AuctionStatus, "live", StringComparison.OrdinalIgnoreCase) && !status.Contains("live", StringComparison.OrdinalIgnoreCase)) return false;
         if (string.Equals(request.AuctionStatus, "finished", StringComparison.OrdinalIgnoreCase) && !status.Contains("finished", StringComparison.OrdinalIgnoreCase) && !status.Contains("ended", StringComparison.OrdinalIgnoreCase) && !status.Contains("sold", StringComparison.OrdinalIgnoreCase)) return false;
-        return request.BuyNowOnly != true || vehicle.Auction?.IsBuyNow == true || vehicle.Pricing?.BuyNowUsd is not null;
+        return true;
     }
 
     private bool MatchesScoring(string lotKey, InventorySearchRequest request)

@@ -482,7 +482,7 @@ public sealed partial class PostgresSnapshotStore
             AddParameter(command, "facet_query_like", $"%{request.Query.Trim()}%");
         }
         if (request.ExcludeSpecialTitles) where.Add("not latest.is_special_title");
-        if (request.BuyNowOnly == true) where.Add("latest.is_buy_now");
+        if (request.BuyNowOnly == true || request.BuyNowFrom.HasValue || request.BuyNowTo.HasValue) where.Add("latest.buy_now_usd > 0");
         if (request.BuyNowFrom.HasValue) { where.Add("latest.buy_now_usd >= @facet_buy_now_from"); AddParameter(command, "facet_buy_now_from", request.BuyNowFrom.Value); }
         if (request.BuyNowTo.HasValue) { where.Add("latest.buy_now_usd <= @facet_buy_now_to"); AddParameter(command, "facet_buy_now_to", request.BuyNowTo.Value); }
         if (request.WithPhotosOnly == true) where.Add("latest.has_photos");
