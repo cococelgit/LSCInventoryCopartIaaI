@@ -532,12 +532,13 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         var snapshotChange = !_snapshots.TryGetValue(identity, out var existing)
             ? "created"
             : string.Equals(existing.RawJson, rawJson, StringComparison.Ordinal) ? "unchanged" : "updated";
+        var policyVersion = LscScoringPolicy.ResolveVersion(vehicle.Platform);
         var inputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
 
         _snapshots[identity] = new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson);
         _lifecycle[identity] = (InventorySourcePolicy.CopartExcelSource, true, 0);
         if (_scores.TryGetValue(identity, out var current) &&
-            string.Equals(current.PolicyVersion, LscScoringPolicy.Version, StringComparison.Ordinal) &&
+            string.Equals(current.PolicyVersion, policyVersion, StringComparison.Ordinal) &&
             string.Equals(current.InputHash, inputHash, StringComparison.Ordinal))
         {
             return Task.FromResult(new CopartInlineScoringPersistenceResult(snapshotChange, false, true, current, TimeSpan.Zero));
@@ -562,7 +563,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
                 if (!eligibility.LoadToSystem) return false;
                 var inputHash = LscVehicleScoringEngine.CreateInputHash(snapshot.Vehicle, eligibility);
                 return !_scores.TryGetValue(snapshot.Identity, out var score) ||
-                       !string.Equals(score.PolicyVersion, LscScoringPolicy.Version, StringComparison.Ordinal) ||
+                       !string.Equals(score.PolicyVersion, LscScoringPolicy.CopartPolicyVersion, StringComparison.Ordinal) ||
                        !string.Equals(score.InputHash, inputHash, StringComparison.Ordinal) ||
                        score.ScoredAt < snapshot.ObservedAt;
             })
@@ -587,7 +588,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             {
                 var eligibility = AuctionEligibilityEvaluator.Evaluate(item.snapshot.Vehicle, item.snapshot.ObservedAt);
                 return eligibility.LoadToSystem &&
-                       string.Equals(item.score!.PolicyVersion, LscScoringPolicy.Version, StringComparison.Ordinal) &&
+                       string.Equals(item.score!.PolicyVersion, LscScoringPolicy.CopartPolicyVersion, StringComparison.Ordinal) &&
                        string.Equals(item.score.InputHash, LscVehicleScoringEngine.CreateInputHash(item.snapshot.Vehicle, eligibility), StringComparison.Ordinal);
             })
             .ToArray();
@@ -612,7 +613,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle);
             var inputHash = LscVehicleScoringEngine.CreateInputHash(snapshot.Vehicle, eligibility);
             if (_scores.TryGetValue(snapshot.Identity, out var score) &&
-                score.PolicyVersion == LscScoringPolicy.Version && score.InputHash == inputHash)
+                score.PolicyVersion == LscScoringPolicy.ResolveVersion(snapshot.Vehicle.Platform) && score.InputHash == inputHash)
             {
                 current++;
                 continue;
@@ -655,7 +656,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             {
                 var items = group.ToArray();
                 var current = items.Count(item => _scores.TryGetValue(item.Identity, out var score)
-                    && score.PolicyVersion == LscScoringPolicy.Version
+                    && score.PolicyVersion == LscScoringPolicy.ResolveVersion(item.Vehicle.Platform)
                     && score.InputHash == LscVehicleScoringEngine.CreateInputHash(item.Vehicle, AuctionEligibilityEvaluator.Evaluate(item.Vehicle)));
                 var queued = items.Where(item => _scoringQueue.ContainsKey(item.Identity)).ToArray();
                 return new InventoryScoringPlatformStatus(group.Key, items.Length, current, queued.Length, 0, 0, items.Length - current,

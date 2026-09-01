@@ -75,7 +75,7 @@ public sealed partial class PostgresSnapshotStore
             order by current.observed_at asc, current.lot_key asc
             limit @limit;
             """;
-        AddParameter(command, "policy_version", LscScoringPolicy.Version);
+        AddParameter(command, "policy_version", LscScoringPolicy.CopartPolicyVersion);
         AddParameter(command, "limit", limit);
         var candidates = new List<StoredVehicleSnapshot>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -114,7 +114,7 @@ public sealed partial class PostgresSnapshotStore
                 left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
                 where current.is_active and lower(current.platform) = 'copart';
                 """;
-            AddParameter(totals, "policy_version", LscScoringPolicy.Version);
+            AddParameter(totals, "policy_version", LscScoringPolicy.CopartPolicyVersion);
             await using var reader = await totals.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             activeLots = reader.GetInt64(0);
@@ -136,7 +136,7 @@ public sealed partial class PostgresSnapshotStore
                 group by score.status
                 order by score.status;
                 """;
-            AddParameter(byStatus, "policy_version", LscScoringPolicy.Version);
+            AddParameter(byStatus, "policy_version", LscScoringPolicy.CopartPolicyVersion);
             await using var reader = await byStatus.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken)) statuses[reader.GetString(0)] = reader.GetInt64(1);
         }
@@ -162,7 +162,7 @@ public sealed partial class PostgresSnapshotStore
                 where current.is_active
                   and (
                     score.lot_key is null
-                    or score.policy_version <> @policy_version
+                    or score.policy_version <> case when lower(current.platform) = 'copart' then @copart_policy_version else @default_policy_version end
                     or score.source_observed_at <> current.observed_at
                     or (queue.status = 'failed' and queue.attempts < @maximum_attempts)
                   )
@@ -191,7 +191,8 @@ public sealed partial class PostgresSnapshotStore
             )
             select (select count(*)::int from candidates), (select count(*)::int from upserted);
             """;
-        AddParameter(command, "policy_version", LscScoringPolicy.Version);
+        AddParameter(command, "default_policy_version", LscScoringPolicy.IAAIPolicyVersion);
+        AddParameter(command, "copart_policy_version", LscScoringPolicy.CopartPolicyVersion);
         AddParameter(command, "limit", limit);
         AddParameter(command, "priority", BackfillPriorityScoring);
         AddParameter(command, "maximum_attempts", MaximumScoringAttempts);
@@ -387,7 +388,7 @@ public sealed partial class PostgresSnapshotStore
             select active.platform,
                    count(*)::bigint as active_count,
                    count(*) filter (where score.lot_key is not null
-                       and score.policy_version = @policy_version
+                       and score.policy_version = case when active.platform = 'copart' then @copart_policy_version else @default_policy_version end
                        and score.source_observed_at = active.observed_at)::bigint as current_count,
                    count(*) filter (where queue.status = 'queued')::bigint as queued_count,
                    count(*) filter (where queue.status = 'processing')::bigint as processing_count,
@@ -395,7 +396,7 @@ public sealed partial class PostgresSnapshotStore
                    count(*) filter (where queue.status = 'queued' and queue.priority >= @high_priority)::bigint as high_priority_queued,
                    min(queue.requested_at) filter (where queue.status = 'queued'),
                    max(score.scored_at) filter (where score.lot_key is not null
-                       and score.policy_version = @policy_version
+                       and score.policy_version = case when active.platform = 'copart' then @copart_policy_version else @default_policy_version end
                        and score.source_observed_at = active.observed_at)
             from active_inventory active
             left join inventory_vehicle_score_current score on score.lot_key = active.lot_key
@@ -403,7 +404,8 @@ public sealed partial class PostgresSnapshotStore
             group by active.platform
             order by active.platform;
             """;
-        AddParameter(command, "policy_version", LscScoringPolicy.Version);
+        AddParameter(command, "default_policy_version", LscScoringPolicy.IAAIPolicyVersion);
+        AddParameter(command, "copart_policy_version", LscScoringPolicy.CopartPolicyVersion);
         AddParameter(command, "high_priority", HighPriorityScoring);
         var statuses = new List<InventoryScoringPlatformStatus>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

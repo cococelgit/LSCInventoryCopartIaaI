@@ -251,6 +251,7 @@ public sealed partial class PostgresSnapshotStore(
         var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
 
+        var policyVersion = LscScoringPolicy.ResolveVersion(vehicle.Platform);
         var scoreInputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
         var scoringDuration = TimeSpan.Zero;
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -287,7 +288,7 @@ public sealed partial class PostgresSnapshotStore(
             await using var reader = await current.ExecuteReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
             {
-                scoreCurrent = string.Equals(reader.GetString(0), LscScoringPolicy.Version, StringComparison.Ordinal) &&
+                scoreCurrent = string.Equals(reader.GetString(0), policyVersion, StringComparison.Ordinal) &&
                                string.Equals(reader.GetString(1), scoreInputHash, StringComparison.Ordinal);
             }
         }
@@ -357,7 +358,7 @@ public sealed partial class PostgresSnapshotStore(
                 """;
             AddParameter(touch, "lot_key", identity);
             AddParameter(touch, "source_observed_at", observedAtUtc);
-            AddParameter(touch, "policy_version", LscScoringPolicy.Version);
+            AddParameter(touch, "policy_version", policyVersion);
             AddParameter(touch, "input_hash", scoreInputHash);
             await touch.ExecuteNonQueryAsync(cancellationToken);
         }

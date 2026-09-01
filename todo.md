@@ -260,3 +260,13 @@
 - [x] Mantener `CurrentBidUsd = 0` válido y separado de Buy Now, sin cambiar IAAI ni el limpiador genérico.
 - [x] Cubrir Buy Now positivo, cero, negativo, vacío, inválido y puja cero con pruebas deterministas. `dotnet test inventory-engine/Lsc.Inventory.sln -c Release` aprobó 129/129 y `pnpm check` aprobó.
 - [ ] El agente de API/portal debe filtrar, contar y mostrar Buy Now mediante `buy_now_usd > 0` antes de paginar; este cambio no despliega API ni jobs.
+
+## Copart Pre-Grade v2 con banderas
+
+- [x] Mantener IAAI en `lsc_pre_grade_v1` y aplicar `lsc_pre_grade_v2` exclusivamente a Copart.
+- [x] Convertir incertidumbres Copart no bloqueantes (`M02`, `M04`, `M07` y demás `MARCAR`) en `PRE_GRADED_WITH_FLAGS` con pre-grado numérico, confianza, penalidades y códigos explicables.
+- [x] Conservar `DISCARDED` y cuarentenas sin nota numérica; no modificar D01–D10, D09, fuentes, media, Buy Now ni reconciliación.
+- [x] Corregir el reconocimiento de `RUNS_AND_DRIVES` normalizado como condición mecánica afirmativa sin usar `DriveType`.
+- [x] Hacer que persistencia, backfill y cobertura exclusivos de Copart detecten el cambio de política v1 → v2; el estado compartido calcula versión esperada por plataforma para no reencolar Copart v2 como pendiente.
+- [x] Validar con 134/134 pruebas .NET y `pnpm check`; simulación del snapshot de referencia a fecha de venta válida: 61,109 lotes elegibles pasarían a `PRE_GRADED_WITH_FLAGS`, frente a no recibir pre-grado v1 por M04/M07. No se ejecutó job ni despliegue.
+- [x] Preparar `PROMPT_API_AGENT_COPART_PRE_GRADE_V2.md` para notificar compatibilidad de contrato y presentación al agente de API antes de promover v2.

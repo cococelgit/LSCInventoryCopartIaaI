@@ -23,7 +23,7 @@ public sealed class LscVehicleScoringEngineTests
     }
 
     [Fact]
-    public void Material_flag_requires_manual_review_before_pre_grade()
+    public void IAAI_material_flag_requires_manual_review_before_pre_grade()
     {
         var vehicle = ValidVehicle() with { Condition = ValidVehicle().Condition! with { RunCondition = null } };
         var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
@@ -32,6 +32,73 @@ public sealed class LscVehicleScoringEngineTests
         Assert.Null(result.PreGrade);
         Assert.Contains("M04", result.ReasonCodes);
         Assert.Contains("manual_review.resolution", result.MissingFields);
+        Assert.Equal(LscScoringPolicy.IAAIPolicyVersion, result.PolicyVersion);
+    }
+
+    [Fact]
+    public void Copart_unverified_run_condition_and_conditional_terms_receive_provisional_score_with_flags()
+    {
+        var vehicle = ValidVehicle() with
+        {
+            Platform = "copart",
+            Condition = ValidVehicle().Condition! with { RunCondition = new RunConditionInfo { Normalized = "UNVERIFIED", Raw = "DEFAULT" } },
+            Auction = ValidVehicle().Auction! with { State = "ON MINIMUM BID", LotStatus = "ON MINIMUM BID" }
+        };
+        var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
+
+        Assert.Equal("PRE_GRADED_WITH_FLAGS", result.Status);
+        Assert.NotNull(result.PreGrade);
+        Assert.True(result.PreGrade >= 0m);
+        Assert.Contains("M04", result.ReasonCodes);
+        Assert.Contains("M07", result.ReasonCodes);
+        Assert.Contains("manual_review.resolution", result.MissingFields);
+        Assert.Equal(LscScoringPolicy.CopartPolicyVersion, result.PolicyVersion);
+    }
+
+    [Fact]
+    public void Copart_runs_and_drives_normalized_value_receives_full_mechanical_factor()
+    {
+        var vehicle = ValidVehicle() with
+        {
+            Platform = "copart",
+            Condition = ValidVehicle().Condition! with { RunCondition = new RunConditionInfo { Normalized = "RUNS_AND_DRIVES", Raw = "RUN & DRIVE" } }
+        };
+        var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
+
+        Assert.Equal("PRE_GRADED_WITH_FLAGS", result.Status);
+        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.Evaluated && factor.Points == 15m);
+        Assert.DoesNotContain("M04", result.ReasonCodes);
+    }
+
+    [Fact]
+    public void Copart_low_coverage_receives_numeric_provisional_score_instead_of_needs_enrichment()
+    {
+        var vehicle = ValidVehicle() with
+        {
+            Platform = "copart",
+            Seller = null,
+            Condition = ValidVehicle().Condition! with { PrimaryDamage = null, RunCondition = null },
+            OdometerInfo = new OdometerInfo { Miles = 0, Status = "NOT ACTUAL" }
+        };
+        var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
+
+        Assert.Equal("PRE_GRADED_WITH_FLAGS", result.Status);
+        Assert.NotNull(result.PreGrade);
+        Assert.True(result.CoveragePercent < LscScoringPolicy.MinimumCoveragePercent);
+        Assert.Contains("M04", result.ReasonCodes);
+        Assert.Contains("M05", result.ReasonCodes);
+    }
+
+    [Fact]
+    public void Copart_discarded_vehicle_remains_without_numeric_score_under_v2()
+    {
+        var vehicle = ValidVehicle() with { Platform = "copart", Condition = ValidVehicle().Condition! with { PrimaryDamage = "Flood" } };
+        var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
+
+        Assert.Equal("DISCARDED", result.Status);
+        Assert.Null(result.PreGrade);
+        Assert.Contains("D05", result.ReasonCodes);
+        Assert.Equal(LscScoringPolicy.CopartPolicyVersion, result.PolicyVersion);
     }
 
     [Fact]
@@ -45,6 +112,7 @@ public sealed class LscVehicleScoringEngineTests
         Assert.Equal(60m, result.MaxPointsEvaluable);
         Assert.Equal(100m, result.CoveragePercent);
         Assert.Null(result.BuyScore);
+        Assert.Equal(LscScoringPolicy.IAAIPolicyVersion, result.PolicyVersion);
         Assert.Contains("profitability.total_cost", result.MissingFields);
         Assert.Contains("demand.market_comparables", result.MissingFields);
     }
@@ -83,6 +151,20 @@ public sealed class LscVehicleScoringEngineTests
         Assert.Contains(result.Penalties, penalty => penalty.Code == "P02" && penalty.Points == -3m);
         Assert.Contains(result.Penalties, penalty => penalty.Code == "P03" && penalty.Points == -8m);
         Assert.DoesNotContain(result.Factors.SelectMany(factor => factor.SourceFields), field => field.Contains("media", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Input_hash_changes_when_the_platform_policy_changes()
+    {
+        var iaai = ValidVehicle();
+        var copart = iaai with { Platform = "copart" };
+
+        var iaaiHash = LscVehicleScoringEngine.CreateInputHash(iaai, AuctionEligibilityEvaluator.Evaluate(iaai, EvaluationTime));
+        var copartHash = LscVehicleScoringEngine.CreateInputHash(copart, AuctionEligibilityEvaluator.Evaluate(copart, EvaluationTime));
+
+        Assert.NotEqual(iaaiHash, copartHash);
+        Assert.Equal(LscScoringPolicy.IAAIPolicyVersion, LscScoringPolicy.ResolveVersion(iaai.Platform));
+        Assert.Equal(LscScoringPolicy.CopartPolicyVersion, LscScoringPolicy.ResolveVersion(copart.Platform));
     }
 
     [Fact]

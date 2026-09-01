@@ -7,17 +7,26 @@ namespace Lsc.Inventory.Api.Scoring;
 
 public static class LscScoringPolicy
 {
-    public const string Version = "lsc_pre_grade_v1";
+    public const string IAAIPolicyVersion = "lsc_pre_grade_v1";
+    // Compatibility default for existing non-Copart callers; Copart resolves explicitly to v2.
+    public const string Version = IAAIPolicyVersion;
+    public const string CopartPolicyVersion = "lsc_pre_grade_v2";
     public const decimal PreGradeMaximumPoints = 60m;
     public const decimal MinimumCoveragePercent = 70m;
 
-    // These flags require an advisor to resolve a material uncertainty before a recommendation is shown.
+    // IAAI v1 retains the strict manual-review gate. Copart v2 exposes a conservative numeric score
+    // with explicit flags for these uncertainties, rather than treating missing source fields as a verdict.
     public static readonly IReadOnlySet<string> ManualReviewFlagCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "M02", // Copart title code without approved equivalence.
         "M04", // Runs and drives is not confirmed.
         "M07"  // Sale is conditional or subject to approval/minimum bid.
     };
+
+    public static string ResolveVersion(string? platform) =>
+        string.Equals(platform?.Trim(), "copart", StringComparison.OrdinalIgnoreCase)
+            ? CopartPolicyVersion
+            : IAAIPolicyVersion;
 }
 
 public sealed record LscScoringFactor(
@@ -60,12 +69,15 @@ public static class LscVehicleScoringEngine
     private const string StatusManualReview = "MANUAL_REVIEW";
     private const string StatusNeedsEnrichment = "NEEDS_ENRICHMENT";
     private const string StatusPreGraded = "PRE_GRADED";
+    private const string StatusPreGradedWithFlags = "PRE_GRADED_WITH_FLAGS";
 
     public static LscVehicleScoringResult Evaluate(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset? scoredAt = null)
     {
         var now = scoredAt ?? DateTimeOffset.UtcNow;
         var lotKey = BuildLotKey(vehicle);
         var platform = Normalize(vehicle.Platform);
+        var policyVersion = LscScoringPolicy.ResolveVersion(platform);
+        var isCopartV2 = string.Equals(policyVersion, LscScoringPolicy.CopartPolicyVersion, StringComparison.Ordinal);
         var inputHash = CreateInputHash(vehicle, eligibility);
         var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -91,12 +103,14 @@ public static class LscVehicleScoringEngine
             .Where(flag => LscScoringPolicy.ManualReviewFlagCodes.Contains(flag.Code))
             .Select(flag => flag.Code)
             .ToArray();
-        if (manualFlags.Length > 0)
+        if (manualFlags.Length > 0 && !isCopartV2)
         {
             missing.Add("manual_review.resolution");
             return Blocked(lotKey, platform, StatusManualReview, manualFlags, missing, inputHash, now,
-                "Una alerta material debe ser resuelta por un asesor antes de emitir un Pre-grado.");
+                "Una alerta material debe ser resuelta por un asesor antes de emitir un Pre-grado.", policyVersion);
         }
+        if (manualFlags.Length > 0)
+            missing.Add("manual_review.resolution");
 
         var factors = new List<LscScoringFactor>
         {
@@ -114,10 +128,14 @@ public static class LscVehicleScoringEngine
         var coverage = RoundPercent(maxPointsEvaluable, LscScoringPolicy.PreGradeMaximumPoints);
         var confidence = Math.Max(0m, coverage - penalties.Where(penalty => penalty.Code == "P04").Sum(penalty => Math.Abs(penalty.Points)));
         var isVisible = coverage >= LscScoringPolicy.MinimumCoveragePercent;
-        decimal? preGrade = isVisible ? Math.Max(0m, factorPoints + penaltyPoints) : null;
-        var status = isVisible ? StatusPreGraded : StatusNeedsEnrichment;
+        var hasAdvisoryFlags = eligibility.Flags.Count > 0;
+        decimal? preGrade = isCopartV2 || isVisible ? Math.Max(0m, factorPoints + penaltyPoints) : null;
+        var status = isCopartV2
+            ? hasAdvisoryFlags || !isVisible ? StatusPreGradedWithFlags : StatusPreGraded
+            : isVisible ? StatusPreGraded : StatusNeedsEnrichment;
         var reasons = factors.Where(factor => factor.Evaluated).Select(factor => factor.Code)
             .Concat(penalties.Select(penalty => penalty.Code))
+            .Concat(isCopartV2 ? eligibility.Flags.Select(flag => flag.Code) : [])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(code => code, StringComparer.Ordinal)
             .ToArray();
@@ -136,7 +154,7 @@ public static class LscVehicleScoringEngine
             penalties,
             reasons,
             missing.OrderBy(field => field, StringComparer.Ordinal).ToArray(),
-            LscScoringPolicy.Version,
+            policyVersion,
             inputHash,
             now);
     }
@@ -145,7 +163,7 @@ public static class LscVehicleScoringEngine
     {
         var fields = new[]
         {
-            LscScoringPolicy.Version,
+            LscScoringPolicy.ResolveVersion(vehicle.Platform),
             Normalize(vehicle.Platform),
             Normalize(vehicle.LotNumber),
             Normalize(vehicle.Vin),
@@ -173,7 +191,8 @@ public static class LscVehicleScoringEngine
         IReadOnlyCollection<string> missing,
         string inputHash,
         DateTimeOffset now,
-        string explanation)
+        string explanation,
+        string? policyVersion = null)
     {
         var factor = new LscScoringFactor("GATE", "Filtro de elegibilidad", 0m, 0m, false, explanation, ["eligibility.decision"]);
         return new LscVehicleScoringResult(
@@ -190,7 +209,7 @@ public static class LscVehicleScoringEngine
             [],
             reasonCodes.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(code => code, StringComparer.Ordinal).ToArray(),
             missing.OrderBy(field => field, StringComparer.Ordinal).ToArray(),
-            LscScoringPolicy.Version,
+            policyVersion ?? LscScoringPolicy.ResolveVersion(platform),
             inputHash,
             now);
     }
@@ -227,7 +246,7 @@ public static class LscVehicleScoringEngine
                 "La subasta no declaró una condición de marcha utilizable.", ["condition.run_condition"]);
         }
 
-        var points = runCondition.Contains("RUNS AND DRIVES", StringComparison.Ordinal) ? 15m
+        var points = runCondition.Contains("RUNS AND DRIVES", StringComparison.Ordinal) || runCondition.Contains("RUNS_AND_DRIVES", StringComparison.Ordinal) ? 15m
             : runCondition.Contains("START", StringComparison.Ordinal) ? 9m
             : runCondition.Contains("STATIONARY", StringComparison.Ordinal) ? 3m
             : 5m;

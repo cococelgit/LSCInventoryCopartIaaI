@@ -133,7 +133,7 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.True(result.IsComplete);
         Assert.Equal(1, result.Accepted);
         Assert.NotNull(score);
-        Assert.Equal("lsc_pre_grade_v1", score!.PolicyVersion);
+        Assert.Equal("lsc_pre_grade_v2", score!.PolicyVersion);
         Assert.Equal("PRE_GRADED", score.Status);
         Assert.Equal(1, result.InlineScoring!.Created);
         Assert.Equal(1, result.InlineScoring.ScoredInline);
@@ -163,7 +163,7 @@ public sealed class CopartExcelSnapshotProcessorTests
     }
 
     [Fact]
-    public async Task Marked_copart_lot_is_persisted_with_manual_review_score()
+    public async Task Marked_copart_lot_is_persisted_with_provisional_score_and_flags()
     {
         var options = TestOptions();
         var store = new InMemorySnapshotStore();
@@ -176,7 +176,10 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal(1, result.Accepted);
         Assert.Equal(1, result.Marked);
         Assert.NotNull(score);
-        Assert.Equal("MANUAL_REVIEW", score!.Status);
+        Assert.Equal("PRE_GRADED_WITH_FLAGS", score!.Status);
+        Assert.NotNull(score.PreGrade);
+        Assert.Contains("M04", score.ReasonCodes);
+        Assert.Equal("lsc_pre_grade_v2", score.PolicyVersion);
         Assert.Equal(1, result.InlineScoring!.ScoredInline);
     }
 
