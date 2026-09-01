@@ -1,0 +1,112 @@
+name: Inventory API Azure Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_auctions_api:
+        description: "Enable AuctionsAPI client; keep false for a code-only rollout"
+        required: true
+        default: false
+        type: boolean
+      allow_auctions_writes:
+        description: "Allow canonical writes from AuctionsAPI; must remain false for the first rollout"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: inventory-api-azure-deploy
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  INVENTORY_API_APP_NAME: ca-lsc-inventory-api-prod
+
+jobs:
+  deploy-api:
+    name: Build and deploy Inventory API only
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout selected commit
+        uses: actions/checkout@v4
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture current API image
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_image="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          test -n "$current_image" && test "$current_image" != "None"
+          echo "CURRENT_API_IMAGE=$current_image" >> "$GITHUB_ENV"
+          echo "Current API image: $current_image"
+
+      - name: Build immutable API image in ACR
+        run: |
+          set -euo pipefail
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "$IMAGE_NAME:api-${GITHUB_SHA}" \
+            --file inventory-engine/Dockerfile \
+            inventory-engine
+
+      - name: Enforce safe first rollout flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.allow_auctions_writes }}" == "true" ]]; then
+            echo "Canonical AuctionsAPI writes are not allowed in this deployment workflow." >&2
+            exit 2
+          fi
+
+      - name: Update only the Inventory API revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${ACR_SERVER}/${IMAGE_NAME}:api-${GITHUB_SHA}"
+          az containerapp update \
+            --name "$INVENTORY_API_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$image" \
+            --revision-suffix "api-${GITHUB_SHA:0:12}" \
+            --set-env-vars \
+              "AuctionsApi__Enabled=${{ inputs.enable_auctions_api }}" \
+              "AuctionsApi__AllowWrites=false" \
+            --only-show-errors
+
+      - name: Verify deployed revision and safe flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployed_image="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          test "$deployed_image" = "${ACR_SERVER}/${IMAGE_NAME}:api-${GITHUB_SHA}"
+          echo "Deployed image: $deployed_image"
+          echo "AuctionsAPI enabled: ${{ inputs.enable_auctions_api }}"
+          echo "AuctionsAPI writes: false"
+          echo "Previous image for rollback: $CURRENT_API_IMAGE"
+          {
+            echo "### Inventory API deployment"
+            echo "- Image: \\`$deployed_image\\`"
+            echo "- AuctionsAPI enabled: \\`${{ inputs.enable_auctions_api }}\\`"
+            echo "- AuctionsAPI writes: \\`false\\`"
+            echo "- Previous image: \\`$CURRENT_API_IMAGE\\`"
+          } >> "$GITHUB_STEP_SUMMARY"
