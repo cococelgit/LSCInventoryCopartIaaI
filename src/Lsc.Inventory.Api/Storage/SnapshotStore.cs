@@ -70,7 +70,8 @@ public sealed record InventorySyncRunCompletion(
     int? Errors = null,
     int? PagesProcessed = null,
     bool? CycleCompleted = null,
-    InventoryReconciliationResult? Reconciliation = null);
+    InventoryReconciliationResult? Reconciliation = null,
+    bool Cancelled = false);
 
 public sealed record InventoryLotPersistenceResult(string LotKey, string Action, IReadOnlyList<string> ChangedFields);
 
@@ -784,7 +785,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     {
         var runEvents = events.Where(item => item.RunId == runId).ToArray();
         int Count(string action) => runEvents.Count(item => string.Equals(item.Action, action, StringComparison.OrdinalIgnoreCase));
-        var status = completion is null ? "running" : completion.Failures.Count == 0 ? "succeeded" : "completed_with_errors";
+        var status = completion is null ? "running" : completion.Cancelled ? "cancelled" : completion.Failures.Count == 0 ? "succeeded" : "completed_with_errors";
         return new InventoryExecutionSummary(
             runId, start.Provider, start.Platform, start.State, status, start.StartedAt, completion?.FinishedAt,
             completion?.VehiclesObserved ?? 0, completion?.RequestsIssued ?? 0, completion?.Loaded,
