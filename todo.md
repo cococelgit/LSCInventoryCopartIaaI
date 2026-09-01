@@ -273,7 +273,7 @@
 
 ## Métricas de persistencia por ejecución Copart
 - [x] Identificar si cada persistencia de lote Copart fue alta nueva, actualización o sin cambio, sin alterar elegibilidad, historial ni lifecycle.
-- [x] Persistir los conteos de altas, actualizaciones y sin cambio en el manifiesto/auditoría de cada snapshot Copart completo.
+- [x] Confirmar que los conteos de altas, actualizaciones y sin cambio se persisten en el manifiesto de cada snapshot Copart completo; exponerlos en auditoría mediante unión por `run_id`, sin migración general.
 - [x] Mantener `N/D` para duplicados, lock ocupado, snapshots inválidos e invocaciones sin procesamiento por filas.
 - [x] Añadir pruebas de conteo por resultado de persistencia y de no-op seguro.
-- [x] Ejecutar validación .NET y TypeScript, revisar el diff y publicar únicamente los cambios Copart autorizados.
+- [x] Ejecutar validación .NET y TypeScript, revisar el diff y publicar únicamente los cambios Copart autorizados. La promoción queda bloqueada hasta que el API interno implemente la unión de auditoría.

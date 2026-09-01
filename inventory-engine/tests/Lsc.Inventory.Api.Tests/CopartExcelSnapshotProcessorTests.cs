@@ -54,10 +54,8 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal("copart", runs[0].Start.Platform);
         Assert.Equal("all", runs[0].Start.State);
         Assert.Equal(result.Observed, runs[0].Completion!.VehiclesObserved);
-        Assert.Equal(new InventoryPersistenceChangeMetrics(4, 0, 0), runs[0].Completion!.PersistenceChanges);
         Assert.Equal("duplicate", runs[1].Start.State);
         Assert.Equal(4, runs[1].Completion!.VehiclesObserved);
-        Assert.Null(runs[1].Completion!.PersistenceChanges);
         Assert.Empty(runs[1].Completion!.Failures);
     }
 
@@ -80,7 +78,6 @@ public sealed class CopartExcelSnapshotProcessorTests
         var run = Assert.Single(store.SyncRuns.Values);
         Assert.Equal("skipped_lock_held", run.Start.State);
         Assert.Equal(0, run.Completion!.VehiclesObserved);
-        Assert.Null(run.Completion.PersistenceChanges);
         Assert.Empty(run.Completion.Failures);
     }
 
@@ -243,8 +240,6 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal(1, second.InlineScoring!.Unchanged);
         Assert.Equal(1, second.InlineScoring.ScoreSkippedUnchanged);
         Assert.Equal(0, second.InlineScoring.ScoredInline);
-        var completedRuns = store.SyncRuns.Values.OrderBy(run => run.Start.StartedAt).ToArray();
-        Assert.Equal(new InventoryPersistenceChangeMetrics(0, 0, 1), completedRuns[1].Completion!.PersistenceChanges);
     }
 
     [Fact]
@@ -265,8 +260,6 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal(1, second.InlineScoring!.Updated);
         Assert.Equal(1, second.InlineScoring.ScoredInline);
         Assert.Equal(0, second.InlineScoring.ScoreSkippedUnchanged);
-        var completedRuns = store.SyncRuns.Values.OrderBy(run => run.Start.StartedAt).ToArray();
-        Assert.Equal(new InventoryPersistenceChangeMetrics(0, 1, 0), completedRuns[1].Completion!.PersistenceChanges);
     }
 
     [Fact]
@@ -283,8 +276,6 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal(0, result.Accepted);
         Assert.Null(result.Reconciliation);
         Assert.Equal(1, result.InlineScoring!.ScoreFailed);
-        var run = Assert.Single(store.SyncRuns.Values);
-        Assert.Null(run.Completion!.PersistenceChanges);
         Assert.Empty(await store.GetRecentAsync(10, CancellationToken.None));
         Assert.Null(await store.GetScoreByLotAsync("12345678", CancellationToken.None));
     }

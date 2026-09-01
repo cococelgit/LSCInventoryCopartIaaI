@@ -62,20 +62,11 @@ public sealed record InventorySyncRunStart(
     DateTimeOffset StartedAt,
     Guid? RunId = null);
 
-/// <summary>
-/// Per-run persistence outcomes. These remain null for providers and no-op runs that do not process vehicles row by row.
-/// </summary>
-public sealed record InventoryPersistenceChangeMetrics(
-    int Created,
-    int Updated,
-    int Unchanged);
-
 public sealed record InventorySyncRunCompletion(
     DateTimeOffset FinishedAt,
     int VehiclesObserved,
     int RequestsIssued,
-    IReadOnlyList<string> Failures,
-    InventoryPersistenceChangeMetrics? PersistenceChanges = null);
+    IReadOnlyList<string> Failures);
 
 public sealed record CopartSnapshotReceipt(
     string FileName,

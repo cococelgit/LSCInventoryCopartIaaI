@@ -1119,9 +1119,6 @@ public sealed partial class PostgresSnapshotStore(
             set finished_at = @finished_at,
                 vehicles_observed = @vehicles_observed,
                 requests_issued = @requests_issued,
-                created_count = @created_count,
-                updated_count = @updated_count,
-                unchanged_count = @unchanged_count,
                 status = @status,
                 failures = cast(@failures as jsonb)
             where run_id = @run_id;
@@ -1130,9 +1127,6 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "finished_at", completion.FinishedAt);
         AddParameter(command, "vehicles_observed", completion.VehiclesObserved);
         AddParameter(command, "requests_issued", completion.RequestsIssued);
-        AddParameter(command, "created_count", completion.PersistenceChanges?.Created);
-        AddParameter(command, "updated_count", completion.PersistenceChanges?.Updated);
-        AddParameter(command, "unchanged_count", completion.PersistenceChanges?.Unchanged);
         AddParameter(command, "status", completion.Failures.Count == 0 ? "succeeded" : "completed_with_errors");
         AddParameter(command, "failures", failuresJson);
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -2187,15 +2181,8 @@ public sealed partial class PostgresSnapshotStore(
                     requests_issued integer not null default 0,
                     status text not null,
                     failures jsonb not null default '[]'::jsonb,
-                    created_count integer,
-                    updated_count integer,
-                    unchanged_count integer,
                     created_at timestamptz not null default now()
                 );
-
-                alter table inventory_sync_runs add column if not exists created_count integer;
-                alter table inventory_sync_runs add column if not exists updated_count integer;
-                alter table inventory_sync_runs add column if not exists unchanged_count integer;
 
                 create table if not exists provider_usage_snapshots (
                     id bigserial primary key,

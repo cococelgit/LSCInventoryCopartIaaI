@@ -14,31 +14,40 @@ Estos contadores no son métricas de grading. Son el resultado de comparar el lo
 
 ## Backend de ingesta
 
-La rama principal incorpora un cambio para que las ejecuciones completas Copart pasen estas métricas a `inventory_sync_runs`:
+Los contadores ya se persisten al finalizar cada snapshot Copart completo en `copart_snapshot_manifests`:
 
 - `created_count integer nullable`
 - `updated_count integer nullable`
 - `unchanged_count integer nullable`
 
-La finalización de un snapshot Copart completo puebla esas columnas. IAAI no las puebla y conserva `NULL`.
+El manifiesto se relaciona con `inventory_sync_runs` mediante `run_id`. Esta es la fuente correcta tanto para ejecuciones nuevas como históricas. La ingesta no debe escribir columnas nuevas en `inventory_sync_runs`, porque el job productivo ejecuta con migraciones generales desactivadas.
 
-Las columnas también existen ya en `copart_snapshot_manifests` como `created_count`, `updated_count` y `unchanged_count`, relacionadas con `inventory_sync_runs` mediante `run_id`. Por ello, el portal puede recuperar métricas históricas que fueron persistidas en el manifiesto antes del cambio de `inventory_sync_runs`.
+IAAI no usa el manifiesto Copart ni debe recibir valores derivados de esta unión.
 
 ## Consulta recomendada para el router de auditoría
 
 Para registros `provider = 'copart-excel'`, hacer un `LEFT JOIN copart_snapshot_manifests manifest ON manifest.run_id = run.run_id` y proyectar:
 
 ```sql
-case when run.provider = 'copart-excel' and run.state_scope = 'all'
-     then coalesce(run.created_count, manifest.created_count)
+case when run.provider = 'copart-excel'
+          and run.state_scope = 'all'
+          and manifest.is_complete = true
+          and manifest.status = 'succeeded'
+     then manifest.created_count
      else null
 end as created,
-case when run.provider = 'copart-excel' and run.state_scope = 'all'
-     then coalesce(run.updated_count, manifest.updated_count)
+case when run.provider = 'copart-excel'
+          and run.state_scope = 'all'
+          and manifest.is_complete = true
+          and manifest.status = 'succeeded'
+     then manifest.updated_count
      else null
 end as updated,
-case when run.provider = 'copart-excel' and run.state_scope = 'all'
-     then coalesce(run.unchanged_count, manifest.unchanged_count)
+case when run.provider = 'copart-excel'
+          and run.state_scope = 'all'
+          and manifest.is_complete = true
+          and manifest.status = 'succeeded'
+     then manifest.unchanged_count
      else null
 end as unchanged
 ```
