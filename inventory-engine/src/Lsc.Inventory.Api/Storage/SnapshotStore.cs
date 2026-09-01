@@ -25,6 +25,7 @@ public interface IInventorySnapshotStore
     /// </summary>
     Task<CopartInlineScoringPersistenceResult> PersistCopartAcceptedWithScoringAsync(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset observedAt, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartScoringBackfillCandidatesAsync(int maximum, CancellationToken cancellationToken);
+    Task<CopartScoringCoverageReport> GetCopartScoringCoverageReportAsync(CancellationToken cancellationToken);
     Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
@@ -106,6 +107,12 @@ public sealed record CopartInlineScoringPersistenceResult(
 /// Copart-only metrics captured from facts observed during one complete snapshot run.
 /// Counters are not synthesized for prior runs.
 /// </summary>
+public sealed record CopartScoringCoverageReport(
+    long ActiveCopartLots,
+    long CurrentPolicyScores,
+    long PendingScores,
+    IReadOnlyDictionary<string, long> StatusCounts);
+
 public sealed record CopartScoringBackfillResult(
     int Scanned,
     int Scored,
@@ -542,6 +549,30 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             .Take(Math.Clamp(maximum, 1, 10_000))
             .ToArray();
         return Task.FromResult<IReadOnlyList<StoredVehicleSnapshot>>(candidates);
+    }
+
+    public Task<CopartScoringCoverageReport> GetCopartScoringCoverageReportAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var active = _snapshots.Values
+            .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
+            .Where(snapshot => !_lifecycle.TryGetValue(snapshot.Identity, out var lifecycle) || lifecycle.Active)
+            .ToArray();
+        var scores = active
+            .Select(snapshot => new { snapshot, score = _scores.TryGetValue(snapshot.Identity, out var stored) ? stored : null })
+            .Where(item => item.score is not null)
+            .Where(item =>
+            {
+                var eligibility = AuctionEligibilityEvaluator.Evaluate(item.snapshot.Vehicle, item.snapshot.ObservedAt);
+                return eligibility.LoadToSystem &&
+                       string.Equals(item.score!.PolicyVersion, LscScoringPolicy.Version, StringComparison.Ordinal) &&
+                       string.Equals(item.score.InputHash, LscVehicleScoringEngine.CreateInputHash(item.snapshot.Vehicle, eligibility), StringComparison.Ordinal);
+            })
+            .ToArray();
+        var statuses = scores
+            .GroupBy(item => item.score!.Status, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => (long)group.Count(), StringComparer.OrdinalIgnoreCase);
+        return Task.FromResult(new CopartScoringCoverageReport(active.LongLength, scores.LongLength, active.LongLength - scores.LongLength, statuses));
     }
 
     public Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)

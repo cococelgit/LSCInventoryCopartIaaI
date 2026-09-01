@@ -96,6 +96,53 @@ public sealed partial class PostgresSnapshotStore
         return candidates;
     }
 
+    public async Task<CopartScoringCoverageReport> GetCopartScoringCoverageReportAsync(CancellationToken cancellationToken)
+    {
+        await EnsureScoringSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        long activeLots;
+        long currentScores;
+        await using (var totals = connection.CreateCommand())
+        {
+            totals.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            totals.CommandText = """
+                select count(*)::bigint,
+                       count(*) filter (where score.lot_key is not null
+                           and score.policy_version = @policy_version
+                           and score.source_observed_at = current.observed_at)::bigint
+                from inventory_search_current current
+                left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
+                where current.is_active and lower(current.platform) = 'copart';
+                """;
+            AddParameter(totals, "policy_version", LscScoringPolicy.Version);
+            await using var reader = await totals.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            activeLots = reader.GetInt64(0);
+            currentScores = reader.GetInt64(1);
+        }
+
+        var statuses = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        await using (var byStatus = connection.CreateCommand())
+        {
+            byStatus.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            byStatus.CommandText = """
+                select score.status, count(*)::bigint
+                from inventory_search_current current
+                join inventory_vehicle_score_current score on score.lot_key = current.lot_key
+                where current.is_active
+                  and lower(current.platform) = 'copart'
+                  and score.policy_version = @policy_version
+                  and score.source_observed_at = current.observed_at
+                group by score.status
+                order by score.status;
+                """;
+            AddParameter(byStatus, "policy_version", LscScoringPolicy.Version);
+            await using var reader = await byStatus.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) statuses[reader.GetString(0)] = reader.GetInt64(1);
+        }
+        return new CopartScoringCoverageReport(activeLots, currentScores, Math.Max(0, activeLots - currentScores), statuses);
+    }
+
     public async Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
     {
         await EnsureScoringSchemaAsync(cancellationToken);

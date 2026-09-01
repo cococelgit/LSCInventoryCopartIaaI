@@ -570,6 +570,14 @@ if (args.Contains("--copart-auction-history-report", StringComparer.OrdinalIgnor
     return;
 }
 
+if (args.Contains("--copart-scoring-report", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await store.GetCopartScoringCoverageReportAsync(CancellationToken.None)));
+    return;
+}
+
 if (args.Contains("--copart-scoring-backfill", StringComparer.OrdinalIgnoreCase))
 {
     try
