@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
+using Lsc.Inventory.Api.Scoring;
 using Lsc.Inventory.Api.Sources;
 
 namespace Lsc.Inventory.Api.Storage;
@@ -17,6 +18,14 @@ public interface IInventorySnapshotStore
     Task<EligibilityAuditPage> GetDiscardedEligibilityDecisionsAsync(int page, int pageSize, string? ruleCode, string? query, CancellationToken cancellationToken);
     Task<InventoryValidationReport> GetValidationReportAsync(CancellationToken cancellationToken);
     Task PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken);
+    Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
+    Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
+    Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
+    Task<Guid> StartScoringRunAsync(string trigger, CancellationToken cancellationToken);
+    Task CompleteScoringRunAsync(Guid runId, InventoryScoringRunCompletion completion, CancellationToken cancellationToken);
+    Task<IReadOnlyList<InventoryScoringRunSummary>> GetRecentScoringRunsAsync(int maximum, CancellationToken cancellationToken);
+    Task<LscVehicleScoringResult?> GetScoreByLotAsync(string lotNumber, CancellationToken cancellationToken);
+    Task<LscVehicleScoringResult> PersistScoringResultAsync(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset sourceObservedAt, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken);
     Task<bool> UpdateCopartMediaAsync(string identity, DateTimeOffset expectedObservedAt, AuctionVehicle vehicle, string resolutionStatus, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartTitleMappingCandidatesAsync(int maximum, CancellationToken cancellationToken);
@@ -202,6 +211,71 @@ public sealed record InventoryReconciliationResult(
     int MissesIncremented,
     int Deactivated);
 
+public sealed record InventoryScoringBackfillResult(int Requested, int Enqueued, int AlreadyCurrent);
+
+public sealed record InventoryScoringBatchResult(
+    int Claimed,
+    int Completed,
+    int Failed,
+    int Skipped,
+    int Remaining,
+    int HighPriorityClaimed = 0,
+    int BackfillClaimed = 0);
+
+public sealed record InventoryScoringPlatformStatus(
+    string Platform,
+    long Active,
+    long Current,
+    long Queued,
+    long Processing,
+    long Failed,
+    long Pending,
+    long HighPriorityQueued,
+    DateTimeOffset? OldestQueuedAt,
+    DateTimeOffset? LastScoredAt);
+
+public sealed record InventoryScoringRunSummary(
+    Guid RunId,
+    string Trigger,
+    string Status,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? FinishedAt,
+    int BackfillRequested,
+    int BackfillEnqueued,
+    int Claimed,
+    int Completed,
+    int Failed,
+    int Skipped,
+    int Remaining,
+    int HighPriorityClaimed,
+    int BackfillClaimed,
+    string? Error);
+
+public sealed record InventoryScoringRunCompletion(
+    string Status,
+    DateTimeOffset FinishedAt,
+    int BackfillRequested,
+    int BackfillEnqueued,
+    int Claimed,
+    int Completed,
+    int Failed,
+    int Skipped,
+    int Remaining,
+    int HighPriorityClaimed,
+    int BackfillClaimed,
+    string? Error = null);
+
+public sealed record InventoryScoringOperationalStatus(
+    string PolicyVersion,
+    long Queued,
+    long Processing,
+    long Completed,
+    long Failed,
+    DateTimeOffset? LastScoredAt,
+    IReadOnlyList<InventoryScoringPlatformStatus>? Platforms = null,
+    DateTimeOffset? OldestQueuedAt = null,
+    IReadOnlyList<InventoryScoringRunSummary>? RecentRuns = null);
+
 public sealed class InMemorySnapshotStore : IInventorySnapshotStore
 {
     private readonly ConcurrentDictionary<string, StoredVehicleSnapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
@@ -212,6 +286,9 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     private readonly ConcurrentDictionary<Guid, string> _copartRuns = new();
     private readonly ConcurrentDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> _syncRuns = new();
     private readonly ConcurrentDictionary<string, CopartAuctionObservation> _copartAuctionObservations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (AuctionVehicle Vehicle, DateTimeOffset ObservedAt, int Attempts, int Priority)> _scoringQueue = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, LscVehicleScoringResult> _scores = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<Guid, (string Trigger, DateTimeOffset StartedAt, InventoryScoringRunCompletion? Completion)> _scoringRuns = new();
 
     public IReadOnlyDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> SyncRuns => _syncRuns;
     public int CopartAuctionObservationCount => _copartAuctionObservations.Count;
@@ -362,7 +439,129 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
 
         _snapshots[identity] = snapshot;
         _lifecycle[identity] = (vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", true, 0);
+        _scoringQueue[identity] = (vehicle, observedAt, 0, 100);
         return Task.CompletedTask;
+    }
+
+    public Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var candidates = _snapshots.Values
+            .Where(snapshot => !_lifecycle.TryGetValue(snapshot.Identity, out var lifecycle) || lifecycle.Active)
+            .OrderBy(snapshot => snapshot.ObservedAt)
+            .Take(Math.Clamp(maximum, 1, 10_000))
+            .ToArray();
+        var enqueued = 0;
+        var current = 0;
+        foreach (var snapshot in candidates)
+        {
+            var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle);
+            var inputHash = LscVehicleScoringEngine.CreateInputHash(snapshot.Vehicle, eligibility);
+            if (_scores.TryGetValue(snapshot.Identity, out var score) &&
+                score.PolicyVersion == LscScoringPolicy.Version && score.InputHash == inputHash)
+            {
+                current++;
+                continue;
+            }
+            _scoringQueue.AddOrUpdate(snapshot.Identity,
+                _ => (snapshot.Vehicle, snapshot.ObservedAt, 0, 10),
+                (_, existing) => existing.Priority >= 100 ? existing : (snapshot.Vehicle, snapshot.ObservedAt, existing.Attempts, 10));
+            enqueued++;
+        }
+        return Task.FromResult(new InventoryScoringBackfillResult(candidates.Length, enqueued, current));
+    }
+
+    public Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var candidates = _scoringQueue
+            .OrderByDescending(item => item.Value.Priority)
+            .ThenBy(item => item.Value.ObservedAt)
+            .Take(Math.Clamp(maximum, 1, 500))
+            .ToArray();
+        foreach (var candidate in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var eligibility = AuctionEligibilityEvaluator.Evaluate(candidate.Value.Vehicle);
+            _scores[candidate.Key] = LscVehicleScoringEngine.Evaluate(candidate.Value.Vehicle, eligibility);
+            _scoringQueue.TryRemove(candidate.Key, out _);
+        }
+        return Task.FromResult(new InventoryScoringBatchResult(
+            candidates.Length, candidates.Length, 0, 0, _scoringQueue.Count,
+            candidates.Count(item => item.Value.Priority >= 100), candidates.Count(item => item.Value.Priority < 100)));
+    }
+
+    public Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var active = _snapshots.Values.Where(snapshot => !_lifecycle.TryGetValue(snapshot.Identity, out var lifecycle) || lifecycle.Active).ToArray();
+        var platforms = active.GroupBy(snapshot => snapshot.Vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown")
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var items = group.ToArray();
+                var current = items.Count(item => _scores.TryGetValue(item.Identity, out var score)
+                    && score.PolicyVersion == LscScoringPolicy.Version
+                    && score.InputHash == LscVehicleScoringEngine.CreateInputHash(item.Vehicle, AuctionEligibilityEvaluator.Evaluate(item.Vehicle)));
+                var queued = items.Where(item => _scoringQueue.ContainsKey(item.Identity)).ToArray();
+                return new InventoryScoringPlatformStatus(group.Key, items.Length, current, queued.Length, 0, 0, items.Length - current,
+                    queued.Count(item => _scoringQueue[item.Identity].Priority >= 100),
+                    queued.Select(item => (DateTimeOffset?)_scoringQueue[item.Identity].ObservedAt).DefaultIfEmpty().Min(),
+                    items.Select(item => _scores.TryGetValue(item.Identity, out var score) ? score.ScoredAt : (DateTimeOffset?)null).Max());
+            }).ToArray();
+        var runs = _scoringRuns.Select(item => ToScoringRunSummary(item.Key, item.Value)).OrderByDescending(item => item.StartedAt).Take(10).ToArray();
+        return Task.FromResult(new InventoryScoringOperationalStatus(LscScoringPolicy.Version, _scoringQueue.Count, 0, _scores.Count, 0,
+            _scores.Values.Select(score => (DateTimeOffset?)score.ScoredAt).DefaultIfEmpty().Max(), platforms,
+            _scoringQueue.Values.Select(item => (DateTimeOffset?)item.ObservedAt).DefaultIfEmpty().Min(), runs));
+    }
+
+    public Task<Guid> StartScoringRunAsync(string trigger, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var runId = Guid.NewGuid();
+        _scoringRuns[runId] = (trigger, DateTimeOffset.UtcNow, null);
+        return Task.FromResult(runId);
+    }
+
+    public Task CompleteScoringRunAsync(Guid runId, InventoryScoringRunCompletion completion, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_scoringRuns.TryGetValue(runId, out var run)) _scoringRuns[runId] = (run.Trigger, run.StartedAt, completion);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<InventoryScoringRunSummary>> GetRecentScoringRunsAsync(int maximum, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<InventoryScoringRunSummary>>(_scoringRuns
+            .Select(item => ToScoringRunSummary(item.Key, item.Value))
+            .OrderByDescending(item => item.StartedAt).Take(Math.Clamp(maximum, 1, 100)).ToArray());
+    }
+
+    public Task<LscVehicleScoringResult?> GetScoreByLotAsync(string lotNumber, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = _snapshots.Values.Where(item => string.Equals(item.Vehicle.LotNumber, lotNumber, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.ObservedAt).FirstOrDefault();
+        return Task.FromResult(snapshot is null || !_scores.TryGetValue(snapshot.Identity, out var score) ? null : score);
+    }
+
+    public Task<LscVehicleScoringResult> PersistScoringResultAsync(AuctionVehicle vehicle, EligibilityEvaluation eligibility, DateTimeOffset sourceObservedAt, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var outcome = LscVehicleScoringEngine.Evaluate(vehicle, eligibility, sourceObservedAt);
+        var identity = string.Join(':', vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", vehicle.LotNumber?.Trim() ?? vehicle.Vin?.Trim() ?? "unknown");
+        _scores[identity] = outcome;
+        return Task.FromResult(outcome);
+    }
+
+    private static InventoryScoringRunSummary ToScoringRunSummary(Guid runId, (string Trigger, DateTimeOffset StartedAt, InventoryScoringRunCompletion? Completion) run)
+    {
+        var completion = run.Completion;
+        return new InventoryScoringRunSummary(runId, run.Trigger, completion?.Status ?? "running", run.StartedAt, completion?.FinishedAt,
+            completion?.BackfillRequested ?? 0, completion?.BackfillEnqueued ?? 0, completion?.Claimed ?? 0, completion?.Completed ?? 0,
+            completion?.Failed ?? 0, completion?.Skipped ?? 0, completion?.Remaining ?? 0, completion?.HighPriorityClaimed ?? 0,
+            completion?.BackfillClaimed ?? 0, completion?.Error);
     }
 
     public Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartMediaCandidatesAsync(int maximum, CancellationToken cancellationToken)
