@@ -429,7 +429,7 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "finished_at", completion.FinishedAt);
         AddParameter(command, "vehicles_observed", completion.VehiclesObserved);
         AddParameter(command, "requests_issued", completion.RequestsIssued);
-        AddParameter(command, "status", completion.Failures.Count == 0 ? "succeeded" : "completed_with_errors");
+        AddParameter(command, "status", completion.Cancelled ? "cancelled" : completion.Failures.Count == 0 ? "succeeded" : "completed_with_errors");
         AddParameter(command, "failures", failuresJson);
         await command.ExecuteNonQueryAsync(cancellationToken);
 

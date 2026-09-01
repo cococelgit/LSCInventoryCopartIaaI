@@ -76,6 +76,7 @@ public sealed class AuctionsApiInitialImportProcessor(
         {
             while (observed < maximumLots && page <= 1000 && requests < _options.InitialImportMaxRequests)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var response = await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(DomainId(normalizedPlatform), null, page, _options.PageSize), cancellationToken);
                 requests++;
                 pages++;
@@ -98,6 +99,7 @@ public sealed class AuctionsApiInitialImportProcessor(
                         continue;
                     }
                     if (observed >= maximumLots) break;
+                    cancellationToken.ThrowIfCancellationRequested();
                     observed++;
                     var result = await canonicalPipeline.ProcessAsync(vehicle, DateTimeOffset.UtcNow, cancellationToken, runId, persist: persist);
                     if (!result.Loaded)
@@ -129,11 +131,18 @@ public sealed class AuctionsApiInitialImportProcessor(
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, observed, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), cancellationToken);
             return new(runId, normalizedPlatform, persist, maximumLots, observed, loaded, marked, discarded, quarantined, pages, requests, failures, discardReasonCounts, sourceRowsScanned, missingSaleDateSkipped, saleDateMatchesSkipped + saleDateNotFutureSkipped);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException exception)
+        {
+            failures.Add("initial-import:cancelled");
+            logger.LogWarning("AuctionsAPI initial import {RunId} cancelled for {Platform} after {Observed} lots.", runId, normalizedPlatform, observed);
+            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, observed, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false, null, true), CancellationToken.None);
+            throw new OperationCanceledException($"AuctionsAPI initial import {runId} cancelled after {observed} lots.", exception, CancellationToken.None);
+        }
+        catch (Exception exception)
         {
             failures.Add(exception.Message);
             logger.LogError(exception, "AuctionsAPI initial import {RunId} failed for {Platform}.", runId, normalizedPlatform);
-            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, observed, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), cancellationToken);
+            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, observed, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), CancellationToken.None);
             throw;
         }
     }
