@@ -1,62 +1,45 @@
-# Handoff técnico — Taxonomía normalizada de títulos Copart
+# Handoff técnico — Taxonomía canónica de títulos Copart v2
 
 ## Estado y límites
 
-La ingesta Copart ya calcula la taxonomía en el mapper `CopartTitleMapper`, apoyada por `CopartTitleTaxonomy`. Este cambio es **exclusivo de Copart por CSV/CSV.GZ descargado al servidor**. IAAI/Apibara no recibe, no calcula y no debe recibir estos metadatos.
+La taxonomía de títulos Copart se calcula únicamente por la ingesta CSV/CSV.GZ descargada al servidor. El productor usa la autoridad compartida `TitleFacetCategory`; no existe ni debe recrearse un clasificador Copart paralelo. IAAI/Apibara no recibe ni calcula estos metadatos.
 
-El productor de datos **no creó endpoint, filtro ni faceta pública**. El consumidor API/portal debe leer los campos derivados; no debe repetir ni recrear la clasificación usando texto, regex o reglas de UI.
+La categoría es una simplificación operativa de un documento declarado por Copart. No certifica titularidad, registro, circulación, exportación ni importación en una jurisdicción. No cambia D09 ni crea descartes automáticos.
 
-> La taxonomía es una clasificación operativa de la documentación declarada por Copart. No certifica que un vehículo pueda titularse, registrarse, circular, exportarse o importarse en una jurisdicción particular.
+## Campos de payload Copart
 
-## Commit de producción de datos
+Después de limpieza y elegibilidad, y solo cuando `LoadToSystem = true`, el payload de Copart contiene los siguientes campos de extensión raíz:
 
-Usa el commit que incluya `CopartTitleTaxonomy.cs`, `CopartTitleMapper.cs` y las pruebas de taxonomía. Este handoff se entregará junto al SHA final. Antes de desplegar API, confirma que la imagen de ingesta Copart o el job manual haya procesado la versión `copart-title-taxonomy-v1`.
+| Campo | Tipo | Significado |
+|---|---|---|
+| `source_title_raw` | `string \| null` | Código/título fuente conservado para auditoría. |
+| `title_category` | `string` | Categoría canónica compacta. |
+| `title_flags` | `string[]` | Divulgaciones explicables desde el clasificador canónico. |
+| `title_review_status` | `string` | `CLASSIFIED`, `UNVERIFIED` o `REVIEW_REQUIRED`. |
+| `title_taxonomy_version` | `string` | `copart-title-taxonomy-v2`. |
 
-## Campos canónicos en el payload Copart
+Los siguientes datos fuente continúan siendo la evidencia primaria y no se reemplazan: `source_title_type_code`, `source_title_mapping`, `source_title_mapping_version`, `source_title_description_es`, `title`, `sale_document.name` y `title_notes`.
 
-Los siguientes campos se guardan como propiedades de extensión de `AuctionVehicle` (nivel raíz del payload JSON), no dentro de `sale_document`. Son derivados y se escriben únicamente para platform `copart`.
+## Contrato público esperado
 
-| Campo de payload | Tipo | Ejemplo | Significado |
-|---|---|---|---|
-| `title_category` | `string` | `SALVAGE` | Categoría primaria normalizada. |
-| `title_flags` | `string[]` | `["FIRE"]` | Banderas acumulables de divulgación/restricción. |
-| `title_review_status` | `string` | `STANDARD` | Ruta operativa de revisión. |
-| `title_taxonomy_version` | `string` | `copart-title-taxonomy-v1` | Versión para backfill e idempotencia. |
-
-Los campos fuente existentes se preservan y no se reemplazan:
-
-| Campo fuente preservado | Propósito |
-|---|---|
-| `source_title_type_code` | Código exacto enviado por Copart, por ejemplo `BS`. |
-| `source_title_mapping` | `mapped` o `unmapped`. |
-| `source_title_mapping_version` | Versión del catálogo PDF original. |
-| `source_title_description_es` | Descripción española del catálogo. |
-| `title` y `sale_document.name` | Descripción inglesa fuente mapeada. |
-| `title_notes` | Copia auditable de los metadatos; `title_flags` se presenta allí como string separado por `|`, por lo que **el API debe preferir el array del payload raíz**. |
-
-## Contrato público que el API debe exponer
-
-Añade estos campos al modelo público compartido y al tipo TypeScript. Para todo lot no-Copart, devuelve `null` en los strings y `[]` en `titleFlags`; no inventes categorías para IAAI.
+El API debe leer los campos ya calculados del payload más reciente; no debe recalcularlos mediante texto, regex o reglas de UI. Para IAAI, devolver `null` en los campos string y `[]` en `titleFlags`.
 
 ```ts
 titleCategory: (
   | "CLEAN"
-  | "BRANDED_TITLE"
   | "SALVAGE"
-  | "REBUILT_RECONSTRUCTED"
-  | "NON_REPAIRABLE_PARTS_SCRAP"
-  | "EXPORT_ONLY"
-  | "DOCUMENT_ONLY"
-  | "STATE_VARIANT_VERIFY"
-  | "OTHER_UNVERIFIED"
+  | "REBUILT"
+  | "SPECIAL"
+  | "UNVERIFIED"
+  | "OTHER"
   | null
 );
 titleFlags: string[];
-titleReviewStatus: "STANDARD" | "ADVISOR_REVIEW" | "DOCUMENT_REVIEW" | null;
+titleReviewStatus: "CLASSIFIED" | "UNVERIFIED" | "REVIEW_REQUIRED" | null;
 titleTaxonomyVersion: string | null;
 ```
 
-Ejemplo de respuesta pública sanitizada:
+Ejemplo sanitizado:
 
 ```json
 {
@@ -65,57 +48,46 @@ Ejemplo de respuesta pública sanitizada:
   "title": "Salvage Certificate - Fire Damage",
   "titleCode": "BS",
   "titleCategory": "SALVAGE",
-  "titleFlags": ["FIRE"],
-  "titleReviewStatus": "STANDARD",
-  "titleTaxonomyVersion": "copart-title-taxonomy-v1"
+  "titleFlags": ["Salvage"],
+  "titleReviewStatus": "CLASSIFIED",
+  "titleTaxonomyVersion": "copart-title-taxonomy-v2"
 }
 ```
 
-## Categorías primarias
+## Categorías canónicas
 
-| Código | Etiqueta sugerida | Regla de UI/API |
-|---|---|---|
-| `CLEAN` | Título limpio | Sin marca documental adicional en el catálogo. |
-| `BRANDED_TITLE` | Título con marca | Expone badges de `titleFlags`; no lo presentes como equivalente a título limpio ordinario. |
-| `SALVAGE` | Salvage / Salvamento | Categoría principal de títulos salvage; los detalles van en flags. |
-| `REBUILT_RECONSTRUCTED` | Reconstruido / Rebuilt | Antecedente de reconstrucción. |
-| `NON_REPAIRABLE_PARTS_SCRAP` | No reparable / piezas / chatarra | Mostrar advertencia y ruta de revisión; no llamarlo vehículo de carretera. |
-| `EXPORT_ONLY` | Solo exportación | Mostrar solo en flujo adecuado y avisar al asesor. |
-| `DOCUMENT_ONLY` | Documento especial | Requiere revisión documental; no equivale automáticamente a un título estándar. |
-| `STATE_VARIANT_VERIFY` | Variante estatal — verificar | No reclasificar según palabras del texto; consultar documentación/estado. |
-| `OTHER_UNVERIFIED` | Tipo de título por verificar | Código ausente o sin mapa. Mostrar código raw y revisión requerida. |
+| Valor | Uso de UI/API |
+|---|---|
+| `CLEAN` | Documento identificado como limpio en el mapa canónico; mostrar sus flags, por ejemplo `Theft Recovery`, si los hay. |
+| `SALVAGE` | Documento salvage; los detalles permitidos se muestran en `titleFlags`. |
+| `REBUILT` | Documento rebuilt/reconstruido. |
+| `SPECIAL` | Certificate of Destruction, junk, parts-only, non-repairable u otra documentación especial. Requiere aviso claro. |
+| `UNVERIFIED` | Sin fuente suficiente; estado neutral, no equivalencia de clean ni salvage. |
+| `OTHER` | Documento dependiente del estado u otro código no apto para simplificación. Mostrar revisión requerida. |
 
-## Banderas acumulables
+## Consultas y facetas
 
-El API debe transmitirlas sin convertirlas en una sentencia legal o mecánica: `WATER_FLOOD`, `FIRE`, `STRUCTURAL_FRAME_UNIBODY`, `THEFT`, `ODOMETER`, `LEMON_MANUFACTURER_BUYBACK`, `MECHANICAL`, `DEALER_RESTRICTION`, `TITLE_REVIEW_REQUIRED`, `TITLE_CODE_UNMAPPED`.
-
-No uses `THEFT` como descarte ni como equivalente de daño actual. Es un antecedente documental; muchos lotes pueden tener esta etiqueta. Tampoco derives una bandera a partir de daños, fotos, pujas, llaves o un texto diferente del código de título mapeado.
-
-## Requisitos de consulta y facetas
-
-1. Implementa filtro por `titleCategory` **en PostgreSQL antes de ordenar y paginar**. No filtres resultados en el navegador.
-2. Calcula total, páginas y facetas sobre la misma población activa (`is_active = true`) y con el mismo filtro de categoría.
-3. Extrae la categoría desde el payload más reciente: `latest.payload ->> 'title_category'`; para banderas usa la matriz JSON `latest.payload -> 'title_flags'`.
-4. No recalcules taxonomía a partir de `title`, `titleType`, `sale_document.name` ni `source_title_description_es`.
-5. Mantén el filtro actual de títulos especiales hasta que se apruebe una política específica. La nueva categoría no debe cambiar D09 ni convertir una marca en descarte.
+1. Filtrar `titleCategory` en PostgreSQL, sobre `is_active = true`, **antes** de ordenar, contar y paginar.
+2. Obtener los datos desde el payload latest: `payload ->> 'title_category'`, `payload -> 'title_flags'`, `payload ->> 'title_review_status'` y `payload ->> 'title_taxonomy_version'`.
+3. No ocultar ni descartar por categoría. `SPECIAL`, `OTHER` y `UNVERIFIED` requieren copy de riesgo y ruta al asesor, no una conclusión legal.
+4. No inferir flags a partir de daños, fotos, pujas, llaves o fuentes externas.
+5. No tratar una bandera como daño actual ni como garantía documental.
 
 ## Orden de despliegue y backfill
 
-1. **No desplegado todavía por esta tarea.** Despliega primero el cambio de ingesta mediante el proceso autorizado para `job-lsc-copart-excel-prod`; no alteres IAAI, Apibara, descarga, cron, secretos, identidades ni API en ese paso.
-2. Con aprobación explícita, ejecuta el backfill manual existente `--copart-title-backfill`. El selector ahora incluye también los payloads cuya `title_taxonomy_version` no sea `copart-title-taxonomy-v1`; no afecta inventario, lifecycle ni elegibilidad.
-3. Verifica en un conjunto agregado que los lotes Copart nuevos tengan versión de taxonomía antes de publicar filtros/facetas de API.
-4. Despliega el API/portal bajo su propia frontera de recursos. El API no debe mostrar una categoría como completa en datos anteriores al backfill si el campo aún falta.
+La taxonomía v2 requiere primero desplegar la imagen de ingesta Copart bajo su frontera aprobada. Los payloads históricos `v1` quedan detectables por el selector de backfill debido al cambio de versión; el backfill de títulos debe ejecutarse únicamente con aprobación separada. El API/portal no debe declarar cobertura total hasta verificar la versión v2 en los lotes requeridos.
 
-## Pruebas que debe añadir el agente de API
+## Pruebas mínimas para API/portal
 
-- Vehículo Copart `BS` expone `SALVAGE` + `FIRE`.
-- Vehículo Copart `AQ` expone `CLEAN` sin flags.
-- `B1` expone `STATE_VARIANT_VERIFY` y `DOCUMENT_REVIEW`.
-- Código desconocido expone `OTHER_UNVERIFIED`, `TITLE_CODE_UNMAPPED` y `DOCUMENT_REVIEW`.
-- IAAI devuelve metadatos de taxonomía nulos/vacíos.
-- Un lote inactive no participa en resultados, facetas, total ni paginación al filtrar por categoría.
-- Totales y facetas cambian antes de paginación y son consistentes con ficha.
+- `AQ` expone `CLEAN` y `CLASSIFIED`.
+- `BS` expone `SALVAGE` y conserva el título/documento fuente.
+- `AR` expone `REBUILT`.
+- `AD` expone `SPECIAL`.
+- `B1` expone `OTHER` y `REVIEW_REQUIRED`.
+- Código desconocido expone `OTHER` y `REVIEW_REQUIRED`; fuente ausente expone `UNVERIFIED`.
+- IAAI recibe campos nulos/vacíos.
+- Un lote inactivo no participa en facetas, total, páginas ni resultados.
 
 ## Prohibiciones
 
-No usar Apibara para Copart. No cambiar D09 ni crear descartes de título. No modificar el código fuente o categoría original. No inferir registrabilidad/transferibilidad. No desplegar un job de Copart ni API sin el flujo de aprobación correspondiente.
+No usar Apibara para Copart. No recalcular títulos en navegador. No cambiar D09. No crear descartes de título. No sustituir el código/descripción fuente. No desplegar jobs o API sin el proceso de aprobación correspondiente.
