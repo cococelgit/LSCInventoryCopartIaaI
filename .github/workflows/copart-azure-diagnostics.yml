@@ -73,12 +73,12 @@ jobs:
           az containerapp job show \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,image:properties.template.containers[0].image}' \
+            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,parallelism:properties.configuration.scheduleTriggerConfig.parallelism,completionCount:properties.configuration.scheduleTriggerConfig.completionCount,image:properties.template.containers[0].image}' \
             -o json
           az containerapp job execution list \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime}' \
+            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,conditions:properties.conditions}' \
             -o json
           echo "Listing recent manual Copart processing executions."
           az containerapp job execution list \
