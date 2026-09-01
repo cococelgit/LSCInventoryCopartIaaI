@@ -22,7 +22,7 @@ public sealed record AuctionsApiWindowRequest(
     int Page = 1,
     int? PerPage = null);
 
-public sealed record AuctionsApiPage(JsonElement Data, JsonElement Meta);
+public sealed record AuctionsApiPage(JsonElement Data, JsonElement Meta, int? NextPage = null);
 
 public sealed class AuctionsApiClient(
     HttpClient httpClient,
@@ -76,6 +76,12 @@ public sealed class AuctionsApiClient(
         var meta = document.RootElement.TryGetProperty("meta", out var metaValue)
             ? metaValue.Clone()
             : JsonDocument.Parse("{}").RootElement.Clone();
-        return new AuctionsApiPage(data.Clone(), meta);
+        int? nextPage = null;
+        if (document.RootElement.TryGetProperty("links", out var links) && links.ValueKind == JsonValueKind.Object && links.TryGetProperty("next", out var next) && next.ValueKind == JsonValueKind.String)
+        {
+            var nextQuery = QueryHelpers.ParseQuery(next.GetString()!);
+            if (nextQuery.TryGetValue("page", out var pageValue) && int.TryParse(pageValue.FirstOrDefault(), out var parsedPage)) nextPage = parsedPage;
+        }
+        return new AuctionsApiPage(data.Clone(), meta, nextPage);
     }
 }

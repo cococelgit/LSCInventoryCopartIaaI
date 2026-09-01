@@ -77,10 +77,9 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             var activeWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: false, cancellationToken);
             pages += activeWindow.Pages;
             requests += activeWindow.Requests;
-            foreach (var element in activeWindow.Rows)
+            foreach (var vehicle in Vehicles(activeWindow.Rows, normalizedPlatform))
             {
-                var vehicle = DeserializeVehicle(element, normalizedPlatform);
-                if (vehicle is null || string.IsNullOrWhiteSpace(vehicle.LotNumber))
+                if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
                 {
                     failures.Add("changed:missing-lot");
                     continue;
@@ -112,10 +111,9 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             pages += archivedWindow.Pages;
             requests += archivedWindow.Requests;
             var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var element in archivedWindow.Rows)
+            foreach (var vehicle in Vehicles(archivedWindow.Rows, normalizedPlatform))
             {
-                var vehicle = DeserializeVehicle(element, normalizedPlatform);
-                if (vehicle is null || string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
+                if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
                 archived++;
                 archivedKeys.Add($"{normalizedPlatform}:{vehicle.LotNumber.Trim()}");
             }
@@ -153,8 +151,9 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             requests++;
             pages++;
             rows.AddRange(Rows(response.Data));
-            if (!HasNextPage(response.Meta, page)) break;
-            page++;
+            if (response.NextPage is not null && response.NextPage <= page) break;
+            if (response.NextPage is null && !HasNextPage(response.Meta, page)) break;
+            page = response.NextPage ?? page + 1;
         }
         return new(rows, pages, requests);
     }
@@ -211,17 +210,133 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         }
     }
 
-    private static AuctionVehicle? DeserializeVehicle(JsonElement element, string platform)
+    private static IEnumerable<AuctionVehicle> Vehicles(IEnumerable<JsonElement> rows, string platform)
     {
+        foreach (var row in rows)
+        {
+            if (row.ValueKind != JsonValueKind.Object) continue;
+            if (row.TryGetProperty("lots", out var lots) && lots.ValueKind == JsonValueKind.Array && lots.GetArrayLength() > 0)
+            {
+                foreach (var lot in lots.EnumerateArray())
+                {
+                    var vehicle = MapVehicle(row, lot, platform);
+                    if (vehicle is not null) yield return vehicle;
+                }
+            }
+            else
+            {
+                var vehicle = MapVehicle(row, row, platform);
+                if (vehicle is not null) yield return vehicle;
+            }
+        }
+    }
+
+    private static AuctionVehicle? MapVehicle(JsonElement vehicleRow, JsonElement lotRow, string platform)
+    {
+        var domain = Scalar(lotRow, "domain.id", "domain_id") ?? Scalar(vehicleRow, "domain.id", "domain_id");
+        if (!string.Equals(domain, DomainId(platform).ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase)) return null;
+        var raw = JsonSerializer.SerializeToElement(new { vehicle = vehicleRow, lot = lotRow });
+        var payload = new Dictionary<string, object?>
+        {
+            ["platform"] = platform,
+            ["lot_number"] = Scalar(lotRow, "lot", "lot_number", "lot.number", "external_id", "id"),
+            ["vin"] = Scalar(lotRow, "vin") ?? Scalar(vehicleRow, "vin"),
+            ["year"] = Number(vehicleRow, "year"),
+            ["make"] = Scalar(vehicleRow, "manufacturer.name", "make"),
+            ["model"] = Scalar(vehicleRow, "model.name", "model"),
+            ["vehicle_type"] = Scalar(vehicleRow, "vehicle_type.name", "vehicle_type"),
+            ["color"] = Scalar(vehicleRow, "color.name", "color"),
+            ["fuel_type"] = Scalar(vehicleRow, "fuel.name", "fuel"),
+            ["transmission"] = Scalar(vehicleRow, "transmission.name", "transmission"),
+            ["drive_type"] = Scalar(vehicleRow, "drive_wheel.name", "drive_wheel"),
+            ["title"] = Scalar(lotRow, "title", "detailed_title") ?? Scalar(vehicleRow, "title"),
+            ["condition"] = new Dictionary<string, object?>
+            {
+                ["primary_damage"] = Scalar(lotRow, "damage.primary", "damage.primary_damage", "damage"),
+                ["secondary_damage"] = Scalar(lotRow, "damage.secondary", "damage.secondary_damage"),
+                ["has_key"] = Bool(lotRow, "keys_available"),
+            },
+            ["seller"] = new Dictionary<string, object?>
+            {
+                ["name"] = Scalar(lotRow, "seller.name", "seller"),
+                ["type"] = Scalar(lotRow, "seller_type"),
+            },
+            ["odometer"] = new Dictionary<string, object?>
+            {
+                ["mi"] = Number(lotRow, "odometer.miles", "odometer.mi", "odometer"),
+                ["status"] = Scalar(lotRow, "odometer.status"),
+            },
+            ["sale_document"] = new Dictionary<string, object?>
+            {
+                ["name"] = Scalar(lotRow, "title", "detailed_title"),
+                ["is_pending"] = false,
+            },
+            ["auction"] = new Dictionary<string, object?>
+            {
+                ["auction_at"] = Scalar(lotRow, "sale_date"),
+                ["lot_status"] = Scalar(lotRow, "status"),
+                ["is_timed"] = Bool(lotRow, "is_timed_auction"),
+            },
+            ["pricing"] = new Dictionary<string, object?>
+            {
+                ["current_bid_usd"] = Number(lotRow, "bid", "final_bid"),
+                ["buy_now_usd"] = Number(lotRow, "buy_now"),
+            },
+            ["location"] = new Dictionary<string, object?>
+            {
+                ["display"] = Scalar(lotRow, "location.name", "selling_branch"),
+                ["state"] = Scalar(lotRow, "location.state"),
+                ["facility_id"] = Scalar(lotRow, "location.id", "location.facility_id"),
+            },
+            ["media"] = new Dictionary<string, object?> { ["photos"] = StringArray(lotRow, "images") },
+        };
         try
         {
-            var vehicle = element.Deserialize<AuctionVehicle>(JsonOptions);
-            return vehicle is null ? null : vehicle with { Platform = platform, RawSource = element.Clone() };
+            var mapped = JsonSerializer.SerializeToElement(payload).Deserialize<AuctionVehicle>(JsonOptions);
+            return mapped is null ? null : mapped with { RawSource = raw };
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    private static JsonElement? At(JsonElement value, string path)
+    {
+        foreach (var part in path.Split('.'))
+        {
+            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(part, out value)) return null;
+        }
+        return value;
+    }
+
+    private static string? Scalar(JsonElement value, params string[] paths)
+    {
+        foreach (var path in paths)
+        {
+            var found = At(value, path);
+            if (found is null) continue;
+            var item = found.Value;
+            if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString())) return item.GetString();
+            if (item.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False) return item.ToString();
+            if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String) return name.GetString();
+        }
+        return null;
+    }
+
+    private static int? Number(JsonElement value, params string[] paths) => int.TryParse(Scalar(value, paths), out var number) ? number : null;
+    private static bool? Bool(JsonElement value, params string[] paths) => bool.TryParse(Scalar(value, paths), out var result) ? result : null;
+
+    private static string[] StringArray(JsonElement value, params string[] paths)
+    {
+        foreach (var path in paths)
+        {
+            var found = At(value, path);
+            if (found is null || found.Value.ValueKind != JsonValueKind.Array) continue;
+            return found.Value.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() : Scalar(item, "large", "url", "src"))
+                .Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToArray();
+        }
+        return [];
     }
 
     private static string? MaskVin(string? vin) => string.IsNullOrWhiteSpace(vin) || vin.Length < 6 ? null : $"{vin[..3]}…{vin[^3..]}";
