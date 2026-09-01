@@ -17,7 +17,8 @@ public sealed record AuctionsApiInitialImportResult(
     int Quarantined,
     int PagesProcessed,
     int RequestsIssued,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures,
+    IReadOnlyDictionary<string, int> DiscardReasonCounts);
 
 public interface IAuctionsApiInitialImportProcessor
 {
@@ -56,6 +57,7 @@ public sealed class AuctionsApiInitialImportProcessor(
         var marked = 0;
         var discarded = 0;
         var quarantined = 0;
+        var discardReasonCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var pages = 0;
         var requests = 0;
         var page = startPage;
@@ -75,7 +77,15 @@ public sealed class AuctionsApiInitialImportProcessor(
                     if (!result.Loaded)
                     {
                         if (result.Quarantined) quarantined++;
-                        else discarded++;
+                        else
+                        {
+                            discarded++;
+                            foreach (var reason in result.Eligibility.DiscardReasons)
+                            {
+                                var key = $"{reason.Code}: {reason.Name}";
+                                discardReasonCounts[key] = discardReasonCounts.GetValueOrDefault(key) + 1;
+                            }
+                        }
                         continue;
                     }
                     loaded++;
@@ -91,7 +101,7 @@ public sealed class AuctionsApiInitialImportProcessor(
             if (requests >= _options.InitialImportMaxRequests && observed < maximumLots) failures.Add("initial-import:request-cap-reached");
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, observed, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), cancellationToken);
-            return new(runId, normalizedPlatform, persist, maximumLots, observed, loaded, marked, discarded, quarantined, pages, requests, failures);
+            return new(runId, normalizedPlatform, persist, maximumLots, observed, loaded, marked, discarded, quarantined, pages, requests, failures, discardReasonCounts);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
