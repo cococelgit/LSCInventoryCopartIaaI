@@ -111,6 +111,16 @@ jobs:
             --name "$copart_repository_tag" \
             --query '{digest:digest,lastUpdateTime:lastUpdateTime,writeEnabled:changeableAttributes.deleteEnabled}' \
             -o json || true
+          echo "Checking the Container Apps Environment health (read-only)."
+          job_environment_id="$(az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.environmentId' -o tsv)"
+          if [ -n "$job_environment_id" ]; then
+            az resource show --ids "$job_environment_id" \
+              --query '{id:id,name:name,type:type,provisioningState:properties.provisioningState,defaultDomain:properties.defaultDomain,workloadProfiles:properties.workloadProfiles}' \
+              -o json || true
+          fi
           echo "Checking read-only ACR pull authorization for the scheduled job identity."
           job_registry_identity="$(az containerapp job show \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
