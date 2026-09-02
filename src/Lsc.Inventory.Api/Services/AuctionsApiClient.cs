@@ -29,6 +29,7 @@ public sealed class AuctionsApiClient(
     IOptions<AuctionsApiOptions> options,
     ILogger<AuctionsApiClient> logger) : IAuctionsApiClient
 {
+    private const int MaxRateLimitAttempts = 5;
     private readonly AuctionsApiOptions _options = options.Value;
 
     public Task<AuctionsApiPage> GetChangedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken) =>
@@ -57,31 +58,46 @@ public sealed class AuctionsApiClient(
             ["per_page"] = perPage.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
         var uri = QueryHelpers.AddQueryString(path, query);
-        using var message = new HttpRequestMessage(HttpMethod.Get, uri);
-        message.Headers.Add("x-api-key", _options.ApiKey);
-        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        using var response = await httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        for (var attempt = 1; attempt <= MaxRateLimitAttempts; attempt++)
         {
-            var summary = string.IsNullOrWhiteSpace(body) ? "empty response body" : body.Replace('\r', ' ').Replace('\n', ' ').Trim();
-            logger.LogWarning("AuctionsAPI returned status {StatusCode} for {Path}: {ResponseSummary}", (int)response.StatusCode, path, summary[..Math.Min(summary.Length, 400)]);
-            throw new HttpRequestException($"AuctionsAPI returned {(int)response.StatusCode} for {path}.", null, response.StatusCode);
+            using var message = new HttpRequestMessage(HttpMethod.Get, uri);
+            message.Headers.Add("x-api-key", _options.ApiKey);
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var response = await httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+            if ((int)response.StatusCode == 429 && attempt < MaxRateLimitAttempts)
+            {
+                var retryAfter = response.Headers.RetryAfter?.Delta
+                    ?? TimeSpan.FromSeconds(Math.Min(60, Math.Pow(2, attempt) + Random.Shared.Next(0, 2)));
+                logger.LogWarning("AuctionsAPI rate-limited {Path}; retrying attempt {Attempt}/{MaxAttempts} after {RetryAfter}.", path, attempt, MaxRateLimitAttempts, retryAfter);
+                await Task.Delay(retryAfter, cancellationToken);
+                continue;
+            }
+
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var summary = string.IsNullOrWhiteSpace(body) ? "empty response body" : body.Replace('\r', ' ').Replace('\n', ' ').Trim();
+                logger.LogWarning("AuctionsAPI returned status {StatusCode} for {Path}: {ResponseSummary}", (int)response.StatusCode, path, summary[..Math.Min(summary.Length, 400)]);
+                throw new HttpRequestException($"AuctionsAPI returned {(int)response.StatusCode} for {path}.", null, response.StatusCode);
+            }
+
+            using var document = JsonDocument.Parse(body);
+            if (!document.RootElement.TryGetProperty("data", out var data))
+                throw new InvalidOperationException($"AuctionsAPI returned no data envelope for {path}.");
+            var meta = document.RootElement.TryGetProperty("meta", out var metaValue)
+                ? metaValue.Clone()
+                : JsonDocument.Parse("{}").RootElement.Clone();
+            int? nextPage = null;
+            if (document.RootElement.TryGetProperty("links", out var links) && links.ValueKind == JsonValueKind.Object && links.TryGetProperty("next", out var next) && next.ValueKind == JsonValueKind.String)
+            {
+                var nextQuery = QueryHelpers.ParseQuery(next.GetString()!);
+                if (nextQuery.TryGetValue("page", out var pageValue) && int.TryParse(pageValue.FirstOrDefault(), out var parsedPage)) nextPage = parsedPage;
+            }
+            return new AuctionsApiPage(data.Clone(), meta, nextPage);
         }
 
-        using var document = JsonDocument.Parse(body);
-        if (!document.RootElement.TryGetProperty("data", out var data))
-            throw new InvalidOperationException($"AuctionsAPI returned no data envelope for {path}.");
-        var meta = document.RootElement.TryGetProperty("meta", out var metaValue)
-            ? metaValue.Clone()
-            : JsonDocument.Parse("{}").RootElement.Clone();
-        int? nextPage = null;
-        if (document.RootElement.TryGetProperty("links", out var links) && links.ValueKind == JsonValueKind.Object && links.TryGetProperty("next", out var next) && next.ValueKind == JsonValueKind.String)
-        {
-            var nextQuery = QueryHelpers.ParseQuery(next.GetString()!);
-            if (nextQuery.TryGetValue("page", out var pageValue) && int.TryParse(pageValue.FirstOrDefault(), out var parsedPage)) nextPage = parsedPage;
-        }
-        return new AuctionsApiPage(data.Clone(), meta, nextPage);
+        throw new InvalidOperationException("AuctionsAPI retry loop exited unexpectedly.");
     }
 }

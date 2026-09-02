@@ -48,7 +48,19 @@ public sealed class AuctionsApiClientTests
         Assert.Equal(0, handler.Requests);
     }
 
-    private static AuctionsApiClient CreateClient(CapturingHandler handler, bool enabled) => new(
+    [Fact]
+    public async Task Retries_rate_limit_and_returns_the_next_successful_page()
+    {
+        var handler = new RateLimitThenSuccessHandler();
+        var client = CreateClient(handler, enabled: true);
+
+        var page = await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(1, null, 1, 1000), CancellationToken.None);
+
+        Assert.Equal(2, handler.Requests);
+        Assert.Equal(0, page.Data.GetArrayLength());
+    }
+
+    private static AuctionsApiClient CreateClient(HttpMessageHandler handler, bool enabled) => new(
         new HttpClient(handler) { BaseAddress = new Uri("https://auctions.test/api/") },
         Microsoft.Extensions.Options.Options.Create(new AuctionsApiOptions { Enabled = enabled, ApiKey = "test-key", BaseUrl = "https://auctions.test/api/" }),
         NullLogger<AuctionsApiClient>.Instance);
@@ -63,6 +75,27 @@ public sealed class AuctionsApiClientTests
             Requests++;
             LastRequest = request;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+        }
+    }
+
+    private sealed class RateLimitThenSuccessHandler : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests++;
+            if (Requests == 1)
+            {
+                var throttled = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+                throttled.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
+                return Task.FromResult(throttled);
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"data\":[],\"meta\":{}}", Encoding.UTF8, "application/json")
+            });
         }
     }
 }
