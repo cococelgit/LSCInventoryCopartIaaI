@@ -61,6 +61,18 @@ public sealed class AuctionsApiClientTests
     }
 
     [Fact]
+    public async Task Retries_a_transient_transport_failure_before_returning_the_page()
+    {
+        var handler = new TransportFailureThenSuccessHandler();
+        var client = CreateClient(handler, enabled: true);
+
+        var page = await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(1, null, 1, 1000), CancellationToken.None);
+
+        Assert.Equal(2, handler.Requests);
+        Assert.Equal(0, page.Data.GetArrayLength());
+    }
+
+    [Fact]
     public async Task Keeps_retrying_past_the_previous_short_rate_limit_window()
     {
         var handler = new RateLimitThenSuccessHandler(rateLimitResponses: 6);
@@ -88,6 +100,21 @@ public sealed class AuctionsApiClientTests
             Requests++;
             LastRequest = request;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+        }
+    }
+
+    private sealed class TransportFailureThenSuccessHandler : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests++;
+            if (Requests == 1) throw new HttpRequestException("transient connection reset");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"data\":[],\"meta\":{}}", Encoding.UTF8, "application/json")
+            });
         }
     }
 

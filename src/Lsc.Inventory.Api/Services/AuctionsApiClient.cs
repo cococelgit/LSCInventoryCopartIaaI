@@ -34,7 +34,9 @@ public sealed class AuctionsApiClient(
     // of failing a run after the first short burst of 429 responses. The worker
     // renews its lease and the delay is cancellation-aware throughout this loop.
     private const int MaxRateLimitAttempts = 15;
+    private const int MaxTransportAttempts = 5;
     private static readonly TimeSpan MaxRateLimitDelay = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan MaxTransportDelay = TimeSpan.FromSeconds(30);
     private readonly AuctionsApiOptions _options = options.Value;
 
     public Task<AuctionsApiPage> GetChangedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken) =>
@@ -64,13 +66,16 @@ public sealed class AuctionsApiClient(
         };
         var uri = QueryHelpers.AddQueryString(path, query);
 
+        var transportAttempts = 0;
         for (var attempt = 1; attempt <= MaxRateLimitAttempts; attempt++)
         {
-            await requestLimiter.WaitAsync("auctions-api", TimeSpan.FromMilliseconds(_options.RequestIntervalMilliseconds), cancellationToken);
-            using var message = new HttpRequestMessage(HttpMethod.Get, uri);
-            message.Headers.Add("x-api-key", _options.ApiKey);
-            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            using var response = await httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            try
+            {
+                await requestLimiter.WaitAsync("auctions-api", TimeSpan.FromMilliseconds(_options.RequestIntervalMilliseconds), cancellationToken);
+                using var message = new HttpRequestMessage(HttpMethod.Get, uri);
+                message.Headers.Add("x-api-key", _options.ApiKey);
+                message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                using var response = await httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
             if ((int)response.StatusCode == 429 && attempt < MaxRateLimitAttempts)
             {
@@ -100,10 +105,29 @@ public sealed class AuctionsApiClient(
                 var nextQuery = QueryHelpers.ParseQuery(next.GetString()!);
                 if (nextQuery.TryGetValue("page", out var pageValue) && int.TryParse(pageValue.FirstOrDefault(), out var parsedPage)) nextPage = parsedPage;
             }
-            return new AuctionsApiPage(data.Clone(), meta, nextPage);
+                return new AuctionsApiPage(data.Clone(), meta, nextPage);
+            }
+            catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested && ++transportAttempts < MaxTransportAttempts)
+            {
+                var delay = ResolveTransportDelay(transportAttempts);
+                logger.LogWarning(exception, "AuctionsAPI transport failure for {Path}; retrying attempt {Attempt}/{MaxAttempts} after {RetryAfter}.", path, transportAttempts, MaxTransportAttempts, delay);
+                await Task.Delay(delay, cancellationToken);
+            }
+            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested && ++transportAttempts < MaxTransportAttempts)
+            {
+                var delay = ResolveTransportDelay(transportAttempts);
+                logger.LogWarning(exception, "AuctionsAPI request timeout for {Path}; retrying attempt {Attempt}/{MaxAttempts} after {RetryAfter}.", path, transportAttempts, MaxTransportAttempts, delay);
+                await Task.Delay(delay, cancellationToken);
+            }
         }
 
         throw new InvalidOperationException("AuctionsAPI retry loop exited unexpectedly.");
+    }
+
+    private static TimeSpan ResolveTransportDelay(int attempt)
+    {
+        var seconds = Math.Min(MaxTransportDelay.TotalSeconds, Math.Pow(2, attempt));
+        return TimeSpan.FromSeconds(seconds + Random.Shared.NextDouble());
     }
 
     private static TimeSpan ResolveRetryAfter(RetryConditionHeaderValue? retryAfterHeader, int attempt)
