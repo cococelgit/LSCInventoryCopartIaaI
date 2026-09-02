@@ -120,7 +120,15 @@ builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalSyncProcessor
 builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInventoryIngestionPipeline>();
 builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
 builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
-builder.Services.AddSingleton<IAuctionsApiImportQueue, AuctionsApiImportQueue>();
+if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<IAuctionsApiImportJobStore>(sp =>
+        (IAuctionsApiImportJobStore)sp.GetRequiredService<IInventorySnapshotStore>());
+}
+else
+{
+    builder.Services.AddSingleton<IAuctionsApiImportJobStore, InMemoryAuctionsApiImportJobStore>();
+}
 builder.Services.AddHostedService<AuctionsApiImportBackgroundWorker>();
 builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
 builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
@@ -944,7 +952,7 @@ app.MapPost("/internal/auctions-api/incremental", async (HttpContext context, IA
     return Results.Ok(result);
 });
 
-app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IInventorySnapshotStore snapshotStore, IAuctionsApiImportQueue queue, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, bool? requireFutureSaleDate) =>
+app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IInventorySnapshotStore snapshotStore, IAuctionsApiImportJobStore queue, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, bool? requireFutureSaleDate) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
     var normalizedPlatform = (platform ?? "").Trim().ToLowerInvariant();
@@ -967,11 +975,7 @@ app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context,
         requireSaleDate == true,
         Math.Max(0, skipSaleDateMatches ?? 0),
         requireFutureSaleDate == true);
-    if (!queue.TryEnqueue(request))
-    {
-        await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, 0, 0, ["initial-import:queue-full"], 0, 0, 0, 0, 1, 0, false), CancellationToken.None);
-        return Results.StatusCode(StatusCodes.Status429TooManyRequests);
-    }
+    await queue.EnqueueAsync(request, DateTimeOffset.UtcNow, CancellationToken.None);
     return Results.Accepted($"/internal/auctions-api/runs/{runId}", new { runId, queued = true, persist = request.Persist, platform = normalizedPlatform });
 });
 

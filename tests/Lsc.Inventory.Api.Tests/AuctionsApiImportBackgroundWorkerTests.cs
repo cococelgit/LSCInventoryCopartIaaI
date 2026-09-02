@@ -1,5 +1,5 @@
+using Lsc.Inventory.Api.Storage;
 using Lsc.Inventory.Api.Workers;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Lsc.Inventory.Api.Tests;
@@ -7,30 +7,35 @@ namespace Lsc.Inventory.Api.Tests;
 public sealed class AuctionsApiImportBackgroundWorkerTests
 {
     [Fact]
-    public void Queue_preserves_run_id_and_rejects_when_bounded_capacity_is_full()
+    public async Task Durable_queue_preserves_run_id_and_claims_once()
     {
-        var queue = new AuctionsApiImportQueue();
-        static AuctionsApiImportRequest Request() => new(
-            Guid.NewGuid(), "iaai", 1000, false, 1, false, 0, true);
+        var store = new InMemoryAuctionsApiImportJobStore();
+        var request = Request();
+        await store.EnqueueAsync(request, DateTimeOffset.UtcNow, CancellationToken.None);
 
-        Assert.True(queue.TryEnqueue(Request()));
-        Assert.True(queue.TryEnqueue(Request()));
-        Assert.True(queue.TryEnqueue(Request()));
-        Assert.True(queue.TryEnqueue(Request()));
-        Assert.False(queue.TryEnqueue(Request()));
+        var first = await store.TryClaimAsync(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(10), CancellationToken.None);
+        var second = await store.TryClaimAsync(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(10), CancellationToken.None);
+
+        Assert.NotNull(first);
+        Assert.Equal(request.RunId, first!.Request.RunId);
+        Assert.Null(second);
     }
 
     [Fact]
-    public async Task Queue_returns_the_same_request_run_id()
+    public async Task Durable_queue_recovers_a_job_after_lease_expiration()
     {
-        var queue = new AuctionsApiImportQueue();
-        var expected = Request();
-        Assert.True(queue.TryEnqueue(expected));
+        var store = new InMemoryAuctionsApiImportJobStore();
+        var request = Request();
+        var enqueuedAt = DateTimeOffset.UtcNow;
+        await store.EnqueueAsync(request, enqueuedAt, CancellationToken.None);
 
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-        await using var enumerator = queue.ReadAllAsync(cancellation.Token).GetAsyncEnumerator(cancellation.Token);
-        Assert.True(await enumerator.MoveNextAsync());
-        Assert.Equal(expected, enumerator.Current);
+        var first = await store.TryClaimAsync(enqueuedAt, TimeSpan.FromMinutes(1), CancellationToken.None);
+        var recovered = await store.TryClaimAsync(enqueuedAt.AddMinutes(2), TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        Assert.NotNull(first);
+        Assert.NotNull(recovered);
+        Assert.Equal(request.RunId, recovered!.Request.RunId);
+        Assert.Equal(2, recovered.Attempts);
     }
 
     private static AuctionsApiImportRequest Request() => new(

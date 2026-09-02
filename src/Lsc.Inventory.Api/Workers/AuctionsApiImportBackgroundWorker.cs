@@ -1,4 +1,4 @@
-using System.Threading.Channels;
+using Lsc.Inventory.Api.Storage;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Lsc.Inventory.Api.Workers;
@@ -13,60 +13,81 @@ public sealed record AuctionsApiImportRequest(
     int SkipSaleDateMatches,
     bool RequireFutureSaleDate);
 
-public interface IAuctionsApiImportQueue
-{
-    bool TryEnqueue(AuctionsApiImportRequest request);
-    IAsyncEnumerable<AuctionsApiImportRequest> ReadAllAsync(CancellationToken cancellationToken);
-}
-
-public sealed class AuctionsApiImportQueue : IAuctionsApiImportQueue
-{
-    private readonly Channel<AuctionsApiImportRequest> _channel = Channel.CreateBounded<AuctionsApiImportRequest>(new BoundedChannelOptions(4)
-    {
-        FullMode = BoundedChannelFullMode.Wait,
-        SingleReader = true,
-        SingleWriter = false,
-        AllowSynchronousContinuations = false
-    });
-
-    public bool TryEnqueue(AuctionsApiImportRequest request) => _channel.Writer.TryWrite(request);
-
-    public IAsyncEnumerable<AuctionsApiImportRequest> ReadAllAsync(CancellationToken cancellationToken) =>
-        _channel.Reader.ReadAllAsync(cancellationToken);
-}
-
 public sealed class AuctionsApiImportBackgroundWorker(
-    IAuctionsApiImportQueue queue,
+    IAuctionsApiImportJobStore jobStore,
     IServiceScopeFactory scopeFactory,
     ILogger<AuctionsApiImportBackgroundWorker> logger) : BackgroundService
 {
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(10);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var request in queue.ReadAllAsync(stoppingToken))
+        while (!stoppingToken.IsCancellationRequested)
         {
+            AuctionsApiImportJob? job = null;
             try
             {
+                job = await jobStore.TryClaimAsync(DateTimeOffset.UtcNow, LeaseDuration, stoppingToken);
+                if (job is null)
+                {
+                    await Task.Delay(PollInterval, stoppingToken);
+                    continue;
+                }
+
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiInitialImportProcessor>();
-                await processor.RunAsync(
-                    request.Platform,
-                    request.MaximumLots,
-                    request.Persist,
-                    stoppingToken,
-                    request.StartPage,
-                    request.RequireSaleDate,
-                    request.SkipSaleDateMatches,
-                    request.RequireFutureSaleDate,
-                    request.RunId);
+                using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var heartbeat = MaintainLeaseAsync(job.Request.RunId, runCancellation.Token);
+                try
+                {
+                    var result = await processor.RunAsync(
+                        job.Request.Platform,
+                        job.Request.MaximumLots,
+                        job.Request.Persist,
+                        runCancellation.Token,
+                        job.Request.StartPage,
+                        job.Request.RequireSaleDate,
+                        job.Request.SkipSaleDateMatches,
+                        job.Request.RequireFutureSaleDate,
+                        job.Request.RunId);
+                    await jobStore.CompleteAsync(job.Request.RunId, result.Failures.Count == 0 ? "succeeded" : "partial", DateTimeOffset.UtcNow, CancellationToken.None);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    await jobStore.CompleteAsync(job.Request.RunId, "cancelled", DateTimeOffset.UtcNow, CancellationToken.None);
+                    logger.LogInformation("AuctionsAPI import worker stopped while processing run {RunId}.", job.Request.RunId);
+                }
+                catch (Exception exception)
+                {
+                    await jobStore.CompleteAsync(job.Request.RunId, "failed", DateTimeOffset.UtcNow, CancellationToken.None);
+                    logger.LogError(exception, "AuctionsAPI durable import run {RunId} failed.", job.Request.RunId);
+                }
+                finally
+                {
+                    runCancellation.Cancel();
+                    try { await heartbeat; } catch (OperationCanceledException) { }
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
-                logger.LogInformation("AuctionsAPI import worker stopping while processing run {RunId}.", request.RunId);
+                break;
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "AuctionsAPI background import run {RunId} failed after leaving the request lifecycle.", request.RunId);
+                logger.LogError(exception, "AuctionsAPI durable import worker polling failed.");
+                await Task.Delay(PollInterval, stoppingToken);
             }
+        }
+    }
+
+    private async Task MaintainLeaseAsync(Guid runId, CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(2));
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            if (!await jobStore.HeartbeatAsync(runId, DateTimeOffset.UtcNow, LeaseDuration, cancellationToken))
+                throw new InvalidOperationException($"Import lease lost for run {runId}.");
         }
     }
 }
