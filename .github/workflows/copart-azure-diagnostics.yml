@@ -78,13 +78,13 @@ jobs:
           az containerapp job execution list \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,conditions:properties.conditions}' \
+            --query '[0:10].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,conditions:properties.conditions}' \
             -o json
           echo "Detailed Azure execution failure metadata (read-only; sanitized fields only)."
           for auto_execution in $(az containerapp job execution list \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '[0:3].name' -o tsv); do
+            --query '[0:10].name' -o tsv); do
             az containerapp job execution show \
               --name "$COPART_AUTO_PROCESS_JOB_NAME" \
               --resource-group "$RESOURCE_GROUP" \
