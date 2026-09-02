@@ -24,6 +24,7 @@ public interface IAuctionsApiImportJobStore
     Task<bool> HeartbeatAsync(Guid runId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken);
     Task CheckpointAsync(Guid runId, AuctionsApiInitialImportProgress progress, CancellationToken cancellationToken);
     Task<AuctionsApiImportJob?> GetAsync(Guid runId, CancellationToken cancellationToken);
+    Task<bool> HasCompletedInitialImportAsync(string platform, CancellationToken cancellationToken);
     Task<bool> RequestCancellationAsync(Guid runId, DateTimeOffset requestedAt, CancellationToken cancellationToken);
     Task CompleteAsync(Guid runId, string status, DateTimeOffset completedAt, CancellationToken cancellationToken);
 }
@@ -206,6 +207,26 @@ public sealed partial class PostgresSnapshotStore
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<bool> HasCompletedInitialImportAsync(string platform, CancellationToken cancellationToken)
+    {
+        await EnsureImportJobSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select exists(
+                select 1
+                from auctions_api_import_jobs
+                where lower(platform) = lower(@platform)
+                  and maximum_lots >= 100000
+                  and persist = true
+                  and status = 'succeeded'
+            );
+            """;
+        AddParameter(command, "platform", platform);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
+    }
+
     private async Task EnsureImportJobSchemaAsync(CancellationToken cancellationToken)
     {
         if (_importJobSchemaInitialized) return;
@@ -306,6 +327,12 @@ public sealed class InMemoryAuctionsApiImportJobStore : IAuctionsApiImportJobSto
 
     public Task<AuctionsApiImportJob?> GetAsync(Guid runId, CancellationToken cancellationToken) =>
         Task.FromResult(_jobs.TryGetValue(runId, out var job) ? job : null);
+
+    public Task<bool> HasCompletedInitialImportAsync(string platform, CancellationToken cancellationToken) =>
+        Task.FromResult(_jobs.Values.Any(job => string.Equals(job.Request.Platform, platform, StringComparison.OrdinalIgnoreCase)
+            && job.Request.MaximumLots >= 100000
+            && job.Request.Persist
+            && string.Equals(job.Status, "succeeded", StringComparison.OrdinalIgnoreCase)));
 
     public Task<bool> RequestCancellationAsync(Guid runId, DateTimeOffset requestedAt, CancellationToken cancellationToken)
     {
