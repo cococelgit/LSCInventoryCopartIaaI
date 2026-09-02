@@ -23,7 +23,7 @@ public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
     IOptions<BlobAuditOptions> blobOptions,
     ILogger<PostgresSnapshotStore> logger,
-    IFacetsV2SharedCache? facetsV2SharedCache = null) : IInventorySnapshotStore
+    IFacetsV2SharedCache? facetsV2SharedCache = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static readonly SemaphoreSlim AuditSchemaLock = new(1, 1);

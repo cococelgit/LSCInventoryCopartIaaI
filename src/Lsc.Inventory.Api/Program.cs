@@ -120,6 +120,16 @@ builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalSyncProcessor
 builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInventoryIngestionPipeline>();
 builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
 builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
+if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<IAuctionsApiImportJobStore>(sp =>
+        (IAuctionsApiImportJobStore)sp.GetRequiredService<IInventorySnapshotStore>());
+}
+else
+{
+    builder.Services.AddSingleton<IAuctionsApiImportJobStore, InMemoryAuctionsApiImportJobStore>();
+}
+builder.Services.AddHostedService<AuctionsApiImportBackgroundWorker>();
 builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
 builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
@@ -942,19 +952,47 @@ app.MapPost("/internal/auctions-api/incremental", async (HttpContext context, IA
     return Results.Ok(result);
 });
 
-app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IAuctionsApiInitialImportProcessor processor, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, bool? requireFutureSaleDate, CancellationToken cancellationToken) =>
+app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context, IInventorySnapshotStore snapshotStore, IAuctionsApiImportJobStore queue, string? platform, int? maximumLots, bool? persist, int? startPage, bool? requireSaleDate, int? skipSaleDateMatches, bool? requireFutureSaleDate) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
-    var result = await processor.RunAsync(
-        platform ?? "",
-        maximumLots ?? 100000,
+    var normalizedPlatform = (platform ?? "").Trim().ToLowerInvariant();
+    if (normalizedPlatform is not ("copart" or "iaai")) return Results.BadRequest(new { error = "platform must be copart or iaai" });
+    var requestedMaximum = Math.Clamp(maximumLots ?? 100000, 1, 100000);
+    var runId = await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart(
+        "auctions_api",
+        normalizedPlatform,
+        persist == true ? "initial-import" : "initial-import-shadow",
+        requestedMaximum,
+        1000,
+        DateTimeOffset.UtcNow),
+        CancellationToken.None);
+    var request = new AuctionsApiImportRequest(
+        runId,
+        normalizedPlatform,
+        requestedMaximum,
         persist == true,
-        cancellationToken,
-        startPage ?? 1,
+        Math.Max(1, startPage ?? 1),
         requireSaleDate == true,
-        skipSaleDateMatches ?? 0,
+        Math.Max(0, skipSaleDateMatches ?? 0),
         requireFutureSaleDate == true);
-    return Results.Ok(result);
+    await queue.EnqueueAsync(request, DateTimeOffset.UtcNow, CancellationToken.None);
+    return Results.Accepted($"/internal/auctions-api/runs/{runId}", new { runId, queued = true, persist = request.Persist, platform = normalizedPlatform });
+});
+
+app.MapGet("/internal/auctions-api/runs/{runId:guid}", async (HttpContext context, IAuctionsApiImportJobStore queue, Guid runId) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var job = await queue.GetAsync(runId, CancellationToken.None);
+    return job is null ? Results.NotFound(new { error = "run not found", runId }) : Results.Ok(job);
+});
+
+app.MapPost("/internal/auctions-api/runs/{runId:guid}/cancel", async (HttpContext context, IAuctionsApiImportJobStore queue, Guid runId) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var job = await queue.GetAsync(runId, CancellationToken.None);
+    if (job is null) return Results.NotFound(new { error = "run not found", runId });
+    var changed = await queue.RequestCancellationAsync(runId, DateTimeOffset.UtcNow, CancellationToken.None);
+    return Results.Ok(new { runId, cancellationRequested = changed, status = changed && job.Status == "queued" ? "cancelled" : job.Status });
 });
 
 if (args.Contains("--bootstrap-db", StringComparer.OrdinalIgnoreCase))

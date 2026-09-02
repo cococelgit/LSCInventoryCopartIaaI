@@ -25,7 +25,7 @@ public sealed record AuctionsApiInitialImportResult(
 
 public interface IAuctionsApiInitialImportProcessor
 {
-    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false);
+    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false, Guid? requestedRunId = null);
 }
 
 /// <summary>
@@ -42,7 +42,7 @@ public sealed class AuctionsApiInitialImportProcessor(
 {
     private readonly AuctionsApiOptions _options = options.Value;
 
-    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false)
+    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false, Guid? requestedRunId = null)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (normalizedPlatform is not ("copart" or "iaai")) throw new ArgumentOutOfRangeException(nameof(platform));
@@ -54,7 +54,7 @@ public sealed class AuctionsApiInitialImportProcessor(
         if (persist && !_options.AllowWrites) throw new InvalidOperationException("AuctionsAPI canonical writes are disabled until the Owner explicitly approves activation.");
 
         var startedAt = DateTimeOffset.UtcNow;
-        var runId = await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart("auctions_api", normalizedPlatform, persist ? "initial-import" : "initial-import-shadow", maximumLots, _options.PageSize, startedAt), cancellationToken);
+        var runId = requestedRunId ?? await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart("auctions_api", normalizedPlatform, persist ? "initial-import" : "initial-import-shadow", maximumLots, _options.PageSize, startedAt), cancellationToken);
         var failures = new List<string>();
         var observed = 0;
         var sourceRowsScanned = 0;
