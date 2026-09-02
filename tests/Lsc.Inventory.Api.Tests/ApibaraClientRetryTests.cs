@@ -80,7 +80,7 @@ public sealed class ApibaraClientRetryTests
             RetryBaseDelayMilliseconds = 50,
             RetryMaxDelayMilliseconds = 100
         });
-        return new ApibaraClient(httpClient, options, NullLogger<ApibaraClient>.Instance);
+        return new ApibaraClient(httpClient, options, new ProviderRequestLimiter(), NullLogger<ApibaraClient>.Instance);
     }
 
     private static HttpResponseMessage Response(HttpStatusCode status, string body) => new(status)

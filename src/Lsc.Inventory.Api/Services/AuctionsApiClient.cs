@@ -27,6 +27,7 @@ public sealed record AuctionsApiPage(JsonElement Data, JsonElement Meta, int? Ne
 public sealed class AuctionsApiClient(
     HttpClient httpClient,
     IOptions<AuctionsApiOptions> options,
+    IProviderRequestLimiter requestLimiter,
     ILogger<AuctionsApiClient> logger) : IAuctionsApiClient
 {
     // Long-running durable imports must wait through a provider throttle instead
@@ -65,6 +66,7 @@ public sealed class AuctionsApiClient(
 
         for (var attempt = 1; attempt <= MaxRateLimitAttempts; attempt++)
         {
+            await requestLimiter.WaitAsync("auctions-api", TimeSpan.FromMilliseconds(_options.RequestIntervalMilliseconds), cancellationToken);
             using var message = new HttpRequestMessage(HttpMethod.Get, uri);
             message.Headers.Add("x-api-key", _options.ApiKey);
             message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));

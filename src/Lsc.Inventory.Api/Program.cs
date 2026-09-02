@@ -80,6 +80,7 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddSingleton<IProviderRequestLimiter, ProviderRequestLimiter>();
 builder.Services.AddHttpClient<IApibaraClient, ApibaraClient>((serviceProvider, client) =>
 {
     var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<ApibaraOptions>>().Value;

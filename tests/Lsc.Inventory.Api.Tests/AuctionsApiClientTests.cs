@@ -75,6 +75,7 @@ public sealed class AuctionsApiClientTests
     private static AuctionsApiClient CreateClient(HttpMessageHandler handler, bool enabled) => new(
         new HttpClient(handler) { BaseAddress = new Uri("https://auctions.test/api/") },
         Microsoft.Extensions.Options.Options.Create(new AuctionsApiOptions { Enabled = enabled, ApiKey = "test-key", BaseUrl = "https://auctions.test/api/" }),
+        new ProviderRequestLimiter(),
         NullLogger<AuctionsApiClient>.Instance);
 
     private sealed class CapturingHandler(string json = "{\"data\":[],\"meta\":{}}") : HttpMessageHandler

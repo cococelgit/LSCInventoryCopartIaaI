@@ -23,6 +23,7 @@ public sealed class ApibaraInvalidCursorException(string message)
 public sealed class ApibaraClient(
     HttpClient httpClient,
     IOptions<ApibaraOptions> options,
+    IProviderRequestLimiter requestLimiter,
     ILogger<ApibaraClient> logger) : IApibaraClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -87,6 +88,7 @@ public sealed class ApibaraClient(
         {
             try
             {
+                await requestLimiter.WaitAsync("apibara", TimeSpan.FromMilliseconds(_options.RequestIntervalMilliseconds), cancellationToken);
                 using var request = new HttpRequestMessage(HttpMethod.Get, path);
                 request.Headers.Add("X-API-Key", _options.ApiKey);
                 request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));

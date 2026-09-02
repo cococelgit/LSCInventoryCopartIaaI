@@ -19,6 +19,10 @@ public sealed class ApibaraOptions
     [Range(1, 120)]
     public int RequestTimeoutSeconds { get; init; } = 30;
 
+    /// <summary>Minimum time between request starts for this provider.</summary>
+    [Range(500, 60000)]
+    public int RequestIntervalMilliseconds { get; init; } = 600;
+
     /// <summary>Total number of attempts for transient provider failures, including the first request.</summary>
     [Range(1, 5)]
     public int RetryMaxAttempts { get; init; } = 3;
@@ -56,6 +60,10 @@ public sealed class AuctionsApiOptions
 
     [Range(1, 120)]
     public int RequestTimeoutSeconds { get; init; } = 30;
+
+    /// <summary>Minimum time between request starts for this provider.</summary>
+    [Range(500, 60000)]
+    public int RequestIntervalMilliseconds { get; init; } = 600;
 
     [Range(1, 100000)]
     public int InitialImportMaxLots { get; init; } = 100000;
