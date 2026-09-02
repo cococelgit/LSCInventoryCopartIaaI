@@ -73,13 +73,75 @@ jobs:
           az containerapp job show \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,parallelism:properties.configuration.scheduleTriggerConfig.parallelism,completionCount:properties.configuration.scheduleTriggerConfig.completionCount,image:properties.template.containers[0].image}' \
+            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,parallelism:properties.configuration.scheduleTriggerConfig.parallelism,completionCount:properties.configuration.scheduleTriggerConfig.completionCount,image:properties.template.containers[0].image,command:properties.template.containers[0].command,args:properties.template.containers[0].args,identity:identity,registries:properties.configuration.registries}' \
             -o json
           az containerapp job execution list \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,conditions:properties.conditions}' \
+            --query '[0:10].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,conditions:properties.conditions}' \
             -o json
+          echo "Detailed Azure execution failure metadata (read-only; sanitized fields only)."
+          for auto_execution in $(az containerapp job execution list \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '[0:10].name' -o tsv); do
+            az containerapp job execution show \
+              --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$auto_execution" \
+              --query '{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,provisioningState:properties.provisioningState,conditions:properties.conditions,replicaStatuses:properties.replicaStatuses}' \
+              -o json || true
+          done
+          echo "Recent Azure activity events for the Copart automatic job (read-only)."
+          az monitor activity-log list \
+            --resource-group "$RESOURCE_GROUP" \
+            --resource-type Microsoft.App/jobs \
+            --max-events 50 \
+            --query "[?contains(resourceId, '$COPART_AUTO_PROCESS_JOB_NAME')].{time:eventTimestamp,operation:operationName.value,status:status.value,subStatus:subStatus.value,level:level,resource:resourceId}" \
+            -o json || true
+          echo "Verifying the configured Copart image exists in ACR (read-only)."
+          copart_image="$(az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.template.containers[0].image' -o tsv)"
+          copart_registry="${copart_image%%/*}"
+          copart_repository_tag="${copart_image#*/}"
+          az acr manifest show-metadata \
+            --registry "$copart_registry" \
+            --name "$copart_repository_tag" \
+            --query '{digest:digest,lastUpdateTime:lastUpdateTime,writeEnabled:changeableAttributes.deleteEnabled}' \
+            -o json || true
+          echo "Checking the Container Apps Environment health (read-only)."
+          job_environment_id="$(az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.environmentId' -o tsv)"
+          if [ -n "$job_environment_id" ]; then
+            az resource show --ids "$job_environment_id" \
+              --query '{id:id,name:name,type:type,provisioningState:properties.provisioningState,defaultDomain:properties.defaultDomain,workloadProfiles:properties.workloadProfiles}' \
+              -o json || true
+          fi
+          echo "Checking read-only ACR pull authorization for the scheduled job identity."
+          job_registry_identity="$(az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.configuration.registries[0].identity' -o tsv)"
+          if [ -n "$job_registry_identity" ]; then
+            job_registry_identity_name="${job_registry_identity##*/}"
+            job_registry_principal_id="$(az identity show \
+              --name "$job_registry_identity_name" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query principalId -o tsv 2>/dev/null || true)"
+            acr_id="$(az acr show --name "$copart_registry" --query id -o tsv 2>/dev/null || true)"
+            if [ -n "$job_registry_principal_id" ] && [ -n "$acr_id" ]; then
+              az role assignment list \
+                --assignee-object-id "$job_registry_principal_id" \
+                --scope "$acr_id" \
+                --include-inherited \
+                --query '[].{role:roleDefinitionName,scope:scope}' \
+                -o json || true
+            fi
+          fi
           echo "Listing recent manual Copart processing executions."
           az containerapp job execution list \
             --name "$COPART_JOB_NAME" \
@@ -93,6 +155,22 @@ jobs:
               --job-execution-name "$execution" \
               --only-show-errors
           fi
+          echo "Attempting logs for currently running scheduled replicas (read-only)."
+          running_container="$(az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.template.containers[0].name' -o tsv)"
+          for running_execution in $(az containerapp job execution list \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[?properties.status=='Running'].name" -o tsv); do
+            az containerapp job logs show \
+              --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --execution-name "$running_execution" \
+              --container "$running_container" \
+              --tail 80 || true
+          done
           echo "Attempting Job logs without pinning a cleaned-up replica."
           az containerapp job logs show \
             --name "$COPART_JOB_NAME" \
