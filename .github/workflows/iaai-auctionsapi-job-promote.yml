@@ -1,0 +1,155 @@
+name: IAAI AuctionsAPI Job Promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      activate_schedule:
+        description: "Activate the IAAI schedule after updating the job"
+        required: true
+        default: false
+        type: boolean
+      allow_auctions_writes:
+        description: "Allow canonical writes from AuctionsAPI"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: iaai-auctionsapi-job-promote
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  IAAI_JOB_NAME: job-lsc-iaai-pilot-prod
+
+jobs:
+  promote-iaai-job:
+    name: Build and configure IAAI AuctionsAPI job
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout selected commit
+        uses: actions/checkout@v4
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture and guard current IAAI job
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          trigger_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          identity_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'identity' -o json | sha256sum | awk '{print $1}')"
+          command_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].command' -o json | sha256sum | awk '{print $1}')"
+          test "$trigger_before" = "Manual"
+          test -n "$image_before" && test "$image_before" != "None"
+          echo "CURRENT_JOB_IMAGE=$image_before" >> "$GITHUB_ENV"
+          echo "CURRENT_JOB_TRIGGER=$trigger_before" >> "$GITHUB_ENV"
+          echo "CURRENT_JOB_IDENTITY_HASH=$identity_before" >> "$GITHUB_ENV"
+          echo "CURRENT_JOB_COMMAND_HASH=$command_before" >> "$GITHUB_ENV"
+          echo "Current job image: $image_before"
+          echo "Current trigger: $trigger_before"
+
+      - name: Validate write input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.allow_auctions_writes }}" == "true" || "${{ inputs.allow_auctions_writes }}" == "false" ]]
+
+      - name: Build immutable job image in ACR
+        run: |
+          set -euo pipefail
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "$IMAGE_NAME:iaai-auctionsapi-${GITHUB_SHA}" \
+            --file Dockerfile \
+            .
+
+      - name: Configure job image, secret, provider and window
+        shell: bash
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          image_ref="${ACR_SERVER}/${IMAGE_NAME}:iaai-auctionsapi-${GITHUB_SHA}"
+          az containerapp job update \
+            --name "$IAAI_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$image_ref" \
+            --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
+            --set-env-vars \
+              "AuctionsApi__ApiKey=secretref:auctions-api-key" \
+              "AuctionsApi__Enabled=true" \
+              "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
+              "AuctionsApi__PageSize=1000" \
+              "AuctionsApi__DefaultOverlapMinutes=180" \
+              "AuctionsApi__RequestIntervalMilliseconds=600" \
+              "IaaINational__Enabled=true" \
+              "IaaINational__RunOnStartup=true" \
+              "IaaINational__PrimaryProvider=auctionsapi" \
+              "IaaINational__FallbackProvider=apibara" \
+              "IaaINational__ScheduleTimeZoneId=America/New_York" \
+              "IaaINational__ScheduleStartLocalHour=6" \
+              "IaaINational__ScheduleEndLocalHour=12" \
+              "IaaINational__ScheduleIntervalHours=3" \
+              "IaaINational__RequireInitialImportCompleted=false" \
+              "IaaINational__EnforceScheduleWindow=true" \
+            --only-show-errors
+          echo "IAAI_JOB_IMAGE=$image_ref" >> "$GITHUB_ENV"
+
+      - name: Activate schedule only when explicitly requested
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.activate_schedule }}" != "true" ]]; then
+            echo "Schedule remains Manual; image and variables were promoted only."
+            exit 0
+          fi
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${IAAI_JOB_NAME}?api-version=2024-03-01"
+          body='{"properties":{"configuration":{"triggerType":"Schedule","replicaTimeout":1500,"replicaRetryLimit":1,"scheduleTriggerConfig":{"cronExpression":"0 * * * *","parallelism":1,"replicaCompletionCount":1}}}}'
+          az rest --method patch --uri "$uri" --body "$body" --output none
+
+      - name: Verify IAAI job release
+        shell: bash
+        run: |
+          set -euo pipefail
+          trigger_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          image_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          identity_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'identity' -o json | sha256sum | awk '{print $1}')"
+          command_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].command' -o json | sha256sum | awk '{print $1}')"
+          test "$image_after" = "$IAAI_JOB_IMAGE"
+          test "$identity_after" = "$CURRENT_JOB_IDENTITY_HASH"
+          test "$command_after" = "$CURRENT_JOB_COMMAND_HASH"
+          if [[ "${{ inputs.activate_schedule }}" == "true" ]]; then
+            test "$trigger_after" = "Schedule"
+          else
+            test "$trigger_after" = "Manual"
+          fi
+          echo "IAAI_JOB_PROMOTION_COMPLETED"
+          echo "IMAGE=$image_after"
+          echo "TRIGGER=$trigger_after"
+          echo "CRON_UTC=0 * * * * (guarded by America/New_York 06:00, 09:00, 12:00)"
+          echo "PRIMARY_PROVIDER=auctionsapi"
+          echo "FALLBACK_PROVIDER=apibara"
+          echo "PARALLELISM=1"
+          echo "INITIAL_IMPORT_GATE=false (test load intentionally stopped)"
+          echo "COPART_UNCHANGED=true"

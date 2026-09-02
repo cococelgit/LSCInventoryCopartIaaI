@@ -33,26 +33,38 @@ public sealed class IaaINationalProviderRouter(
                 return new(Guid.NewGuid(), now, now, true, "initial-import-not-complete", Guid.Empty, 0, 0, 0, 0, 0, 0, 0, false, null, new Dictionary<string, int>(), [], false);
             }
 
-            var result = await auctionsApiProcessor.RunAsync("iaai", persist: true, cancellationToken);
-            return new(
-                result.RunId,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow,
-                false,
-                null,
-                Guid.Empty,
-                result.ChangedObserved + result.ArchivedObserved,
-                result.Loaded,
-                result.Marked,
-                result.Discarded,
-                result.Quarantined,
-                result.PagesProcessed,
-                result.RequestsIssued,
-                false,
-                null,
-                new Dictionary<string, int>(),
-                result.Failures,
-                result.Failures.Count > 0);
+            try
+            {
+                var result = await auctionsApiProcessor.RunAsync("iaai", persist: true, cancellationToken);
+                return new(
+                    result.RunId,
+                    DateTimeOffset.UtcNow,
+                    DateTimeOffset.UtcNow,
+                    false,
+                    null,
+                    Guid.Empty,
+                    result.ChangedObserved + result.ArchivedObserved,
+                    result.Loaded,
+                    result.Marked,
+                    result.Discarded,
+                    result.Quarantined,
+                    result.PagesProcessed,
+                    result.RequestsIssued,
+                    false,
+                    null,
+                    new Dictionary<string, int>(),
+                    result.Failures,
+                    result.Failures.Count > 0);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "AuctionsAPI IAAI sync failed; falling back to Apibara for this run.");
+                return await apibaraProcessor.RunAsync(cancellationToken);
+            }
         }
 
         return await apibaraProcessor.RunAsync(cancellationToken);
