@@ -155,6 +155,17 @@ jobs:
               --job-execution-name "$execution" \
               --only-show-errors
           fi
+          echo "Attempting logs for currently running scheduled replicas (read-only)."
+          for running_execution in $(az containerapp job execution list \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[?properties.status=='Running'].name" -o tsv); do
+            az containerapp job logs show \
+              --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --execution-name "$running_execution" \
+              --tail 80 || true
+          done
           echo "Attempting Job logs without pinning a cleaned-up replica."
           az containerapp job logs show \
             --name "$COPART_JOB_NAME" \
