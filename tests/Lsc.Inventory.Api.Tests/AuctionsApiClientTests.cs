@@ -60,6 +60,18 @@ public sealed class AuctionsApiClientTests
         Assert.Equal(0, page.Data.GetArrayLength());
     }
 
+    [Fact]
+    public async Task Keeps_retrying_past_the_previous_short_rate_limit_window()
+    {
+        var handler = new RateLimitThenSuccessHandler(rateLimitResponses: 6);
+        var client = CreateClient(handler, enabled: true);
+
+        var page = await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(1, null, 1, 1000), CancellationToken.None);
+
+        Assert.Equal(7, handler.Requests);
+        Assert.Equal(0, page.Data.GetArrayLength());
+    }
+
     private static AuctionsApiClient CreateClient(HttpMessageHandler handler, bool enabled) => new(
         new HttpClient(handler) { BaseAddress = new Uri("https://auctions.test/api/") },
         Microsoft.Extensions.Options.Options.Create(new AuctionsApiOptions { Enabled = enabled, ApiKey = "test-key", BaseUrl = "https://auctions.test/api/" }),
@@ -78,14 +90,14 @@ public sealed class AuctionsApiClientTests
         }
     }
 
-    private sealed class RateLimitThenSuccessHandler : HttpMessageHandler
+    private sealed class RateLimitThenSuccessHandler(int rateLimitResponses = 1) : HttpMessageHandler
     {
         public int Requests { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests++;
-            if (Requests == 1)
+            if (Requests <= rateLimitResponses)
             {
                 var throttled = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
                 throttled.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
