@@ -111,6 +111,27 @@ jobs:
             --name "$copart_repository_tag" \
             --query '{digest:digest,lastUpdateTime:lastUpdateTime,writeEnabled:changeableAttributes.deleteEnabled}' \
             -o json || true
+          echo "Checking read-only ACR pull authorization for the scheduled job identity."
+          job_registry_identity="$(az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.configuration.registries[0].identity' -o tsv)"
+          if [ -n "$job_registry_identity" ]; then
+            job_registry_identity_name="${job_registry_identity##*/}"
+            job_registry_principal_id="$(az identity show \
+              --name "$job_registry_identity_name" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query principalId -o tsv 2>/dev/null || true)"
+            acr_id="$(az acr show --name "$copart_registry" --query id -o tsv 2>/dev/null || true)"
+            if [ -n "$job_registry_principal_id" ] && [ -n "$acr_id" ]; then
+              az role assignment list \
+                --assignee-object-id "$job_registry_principal_id" \
+                --scope "$acr_id" \
+                --include-inherited \
+                --query '[].{role:roleDefinitionName,scope:scope}' \
+                -o json || true
+            fi
+          fi
           echo "Listing recent manual Copart processing executions."
           az containerapp job execution list \
             --name "$COPART_JOB_NAME" \
