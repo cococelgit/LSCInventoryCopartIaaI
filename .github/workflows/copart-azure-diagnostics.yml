@@ -73,7 +73,7 @@ jobs:
           az containerapp job show \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,parallelism:properties.configuration.scheduleTriggerConfig.parallelism,completionCount:properties.configuration.scheduleTriggerConfig.completionCount,image:properties.template.containers[0].image}' \
+            --query '{name:name,triggerType:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,replicaTimeout:properties.configuration.replicaTimeout,replicaRetryLimit:properties.configuration.replicaRetryLimit,parallelism:properties.configuration.scheduleTriggerConfig.parallelism,completionCount:properties.configuration.scheduleTriggerConfig.completionCount,image:properties.template.containers[0].image,command:properties.template.containers[0].command,args:properties.template.containers[0].args}' \
             -o json
           az containerapp job execution list \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
@@ -89,7 +89,7 @@ jobs:
               --name "$COPART_AUTO_PROCESS_JOB_NAME" \
               --resource-group "$RESOURCE_GROUP" \
               --job-execution-name "$auto_execution" \
-              --query '{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,provisioningState:properties.provisioningState,conditions:properties.conditions,replicaTimeout:properties.template.containers[0].resources,containerExitCode:properties.template.containers[0].command}' \
+              --query '{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,provisioningState:properties.provisioningState,conditions:properties.conditions,replicaStatuses:properties.replicaStatuses}' \
               -o json || true
           done
           echo "Recent Azure activity events for the Copart automatic job (read-only)."
