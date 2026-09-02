@@ -23,9 +23,15 @@ public sealed record AuctionsApiInitialImportResult(
     int MissingSaleDateSkipped,
     int SaleDateMatchesSkipped);
 
+public sealed record AuctionsApiInitialImportProgress(
+    int NextPage,
+    int ProcessedLots,
+    int PagesProcessed,
+    int RequestsIssued);
+
 public interface IAuctionsApiInitialImportProcessor
 {
-    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false, Guid? requestedRunId = null);
+    Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false, Guid? requestedRunId = null, Func<AuctionsApiInitialImportProgress, CancellationToken, Task>? checkpoint = null);
 }
 
 /// <summary>
@@ -42,7 +48,7 @@ public sealed class AuctionsApiInitialImportProcessor(
 {
     private readonly AuctionsApiOptions _options = options.Value;
 
-    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false, Guid? requestedRunId = null)
+    public async Task<AuctionsApiInitialImportResult> RunAsync(string platform, int maximumLots, bool persist, CancellationToken cancellationToken, int startPage = 1, bool requireSaleDate = false, int skipSaleDateMatches = 0, bool requireFutureSaleDate = false, Guid? requestedRunId = null, Func<AuctionsApiInitialImportProgress, CancellationToken, Task>? checkpoint = null)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (normalizedPlatform is not ("copart" or "iaai")) throw new ArgumentOutOfRangeException(nameof(platform));
@@ -124,7 +130,10 @@ public sealed class AuctionsApiInitialImportProcessor(
                     if (observed < maximumLots) failures.Add("initial-import:source-ended-before-limit");
                     break;
                 }
-                page = response.NextPage.Value;
+                var nextPage = response.NextPage.Value;
+                if (checkpoint is not null)
+                    await checkpoint(new AuctionsApiInitialImportProgress(nextPage, observed, pages, requests), cancellationToken);
+                page = nextPage;
             }
             if (requests >= _options.InitialImportMaxRequests && observed < maximumLots) failures.Add("initial-import:request-cap-reached");
             var finishedAt = DateTimeOffset.UtcNow;

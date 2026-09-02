@@ -11,13 +11,18 @@ public sealed record AuctionsApiImportJob(
     DateTimeOffset? LeaseUntil,
     DateTimeOffset? LastHeartbeat,
     DateTimeOffset EnqueuedAt,
-    bool CancellationRequested = false);
+    bool CancellationRequested = false,
+    int NextPage = 1,
+    int ProcessedLots = 0,
+    int PagesProcessed = 0,
+    int RequestsIssued = 0);
 
 public interface IAuctionsApiImportJobStore
 {
     Task EnqueueAsync(AuctionsApiImportRequest request, DateTimeOffset enqueuedAt, CancellationToken cancellationToken);
     Task<AuctionsApiImportJob?> TryClaimAsync(DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken);
     Task<bool> HeartbeatAsync(Guid runId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken);
+    Task CheckpointAsync(Guid runId, AuctionsApiInitialImportProgress progress, CancellationToken cancellationToken);
     Task<AuctionsApiImportJob?> GetAsync(Guid runId, CancellationToken cancellationToken);
     Task<bool> RequestCancellationAsync(Guid runId, DateTimeOffset requestedAt, CancellationToken cancellationToken);
     Task CompleteAsync(Guid runId, string status, DateTimeOffset completedAt, CancellationToken cancellationToken);
@@ -37,10 +42,10 @@ public sealed partial class PostgresSnapshotStore
         command.CommandText = """
             insert into auctions_api_import_jobs
                 (run_id, platform, maximum_lots, persist, start_page, require_sale_date,
-                 skip_sale_date_matches, require_future_sale_date, status, attempts, enqueued_at)
+                 skip_sale_date_matches, require_future_sale_date, next_page, status, attempts, enqueued_at)
             values
                 (@run_id, @platform, @maximum_lots, @persist, @start_page, @require_sale_date,
-                 @skip_sale_date_matches, @require_future_sale_date, 'queued', 0, @enqueued_at)
+                 @skip_sale_date_matches, @require_future_sale_date, @start_page, 'queued', 0, @enqueued_at)
             on conflict (run_id) do nothing;
             """;
         AddParameter(command, "run_id", request.RunId);
@@ -65,7 +70,8 @@ public sealed partial class PostgresSnapshotStore
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
             select run_id, platform, maximum_lots, persist, start_page, require_sale_date,
-                   skip_sale_date_matches, require_future_sale_date, attempts, enqueued_at, cancellation_requested, lease_until, last_heartbeat
+                   skip_sale_date_matches, require_future_sale_date, attempts, enqueued_at, cancellation_requested, lease_until, last_heartbeat,
+                   next_page, processed_lots, pages_processed, requests_issued
             from auctions_api_import_jobs
             where cancellation_requested = false and (status = 'queued' or (status = 'running' and (lease_until is null or lease_until < @now)))
             order by enqueued_at, run_id
@@ -81,9 +87,14 @@ public sealed partial class PostgresSnapshotStore
         }
         var request = new AuctionsApiImportRequest(
             reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2), reader.GetBoolean(3),
-            reader.GetInt32(4), reader.GetBoolean(5), reader.GetInt32(6), reader.GetBoolean(7));
+            reader.GetInt32(13), reader.GetBoolean(5), reader.GetInt32(6), reader.GetBoolean(7));
         var attempts = reader.GetInt32(8) + 1;
         var enqueuedAt = reader.GetFieldValue<DateTimeOffset>(9);
+        var cancellationRequested = reader.GetBoolean(10);
+        var nextPage = reader.GetInt32(13);
+        var processedLots = reader.GetInt32(14);
+        var pagesProcessed = reader.GetInt32(15);
+        var requestsIssued = reader.GetInt32(16);
         await reader.CloseAsync();
         var leaseUntil = now.Add(leaseDuration);
         await using var update = connection.CreateCommand();
@@ -100,7 +111,7 @@ public sealed partial class PostgresSnapshotStore
         AddParameter(update, "run_id", request.RunId);
         await update.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new AuctionsApiImportJob(request, "running", attempts, leaseUntil, now, enqueuedAt);
+        return new AuctionsApiImportJob(request, "running", attempts, leaseUntil, now, enqueuedAt, cancellationRequested, nextPage, processedLots, pagesProcessed, requestsIssued);
     }
 
     public async Task<bool> HeartbeatAsync(Guid runId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken)
@@ -120,6 +131,26 @@ public sealed partial class PostgresSnapshotStore
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
+    public async Task CheckpointAsync(Guid runId, AuctionsApiInitialImportProgress progress, CancellationToken cancellationToken)
+    {
+        await EnsureImportJobSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            update auctions_api_import_jobs
+            set next_page = @next_page, processed_lots = @processed_lots,
+                pages_processed = @pages_processed, requests_issued = @requests_issued
+            where run_id = @run_id and status = 'running' and cancellation_requested = false;
+            """;
+        AddParameter(command, "next_page", progress.NextPage);
+        AddParameter(command, "processed_lots", progress.ProcessedLots);
+        AddParameter(command, "pages_processed", progress.PagesProcessed);
+        AddParameter(command, "requests_issued", progress.RequestsIssued);
+        AddParameter(command, "run_id", runId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task<AuctionsApiImportJob?> GetAsync(Guid runId, CancellationToken cancellationToken)
     {
         await EnsureImportJobSchemaAsync(cancellationToken);
@@ -129,14 +160,15 @@ public sealed partial class PostgresSnapshotStore
         command.CommandText = """
             select run_id, platform, maximum_lots, persist, start_page, require_sale_date,
                    skip_sale_date_matches, require_future_sale_date, status, attempts,
-                   lease_until, last_heartbeat, enqueued_at, cancellation_requested
+                   lease_until, last_heartbeat, enqueued_at, cancellation_requested,
+                   next_page, processed_lots, pages_processed, requests_issued
             from auctions_api_import_jobs where run_id = @run_id;
             """;
         AddParameter(command, "run_id", runId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
-        var request = new AuctionsApiImportRequest(reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2), reader.GetBoolean(3), reader.GetInt32(4), reader.GetBoolean(5), reader.GetInt32(6), reader.GetBoolean(7));
-        return new AuctionsApiImportJob(request, reader.GetString(8), reader.GetInt32(9), reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTimeOffset>(10), reader.IsDBNull(11) ? null : reader.GetFieldValue<DateTimeOffset>(11), reader.GetFieldValue<DateTimeOffset>(12), reader.GetBoolean(13));
+        var request = new AuctionsApiImportRequest(reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2), reader.GetBoolean(3), reader.GetInt32(14), reader.GetBoolean(5), reader.GetInt32(6), reader.GetBoolean(7));
+        return new AuctionsApiImportJob(request, reader.GetString(8), reader.GetInt32(9), reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTimeOffset>(10), reader.IsDBNull(11) ? null : reader.GetFieldValue<DateTimeOffset>(11), reader.GetFieldValue<DateTimeOffset>(12), reader.GetBoolean(13), reader.GetInt32(14), reader.GetInt32(15), reader.GetInt32(16), reader.GetInt32(17));
     }
 
     public async Task<bool> RequestCancellationAsync(Guid runId, DateTimeOffset requestedAt, CancellationToken cancellationToken)
@@ -194,6 +226,10 @@ public sealed partial class PostgresSnapshotStore
                     require_sale_date boolean not null default false,
                     skip_sale_date_matches integer not null default 0,
                     require_future_sale_date boolean not null default false,
+                    next_page integer not null default 1,
+                    processed_lots integer not null default 0,
+                    pages_processed integer not null default 0,
+                    requests_issued integer not null default 0,
                     cancellation_requested boolean not null default false,
                     status text not null default 'queued',
                     attempts integer not null default 0,
@@ -204,6 +240,11 @@ public sealed partial class PostgresSnapshotStore
                 );
                 alter table auctions_api_import_jobs
                     add column if not exists cancellation_requested boolean not null default false;
+                alter table auctions_api_import_jobs
+                    add column if not exists next_page integer not null default 1,
+                    add column if not exists processed_lots integer not null default 0,
+                    add column if not exists pages_processed integer not null default 0,
+                    add column if not exists requests_issued integer not null default 0;
                 create index if not exists ix_auctions_api_import_jobs_claim
                     on auctions_api_import_jobs (status, lease_until, enqueued_at);
                 """;
@@ -236,7 +277,8 @@ public sealed class InMemoryAuctionsApiImportJobStore : IAuctionsApiImportJobSto
             var job = _jobs.Values.Where(item => item.Status == "queued" || (item.Status == "running" && item.LeaseUntil < now))
                 .OrderBy(item => item.EnqueuedAt).FirstOrDefault();
             if (job is null) return null;
-            var claimed = job with { Status = "running", Attempts = job.Attempts + 1, LeaseUntil = now.Add(leaseDuration), LastHeartbeat = now };
+            var resumedRequest = job.Request with { StartPage = job.NextPage };
+            var claimed = job with { Request = resumedRequest, Status = "running", Attempts = job.Attempts + 1, LeaseUntil = now.Add(leaseDuration), LastHeartbeat = now };
             _jobs[job.Request.RunId] = claimed;
             return claimed;
         }
@@ -253,6 +295,13 @@ public sealed class InMemoryAuctionsApiImportJobStore : IAuctionsApiImportJobSto
             return true;
         }
         finally { _gate.Release(); }
+    }
+
+    public Task CheckpointAsync(Guid runId, AuctionsApiInitialImportProgress progress, CancellationToken cancellationToken)
+    {
+        if (_jobs.TryGetValue(runId, out var job) && job.Status == "running" && !job.CancellationRequested)
+            _jobs[runId] = job with { NextPage = progress.NextPage, ProcessedLots = progress.ProcessedLots, PagesProcessed = progress.PagesProcessed, RequestsIssued = progress.RequestsIssued };
+        return Task.CompletedTask;
     }
 
     public Task<AuctionsApiImportJob?> GetAsync(Guid runId, CancellationToken cancellationToken) =>
