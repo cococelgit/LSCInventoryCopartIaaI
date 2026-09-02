@@ -60,8 +60,8 @@ public sealed class AuctionsApiOptions
     [Range(1, 100000)]
     public int InitialImportMaxLots { get; init; } = 100000;
 
-    [Range(1, 500)]
-    public int InitialImportMaxRequests { get; init; } = 120;
+    [Range(1, 1000)]
+    public int InitialImportMaxRequests { get; init; } = 1000;
 
     public bool IsConfigured => Enabled && !string.IsNullOrWhiteSpace(ApiKey);
 }
