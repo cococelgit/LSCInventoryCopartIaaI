@@ -80,7 +80,7 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --query '[0:3].{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,conditions:properties.conditions}' \
             -o json
-          echo "Detailed Azure execution failure metadata (read-only; sanitized fields only)." \
+          echo "Detailed Azure execution failure metadata (read-only; sanitized fields only)."
           for auto_execution in $(az containerapp job execution list \
             --name "$COPART_AUTO_PROCESS_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
@@ -92,7 +92,7 @@ jobs:
               --query '{name:name,status:properties.status,startTime:properties.startTime,endTime:properties.endTime,provisioningState:properties.provisioningState,conditions:properties.conditions,replicaTimeout:properties.template.containers[0].resources,containerExitCode:properties.template.containers[0].command}' \
               -o json || true
           done
-          echo "Recent Azure activity events for the Copart automatic job (read-only)." \
+          echo "Recent Azure activity events for the Copart automatic job (read-only)."
           az monitor activity-log list \
             --resource-group "$RESOURCE_GROUP" \
             --resource-type Microsoft.App/jobs \
