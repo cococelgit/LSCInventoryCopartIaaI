@@ -39,6 +39,26 @@ public sealed class AuctionsApiImportBackgroundWorkerTests
     }
 
     [Fact]
+    public async Task Durable_queue_resumes_from_last_confirmed_page()
+    {
+        var store = new InMemoryAuctionsApiImportJobStore();
+        var request = Request();
+        var startedAt = DateTimeOffset.UtcNow;
+        await store.EnqueueAsync(request, startedAt, CancellationToken.None);
+        await store.TryClaimAsync(startedAt, TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        await store.CheckpointAsync(request.RunId, new AuctionsApiInitialImportProgress(4, 150, 3, 3), CancellationToken.None);
+        var checkpointed = await store.GetAsync(request.RunId, CancellationToken.None);
+        var recovered = await store.TryClaimAsync(startedAt.AddMinutes(2), TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        Assert.NotNull(checkpointed);
+        Assert.Equal(4, checkpointed!.NextPage);
+        Assert.Equal(150, checkpointed.ProcessedLots);
+        Assert.NotNull(recovered);
+        Assert.Equal(4, recovered!.Request.StartPage);
+    }
+
+    [Fact]
     public async Task Cancellation_marks_queued_job_and_does_not_allow_claim()
     {
         var store = new InMemoryAuctionsApiImportJobStore();

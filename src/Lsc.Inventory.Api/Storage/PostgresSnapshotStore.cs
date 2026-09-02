@@ -42,7 +42,6 @@ public sealed partial class PostgresSnapshotStore(
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly BlobAuditOptions _blob = blobOptions.Value;
     private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
-    private readonly ConcurrentDictionary<string, StoredVehicleSnapshot> _recent = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
     private AccessToken _cachedDatabaseAccessToken;
     private bool _projectionReadyCache;
@@ -254,7 +253,6 @@ public sealed partial class PostgresSnapshotStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
         await UpsertSearchProjectionAsync(connection, identity, vehicle, observedAt, rawJson, cancellationToken);
 
-        _recent[identity] = new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson);
         logger.LogInformation("Persisted inventory lot {LotKey} at {ObservedAt}", identity, observedAt);
         var action = previousHash is null ? "created" : string.Equals(previousHash, payloadHash, StringComparison.Ordinal) ? "unchanged" : "updated";
         var changedFields = action == "created" ? new[] { "initial" } : action == "updated" ? DescribeChangedFields(previousVehicle, vehicle) : Array.Empty<string>();

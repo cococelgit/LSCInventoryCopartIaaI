@@ -50,7 +50,8 @@ public sealed class AuctionsApiImportBackgroundWorker(
                         job.Request.RequireSaleDate,
                         job.Request.SkipSaleDateMatches,
                         job.Request.RequireFutureSaleDate,
-                        job.Request.RunId);
+                        job.Request.RunId,
+                        (progress, checkpointToken) => jobStore.CheckpointAsync(job.Request.RunId, progress, checkpointToken));
                     await jobStore.CompleteAsync(job.Request.RunId, result.Failures.Count == 0 ? "succeeded" : "partial", DateTimeOffset.UtcNow, CancellationToken.None);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
