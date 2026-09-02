@@ -979,6 +979,22 @@ app.MapPost("/internal/auctions-api/initial-import", async (HttpContext context,
     return Results.Accepted($"/internal/auctions-api/runs/{runId}", new { runId, queued = true, persist = request.Persist, platform = normalizedPlatform });
 });
 
+app.MapGet("/internal/auctions-api/runs/{runId:guid}", async (HttpContext context, IAuctionsApiImportJobStore queue, Guid runId) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var job = await queue.GetAsync(runId, CancellationToken.None);
+    return job is null ? Results.NotFound(new { error = "run not found", runId }) : Results.Ok(job);
+});
+
+app.MapPost("/internal/auctions-api/runs/{runId:guid}/cancel", async (HttpContext context, IAuctionsApiImportJobStore queue, Guid runId) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var job = await queue.GetAsync(runId, CancellationToken.None);
+    if (job is null) return Results.NotFound(new { error = "run not found", runId });
+    var changed = await queue.RequestCancellationAsync(runId, DateTimeOffset.UtcNow, CancellationToken.None);
+    return Results.Ok(new { runId, cancellationRequested = changed, status = changed && job.Status == "queued" ? "cancelled" : job.Status });
+});
+
 if (args.Contains("--bootstrap-db", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

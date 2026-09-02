@@ -38,7 +38,7 @@ public sealed class AuctionsApiImportBackgroundWorker(
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiInitialImportProcessor>();
                 using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                var heartbeat = MaintainLeaseAsync(job.Request.RunId, runCancellation.Token);
+                var heartbeat = MaintainLeaseAsync(job.Request.RunId, runCancellation, runCancellation.Token);
                 try
                 {
                     var result = await processor.RunAsync(
@@ -81,13 +81,22 @@ public sealed class AuctionsApiImportBackgroundWorker(
         }
     }
 
-    private async Task MaintainLeaseAsync(Guid runId, CancellationToken cancellationToken)
+    private async Task MaintainLeaseAsync(Guid runId, CancellationTokenSource runCancellation, CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(2));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         while (await timer.WaitForNextTickAsync(cancellationToken))
         {
+            var job = await jobStore.GetAsync(runId, cancellationToken);
+            if (job?.CancellationRequested == true)
+            {
+                runCancellation.Cancel();
+                return;
+            }
             if (!await jobStore.HeartbeatAsync(runId, DateTimeOffset.UtcNow, LeaseDuration, cancellationToken))
-                throw new InvalidOperationException($"Import lease lost for run {runId}.");
+            {
+                runCancellation.Cancel();
+                return;
+            }
         }
     }
 }

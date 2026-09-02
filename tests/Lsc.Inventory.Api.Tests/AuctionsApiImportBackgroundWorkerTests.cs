@@ -38,6 +38,37 @@ public sealed class AuctionsApiImportBackgroundWorkerTests
         Assert.Equal(2, recovered.Attempts);
     }
 
+    [Fact]
+    public async Task Cancellation_marks_queued_job_and_does_not_allow_claim()
+    {
+        var store = new InMemoryAuctionsApiImportJobStore();
+        var request = Request();
+        await store.EnqueueAsync(request, DateTimeOffset.UtcNow, CancellationToken.None);
+
+        Assert.True(await store.RequestCancellationAsync(request.RunId, DateTimeOffset.UtcNow, CancellationToken.None));
+        var job = await store.GetAsync(request.RunId, CancellationToken.None);
+        var claimed = await store.TryClaimAsync(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(10), CancellationToken.None);
+
+        Assert.NotNull(job);
+        Assert.Equal("cancelled", job!.Status);
+        Assert.True(job.CancellationRequested);
+        Assert.Null(claimed);
+    }
+
+    [Fact]
+    public async Task Cancellation_is_idempotent_for_terminal_job()
+    {
+        var store = new InMemoryAuctionsApiImportJobStore();
+        var request = Request();
+        await store.EnqueueAsync(request, DateTimeOffset.UtcNow, CancellationToken.None);
+        var claimed = await store.TryClaimAsync(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(10), CancellationToken.None);
+        await store.CompleteAsync(request.RunId, "succeeded", DateTimeOffset.UtcNow, CancellationToken.None);
+
+        Assert.NotNull(claimed);
+        Assert.False(await store.RequestCancellationAsync(request.RunId, DateTimeOffset.UtcNow, CancellationToken.None));
+        Assert.Equal("succeeded", (await store.GetAsync(request.RunId, CancellationToken.None))!.Status);
+    }
+
     private static AuctionsApiImportRequest Request() => new(
         Guid.NewGuid(), "iaai", 1000, false, 1, false, 0, true);
 }
