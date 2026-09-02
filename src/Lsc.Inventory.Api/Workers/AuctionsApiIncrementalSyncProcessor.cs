@@ -289,7 +289,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 ["state"] = Scalar(lotRow, "location.state"),
                 ["facility_id"] = Scalar(lotRow, "location.id", "location.facility_id"),
             },
-            ["media"] = new Dictionary<string, object?> { ["photos"] = StringArray(lotRow, "images") },
+            ["media"] = new Dictionary<string, object?> { ["thumbs"] = ImageUrls(lotRow, vehicleRow) },
         };
         try
         {
@@ -328,16 +328,39 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     private static int? Number(JsonElement value, params string[] paths) => int.TryParse(Scalar(value, paths), out var number) ? number : null;
     private static bool? Bool(JsonElement value, params string[] paths) => bool.TryParse(Scalar(value, paths), out var result) ? result : null;
 
-    private static string[] StringArray(JsonElement value, params string[] paths)
+    private static string[] ImageUrls(params JsonElement[] rows)
     {
-        foreach (var path in paths)
+        var urls = new List<string>();
+        foreach (var row in rows)
         {
-            var found = At(value, path);
-            if (found is null || found.Value.ValueKind != JsonValueKind.Array) continue;
-            return found.Value.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() : Scalar(item, "large", "url", "src"))
-                .Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToArray();
+            var images = At(row, "images");
+            if (images is null) continue;
+            CollectImageUrls(images.Value, urls);
         }
-        return [];
+        return urls
+            .Where(value => Uri.TryCreate(value, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static void CollectImageUrls(JsonElement value, ICollection<string> urls)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.String:
+                var candidate = value.GetString();
+                if (!string.IsNullOrWhiteSpace(candidate)) urls.Add(candidate);
+                return;
+            case JsonValueKind.Array:
+                foreach (var item in value.EnumerateArray()) CollectImageUrls(item, urls);
+                return;
+            case JsonValueKind.Object:
+                foreach (var property in new[] { "big", "normal", "small", "exterior", "interior", "url", "src", "large" })
+                {
+                    if (value.TryGetProperty(property, out var nested)) CollectImageUrls(nested, urls);
+                }
+                return;
+        }
     }
 
     private static string? MaskVin(string? vin) => string.IsNullOrWhiteSpace(vin) || vin.Length < 6 ? null : $"{vin[..3]}…{vin[^3..]}";
