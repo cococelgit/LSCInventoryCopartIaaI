@@ -99,6 +99,18 @@ jobs:
             --max-events 50 \
             --query "[?contains(resourceId, '$COPART_AUTO_PROCESS_JOB_NAME')].{time:eventTimestamp,operation:operationName.value,status:status.value,subStatus:subStatus.value,level:level,resource:resourceId}" \
             -o json || true
+          echo "Verifying the configured Copart image exists in ACR (read-only)."
+          copart_image="$(az containerapp job show \
+            --name "$COPART_AUTO_PROCESS_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query 'properties.template.containers[0].image' -o tsv)"
+          copart_registry="${copart_image%%/*}"
+          copart_repository_tag="${copart_image#*/}"
+          az acr manifest show-metadata \
+            --registry "$copart_registry" \
+            --name "$copart_repository_tag" \
+            --query '{digest:digest,lastUpdateTime:lastUpdateTime,writeEnabled:changeableAttributes.deleteEnabled}' \
+            -o json || true
           echo "Listing recent manual Copart processing executions."
           az containerapp job execution list \
             --name "$COPART_JOB_NAME" \
