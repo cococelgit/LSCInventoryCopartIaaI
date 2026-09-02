@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Normalization;
@@ -114,6 +115,8 @@ public sealed class CopartExcelSnapshotProcessor(
         var state = new ProcessingState();
         var batch = new List<AuctionVehicle>(_options.ProcessingBatchSize);
         var observedLotKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var batchNumber = 0;
+        logger.LogInformation("Copart snapshot {FileName} entering row processing; expected rows {ExpectedRows}, batch size {BatchSize}, persistence concurrency {PersistenceConcurrency}.", snapshot.FileName, validation.RowCount, _options.ProcessingBatchSize, _options.PersistenceConcurrency);
         InventoryReconciliationResult? reconciliation = null;
 
         try
@@ -123,12 +126,22 @@ public sealed class CopartExcelSnapshotProcessor(
                 batch.Add(row);
                 if (batch.Count >= _options.ProcessingBatchSize)
                 {
+                    batchNumber++;
+                    var batchStartedAt = Stopwatch.GetTimestamp();
+                    logger.LogInformation("Copart snapshot {FileName} starting batch {BatchNumber}; observed before batch {Observed}.", snapshot.FileName, batchNumber, state.Observed);
                     await ProcessBatchAsync(batch, observedLotKeys, state, snapshot.Sha256, snapshot.DownloadedAt, cancellationToken);
+                    logger.LogInformation("Copart snapshot {FileName} completed batch {BatchNumber}; observed {Observed}, accepted {Accepted}, discarded {Discarded}, errors {Errors}, duration {DurationMs} ms.", snapshot.FileName, batchNumber, state.Observed, state.Accepted, state.Discarded, state.Errors, Stopwatch.GetElapsedTime(batchStartedAt).TotalMilliseconds);
                     batch.Clear();
                 }
             }
             if (batch.Count > 0)
+            {
+                batchNumber++;
+                var batchStartedAt = Stopwatch.GetTimestamp();
+                logger.LogInformation("Copart snapshot {FileName} starting final batch {BatchNumber}; observed before batch {Observed}.", snapshot.FileName, batchNumber, state.Observed);
                 await ProcessBatchAsync(batch, observedLotKeys, state, snapshot.Sha256, snapshot.DownloadedAt, cancellationToken);
+                logger.LogInformation("Copart snapshot {FileName} completed final batch {BatchNumber}; observed {Observed}, accepted {Accepted}, discarded {Discarded}, errors {Errors}, duration {DurationMs} ms.", snapshot.FileName, batchNumber, state.Observed, state.Accepted, state.Discarded, state.Errors, Stopwatch.GetElapsedTime(batchStartedAt).TotalMilliseconds);
+            }
 
             var isComplete = state.Errors == 0 && state.Failures.Count == 0 && state.Observed == validation.RowCount;
             if (isComplete)
@@ -254,18 +267,26 @@ public sealed class CopartExcelSnapshotProcessor(
     {
         AuctionVehicle? vehicle = null;
         EligibilityEvaluation? evaluation = null;
+        using var rowCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        rowCts.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
             vehicle = CanonicalVehicleCleaner.Clean(row);
             evaluation = AuctionEligibilityEvaluator.Evaluate(vehicle);
-            await snapshotStore.PersistEligibilityDecisionAsync(evaluation, DateTimeOffset.UtcNow, cancellationToken);
+            logger.LogDebug("Copart row {RowNumber} evaluated as {Decision}; persisting eligibility.", rowNumber, evaluation.Decision);
+            await snapshotStore.PersistEligibilityDecisionAsync(evaluation, DateTimeOffset.UtcNow, rowCts.Token);
             CopartInlineScoringPersistenceResult? persistence = null;
             if (evaluation.LoadToSystem)
             {
                 vehicle = CopartTitleMapper.ApplyTaxonomy(vehicle);
-                persistence = await snapshotStore.PersistCopartAcceptedWithScoringAsync(vehicle, evaluation, DateTimeOffset.UtcNow, cancellationToken);
+                logger.LogDebug("Copart row {RowNumber} persisting accepted lot and inline scoring.", rowNumber);
+                persistence = await snapshotStore.PersistCopartAcceptedWithScoringAsync(vehicle, evaluation, DateTimeOffset.UtcNow, rowCts.Token);
             }
             return new RowProcessingOutcome(rowNumber, vehicle, evaluation, persistence, null);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, null, new TimeoutException($"Copart row {rowNumber} exceeded the 2-minute persistence timeout."));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
