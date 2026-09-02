@@ -180,4 +180,25 @@ public sealed class IaaINationalOptions
 
     [Range(0, 50000)]
     public int MinimumRemainingRequests { get; init; } = 2000;
+
+    /// <summary>Primary provider for scheduled national IAAI sync after initial backfill.</summary>
+    public string PrimaryProvider { get; init; } = "auctionsapi";
+
+    /// <summary>Reversible provider used when the primary feed is degraded.</summary>
+    public string FallbackProvider { get; init; } = "apibara";
+
+    /// <summary>Windows timezone used by the scheduler guard. Florida Eastern time observes DST.</summary>
+    public string ScheduleTimeZoneId { get; init; } = "America/New_York";
+
+    [Range(0, 23)]
+    public int ScheduleStartLocalHour { get; init; } = 7;
+
+    [Range(0, 23)]
+    public int ScheduleEndLocalHour { get; init; } = 23;
+
+    [Range(1, 24)]
+    public int ScheduleIntervalHours { get; init; } = 2;
+
+    /// <summary>Prevents incremental scheduling until the initial AuctionsAPI import is complete.</summary>
+    public bool RequireInitialImportCompleted { get; init; } = true;
 }
