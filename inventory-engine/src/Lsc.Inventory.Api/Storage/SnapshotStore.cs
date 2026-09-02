@@ -638,7 +638,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         var current = 0;
         foreach (var snapshot in candidates)
         {
-            var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle);
+            var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle, snapshot.ObservedAt);
             var inputHash = LscVehicleScoringEngine.CreateInputHash(snapshot.Vehicle, eligibility);
             if (_scores.TryGetValue(snapshot.Identity, out var score) &&
                 score.PolicyVersion == LscScoringPolicy.ResolveVersion(snapshot.Vehicle.Platform) && score.InputHash == inputHash)
@@ -685,7 +685,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
                 var items = group.ToArray();
                 var current = items.Count(item => _scores.TryGetValue(item.Identity, out var score)
                     && score.PolicyVersion == LscScoringPolicy.ResolveVersion(item.Vehicle.Platform)
-                    && score.InputHash == LscVehicleScoringEngine.CreateInputHash(item.Vehicle, AuctionEligibilityEvaluator.Evaluate(item.Vehicle)));
+                    && score.InputHash == LscVehicleScoringEngine.CreateInputHash(item.Vehicle, AuctionEligibilityEvaluator.Evaluate(item.Vehicle, item.ObservedAt)));
                 var queued = items.Where(item => _scoringQueue.ContainsKey(item.Identity)).ToArray();
                 return new InventoryScoringPlatformStatus(group.Key, items.Length, current, queued.Length, 0, 0, items.Length - current,
                     queued.Count(item => _scoringQueue[item.Identity].Priority >= 100),
