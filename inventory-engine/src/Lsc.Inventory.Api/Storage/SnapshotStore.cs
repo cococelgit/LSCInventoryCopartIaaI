@@ -665,8 +665,8 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         foreach (var candidate in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var eligibility = AuctionEligibilityEvaluator.Evaluate(candidate.Value.Vehicle);
-            _scores[candidate.Key] = LscVehicleScoringEngine.Evaluate(candidate.Value.Vehicle, eligibility);
+            var eligibility = AuctionEligibilityEvaluator.Evaluate(candidate.Value.Vehicle, candidate.Value.ObservedAt);
+            _scores[candidate.Key] = LscVehicleScoringEngine.Evaluate(candidate.Value.Vehicle, eligibility, candidate.Value.ObservedAt);
             _scoringQueue.TryRemove(candidate.Key, out _);
         }
         return Task.FromResult(new InventoryScoringBatchResult(
