@@ -29,7 +29,11 @@ public sealed class AuctionsApiClient(
     IOptions<AuctionsApiOptions> options,
     ILogger<AuctionsApiClient> logger) : IAuctionsApiClient
 {
-    private const int MaxRateLimitAttempts = 5;
+    // Long-running durable imports must wait through a provider throttle instead
+    // of failing a run after the first short burst of 429 responses. The worker
+    // renews its lease and the delay is cancellation-aware throughout this loop.
+    private const int MaxRateLimitAttempts = 15;
+    private static readonly TimeSpan MaxRateLimitDelay = TimeSpan.FromMinutes(5);
     private readonly AuctionsApiOptions _options = options.Value;
 
     public Task<AuctionsApiPage> GetChangedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken) =>
@@ -68,8 +72,7 @@ public sealed class AuctionsApiClient(
 
             if ((int)response.StatusCode == 429 && attempt < MaxRateLimitAttempts)
             {
-                var retryAfter = response.Headers.RetryAfter?.Delta
-                    ?? TimeSpan.FromSeconds(Math.Min(60, Math.Pow(2, attempt) + Random.Shared.Next(0, 2)));
+                var retryAfter = ResolveRetryAfter(response.Headers.RetryAfter, attempt);
                 logger.LogWarning("AuctionsAPI rate-limited {Path}; retrying attempt {Attempt}/{MaxAttempts} after {RetryAfter}.", path, attempt, MaxRateLimitAttempts, retryAfter);
                 await Task.Delay(retryAfter, cancellationToken);
                 continue;
@@ -99,5 +102,16 @@ public sealed class AuctionsApiClient(
         }
 
         throw new InvalidOperationException("AuctionsAPI retry loop exited unexpectedly.");
+    }
+
+    private static TimeSpan ResolveRetryAfter(RetryConditionHeaderValue? retryAfterHeader, int attempt)
+    {
+        var headerDelay = retryAfterHeader?.Delta
+            ?? (retryAfterHeader?.Date is { } retryDate ? retryDate - DateTimeOffset.UtcNow : null);
+        if (headerDelay is { } explicitDelay && explicitDelay >= TimeSpan.Zero)
+            return explicitDelay > MaxRateLimitDelay ? MaxRateLimitDelay : explicitDelay;
+
+        var exponentialSeconds = Math.Min(MaxRateLimitDelay.TotalSeconds, Math.Pow(2, attempt));
+        return TimeSpan.FromSeconds(exponentialSeconds + Random.Shared.Next(0, 3));
     }
 }
