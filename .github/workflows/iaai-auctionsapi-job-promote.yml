@@ -91,11 +91,15 @@ jobs:
           set -euo pipefail
           test -n "$AUCTIONS_API_KEY"
           image_ref="${ACR_SERVER}/${IMAGE_NAME}:iaai-auctionsapi-${GITHUB_SHA}"
+          az containerapp job secret set \
+            --name "$IAAI_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
+            --only-show-errors
           az containerapp job update \
             --name "$IAAI_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --image "$image_ref" \
-            --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
             --set-env-vars \
               "AuctionsApi__ApiKey=secretref:auctions-api-key" \
               "AuctionsApi__Enabled=true" \
