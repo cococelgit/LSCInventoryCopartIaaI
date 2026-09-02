@@ -117,7 +117,8 @@ else
 }
 builder.Services.AddScoped<IInventorySyncProcessor, InventorySyncProcessor>();
 builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
-builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalSyncProcessor>();
+builder.Services.AddScoped<IaaINationalSyncProcessor>();
+builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalProviderRouter>();
 builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInventoryIngestionPipeline>();
 builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
 builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
@@ -1094,6 +1095,27 @@ if (args.Contains("--run-once", StringComparer.OrdinalIgnoreCase))
 }
 
 var iaaiStartupMode = IaaIStartupModeResolver.Resolve(args, builder.Configuration);
+if (iaaiStartupMode == IaaIStartupMode.National)
+{
+    var nationalOptions = builder.Configuration.GetSection(IaaINationalOptions.SectionName).Get<IaaINationalOptions>() ?? new IaaINationalOptions();
+    if (nationalOptions.EnforceScheduleWindow)
+    {
+        var scheduleDecision = IaaIScheduleWindow.Evaluate(DateTimeOffset.UtcNow, nationalOptions);
+        if (!scheduleDecision.ShouldRun)
+        {
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                skipped = true,
+                reason = scheduleDecision.Reason,
+                utcNow = scheduleDecision.UtcNow,
+                localNow = scheduleDecision.LocalNow,
+                timeZone = nationalOptions.ScheduleTimeZoneId
+            }));
+            return;
+        }
+    }
+}
+
 if (iaaiStartupMode == IaaIStartupMode.Pilot)
 {
     await using var scope = app.Services.CreateAsyncScope();

@@ -201,4 +201,7 @@ public sealed class IaaINationalOptions
 
     /// <summary>Prevents incremental scheduling until the initial AuctionsAPI import is complete.</summary>
     public bool RequireInitialImportCompleted { get; init; } = true;
+
+    /// <summary>Applies the Florida local-time window to scheduled national runs.</summary>
+    public bool EnforceScheduleWindow { get; init; } = true;
 }
