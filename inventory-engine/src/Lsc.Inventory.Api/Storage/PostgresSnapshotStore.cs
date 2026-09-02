@@ -309,8 +309,6 @@ public sealed partial class PostgresSnapshotStore(
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
         var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
-        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
-
         var policyVersion = LscScoringPolicy.ResolveVersion(vehicle.Platform);
         var scoreInputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
         var scoringDuration = TimeSpan.Zero;
@@ -332,7 +330,8 @@ public sealed partial class PostgresSnapshotStore(
             await reader.ReadAsync(cancellationToken);
             snapshotChange = !reader.GetBoolean(0) ? "created" : reader.GetBoolean(1) ? "unchanged" : "updated";
         }
-
+        if (!string.Equals(snapshotChange, "unchanged", StringComparison.Ordinal))
+            await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         var scoreCurrent = false;
         await using (var current = connection.CreateCommand())
         {
