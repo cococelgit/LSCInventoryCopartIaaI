@@ -11,6 +11,21 @@ namespace Lsc.Inventory.Api.Tests;
 public sealed class ApibaraClientRetryTests
 {
     [Fact]
+    public async Task Sends_updated_within_minutes_in_vehicle_search_query()
+    {
+        var handler = new SequenceHandler(
+            Response(HttpStatusCode.OK, "{\"data\":[],\"meta\":{\"per_page\":20,\"next_cursor\":null,\"prev_cursor\":null}}"));
+        var client = CreateClient(handler, attempts: 1);
+
+        await client.SearchVehiclesAsync(new VehicleSearchRequest("iaai", "Open", UpdatedWithinMinutes: 200), CancellationToken.None);
+
+        Assert.NotNull(handler.LastRequest);
+        Assert.Contains("updated_within_minutes=200", handler.LastRequest!.RequestUri!.Query, StringComparison.Ordinal);
+        Assert.Contains("platform=iaai", handler.LastRequest.RequestUri.Query, StringComparison.Ordinal);
+        Assert.Contains("lot_sub_status=Open", handler.LastRequest.RequestUri.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Retries_transient_502_and_returns_the_successful_payload()
     {
         var handler = new SequenceHandler(
@@ -92,10 +107,12 @@ public sealed class ApibaraClientRetryTests
     {
         private readonly Queue<HttpResponseMessage> _responses = new(responses);
         public int Requests { get; private set; }
+        public HttpRequestMessage? LastRequest { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests++;
+            LastRequest = request;
             return Task.FromResult(_responses.Dequeue());
         }
     }

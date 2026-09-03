@@ -48,7 +48,8 @@ public sealed class ApibaraClient(
             ["price_min"] = request.PriceMin?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["price_max"] = request.PriceMax?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["make"] = request.Make,
-            ["model"] = request.Model
+            ["model"] = request.Model,
+            ["updated_within_minutes"] = request.UpdatedWithinMinutes?.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
 
         return GetAsync<VehicleListResponse>("vehicles", query, cancellationToken);

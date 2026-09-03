@@ -144,6 +144,10 @@ public sealed class IaaINationalOptions
 
     public string LotSubStatus { get; init; } = "Open";
 
+    /// <summary>Apibara incremental window used by the national IAAI fallback.</summary>
+    [Range(1, 4320)]
+    public int UpdatedWithinMinutes { get; init; } = 200;
+
     [Range(1, 100)]
     public int PagesPerRun { get; init; } = 50;
 

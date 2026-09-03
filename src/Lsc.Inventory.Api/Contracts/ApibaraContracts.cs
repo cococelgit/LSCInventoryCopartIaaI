@@ -16,7 +16,8 @@ public sealed record VehicleSearchRequest(
     decimal? PriceMin = null,
     decimal? PriceMax = null,
     string? Make = null,
-    string? Model = null);
+    string? Model = null,
+    int? UpdatedWithinMinutes = null);
 
 public sealed record VehicleListResponse(
     [property: JsonPropertyName("data")] IReadOnlyList<AuctionVehicle> Data,

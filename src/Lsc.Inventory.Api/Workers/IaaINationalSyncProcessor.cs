@@ -120,7 +120,7 @@ public sealed class IaaINationalSyncProcessor(
                 try
                 {
                     response = await apibaraClient.SearchVehiclesAsync(
-                        new VehicleSearchRequest("iaai", _national.LotSubStatus, _apibara.PageSize, cursor),
+                        new VehicleSearchRequest("iaai", _national.LotSubStatus, _apibara.PageSize, cursor, UpdatedWithinMinutes: _national.UpdatedWithinMinutes),
                         cancellationToken);
                 }
                 catch (ApibaraInvalidCursorException exception) when (!string.IsNullOrWhiteSpace(cursor) && !cursorRecoveryAttempted)
