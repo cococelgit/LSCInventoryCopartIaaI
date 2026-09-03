@@ -4,6 +4,7 @@ using System.Text.Json;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Sources;
+using Lsc.Inventory.Api.Storage;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -234,6 +235,33 @@ public sealed class CopartExcelSnapshotAdapterTests
         Assert.Null(vehicle.Pricing.BuyNowUsd);
     }
 
+    [Theory]
+    [InlineData("2026-08-25T03:46:59Z", "2026-08-25T03:46:59.0000000+00:00")]
+    [InlineData("N", null)]
+    [InlineData("", null)]
+    public async Task Last_updated_time_maps_to_utc_or_safe_null(string rawValue, string? expected)
+    {
+        var adapter = CreateAdapter();
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+
+        await foreach (var row in adapter.ReadAcceptedSnapshotAsync(CreateSnapshot(BuildCsv(1, lastUpdatedTime: rawValue)), CancellationToken.None))
+            vehicles.Add(row);
+
+        var vehicle = Assert.Single(vehicles);
+        Assert.Equal(expected, CopartLotWatermarkPolicy.GetSourceUpdatedAt(vehicle)?.ToString("O"));
+        Assert.Equal(rawValue, vehicle.RawSource!.Value.GetProperty("Last Updated Time").GetString());
+    }
+
+    [Fact]
+    public async Task Missing_last_updated_time_column_remains_backward_compatible()
+    {
+        var adapter = CreateAdapter();
+        var vehicle = Assert.Single(await ReadAllAsync(adapter, CreateSnapshot(BuildCsv(1))));
+
+        Assert.Null(CopartLotWatermarkPolicy.GetSourceUpdatedAt(vehicle));
+        Assert.False(vehicle.RawSource!.Value.TryGetProperty("Last Updated Time", out _));
+    }
+
     [Fact]
     public async Task Hash_mismatch_is_rejected()
     {
@@ -255,6 +283,13 @@ public sealed class CopartExcelSnapshotAdapterTests
             ProcessingBatchSize = 2
         }));
 
+    private static async Task<List<Lsc.Inventory.Api.Contracts.AuctionVehicle>> ReadAllAsync(CopartExcelSnapshotAdapter adapter, CopartSnapshotEnvelope snapshot)
+    {
+        var vehicles = new List<Lsc.Inventory.Api.Contracts.AuctionVehicle>();
+        await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
+        return vehicles;
+    }
+
     private static CopartSnapshotEnvelope CreateSnapshot(string csv)
     {
         var bytes = Encoding.UTF8.GetBytes(csv);
@@ -262,13 +297,14 @@ public sealed class CopartExcelSnapshotAdapterTests
         return new CopartSnapshotEnvelope("salesdata.csv", hash, DateTimeOffset.UtcNow, new MemoryStream(bytes));
     }
 
-    private static string BuildCsv(int rows, string runDrives = "Runs and Drives", string currentBid = "5000", string buyNow = "0")
+    private static string BuildCsv(int rows, string runDrives = "Runs and Drives", string currentBid = "5000", string buyNow = "0", string? lastUpdatedTime = null)
     {
-        const string header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Drive,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail\n";
+        var includeLastUpdated = lastUpdatedTime is not null;
+        var header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Drive,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail" + (includeLastUpdated ? ",Last Updated Time" : string.Empty) + "\n";
         var builder = new StringBuilder(header);
         for (var index = 0; index < rows; index++)
         {
-            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,FRONT WHEEL DRIVE,{runDrives},10000,Actual,Open,{currentBid},{buyNow},https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
+            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,FRONT WHEEL DRIVE,{runDrives},10000,Actual,Open,{currentBid},{buyNow},https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg{(includeLastUpdated ? $",{lastUpdatedTime}" : string.Empty)}\n");
         }
         return builder.ToString();
     }

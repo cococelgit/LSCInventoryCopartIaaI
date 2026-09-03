@@ -263,6 +263,95 @@ public sealed class CopartExcelSnapshotProcessorTests
     }
 
     [Fact]
+    public async Task Same_source_timestamp_skips_heavy_processing_but_keeps_snapshot_observed()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+        var csv = BuildCsv(2, lastUpdatedTime: "2026-08-25T01:00:00Z");
+
+        var first = await processor.ProcessAsync(CreateSnapshot(csv), CancellationToken.None);
+        var second = await processor.ProcessAsync(CreateSnapshot(csv.Replace("\n", "\r\n", StringComparison.Ordinal)), CancellationToken.None);
+
+        Assert.Equal(2, first.Incremental!.WatermarkCandidates);
+        Assert.Equal(0, first.Incremental.WatermarkSkipped);
+        Assert.Equal(2, store.CopartLotWatermarkCount);
+        Assert.Equal(0, second.Incremental!.WatermarkCandidates);
+        Assert.Equal(2, second.Incremental.WatermarkSkipped);
+        Assert.Equal(2, second.Accepted);
+        Assert.Equal(2, second.InlineScoring!.Unchanged);
+        Assert.Equal(2, second.InlineScoring.ScoreSkippedUnchanged);
+        Assert.Equal(2, second.Reconciliation!.Observed);
+        Assert.Equal(4, store.CopartAuctionObservationCount);
+    }
+
+    [Fact]
+    public async Task New_lot_with_old_timestamp_is_processed_while_existing_lot_is_skipped()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, lastUpdatedTime: "2026-08-25T03:00:00Z")), CancellationToken.None);
+        var second = await processor.ProcessAsync(CreateSnapshot(BuildCsv(2, lastUpdatedTime: "2026-08-25T01:00:00Z")), CancellationToken.None);
+
+        Assert.Equal(1, second.Incremental!.WatermarkCandidates);
+        Assert.Equal(1, second.Incremental.WatermarkSkipped);
+        Assert.Equal(2, second.Accepted);
+        Assert.Equal(1, second.InlineScoring!.Created);
+        Assert.Equal(1, second.InlineScoring.Unchanged);
+        Assert.Equal(2, second.Reconciliation!.Observed);
+    }
+
+    [Fact]
+    public async Task Newer_source_timestamp_reprocesses_and_updates_the_lot()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Runs and Drives", lastUpdatedTime: "2026-08-25T01:00:00Z")), CancellationToken.None);
+        var second = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Starts", lastUpdatedTime: "2026-08-25T02:00:00Z")), CancellationToken.None);
+
+        Assert.Equal(1, second.Incremental!.WatermarkCandidates);
+        Assert.Equal(0, second.Incremental.WatermarkSkipped);
+        Assert.Equal(1, second.InlineScoring!.Updated);
+        Assert.Equal(1, second.InlineScoring.ScoredInline);
+    }
+
+    [Fact]
+    public async Task Same_source_timestamp_with_changed_business_fields_reprocesses_by_fingerprint()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Runs and Drives", lastUpdatedTime: "2026-08-25T01:00:00Z")), CancellationToken.None);
+        var second = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Starts", lastUpdatedTime: "2026-08-25T01:00:00Z")), CancellationToken.None);
+
+        Assert.Equal(1, second.Incremental!.WatermarkCandidates);
+        Assert.Equal(0, second.Incremental.WatermarkSkipped);
+        Assert.Equal(1, second.InlineScoring!.Updated);
+        Assert.Equal(1, second.InlineScoring.ScoredInline);
+    }
+
+    [Fact]
+    public async Task Invalid_source_timestamp_uses_safe_fallback_and_reprocesses()
+    {
+        var options = TestOptions();
+        var store = new InMemorySnapshotStore();
+        var processor = new CopartExcelSnapshotProcessor(new ThrowingSnapshotSource(), new CopartExcelSnapshotAdapter(options), store, options, NullLogger<CopartExcelSnapshotProcessor>.Instance);
+
+        await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Runs and Drives", lastUpdatedTime: "2026-08-25T01:00:00Z")), CancellationToken.None);
+        var second = await processor.ProcessAsync(CreateSnapshot(BuildCsv(1, runDrives: "Starts", lastUpdatedTime: "N")), CancellationToken.None);
+
+        Assert.Equal(1, second.Incremental!.WatermarkCandidates);
+        Assert.Equal(1, second.Incremental.WatermarkFallback);
+        Assert.Equal(0, second.Incremental.WatermarkSkipped);
+        Assert.Equal(1, second.InlineScoring!.Updated);
+    }
+
+    [Fact]
     public async Task Inline_scoring_persistence_failure_does_not_publish_row_and_blocks_reconciliation()
     {
         var options = TestOptions();
@@ -332,12 +421,13 @@ public sealed class CopartExcelSnapshotProcessorTests
         return new CopartSnapshotEnvelope("salesdata.csv", Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), DateTimeOffset.UtcNow, new MemoryStream(bytes));
     }
 
-    private static string BuildCsv(int rows, string vin = "1HGCM82633A004352", string runDrives = "Runs and Drives", string titleCode = "AQ")
+    private static string BuildCsv(int rows, string vin = "1HGCM82633A004352", string runDrives = "Runs and Drives", string titleCode = "AQ", string? lastUpdatedTime = null)
     {
-        const string header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail\n";
+        var includeLastUpdated = lastUpdatedTime is not null;
+        var header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail" + (includeLastUpdated ? ",Last Updated Time" : string.Empty) + "\n";
         var builder = new StringBuilder(header);
         for (var index = 0; index < rows; index++)
-            builder.Append($"{12345678 + index},{vin},2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,{titleCode},none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg\n");
+            builder.Append($"{12345678 + index},{vin},2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,{titleCode},none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,{runDrives},10000,Actual,Open,5000,0,https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg{(includeLastUpdated ? $",{lastUpdatedTime}" : string.Empty)}\n");
         return builder.ToString();
     }
 }

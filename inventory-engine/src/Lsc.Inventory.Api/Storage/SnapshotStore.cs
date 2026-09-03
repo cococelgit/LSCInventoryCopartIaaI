@@ -19,6 +19,8 @@ public interface IInventorySnapshotStore
     Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken);
     Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, bool allowInterruptedSnapshotRetry, CancellationToken cancellationToken);
     Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken);
+    Task<IReadOnlyDictionary<string, CopartLotWatermarkState>> GetCopartLotWatermarkStatesAsync(IReadOnlyCollection<string> lotKeys, string processingVersion, CancellationToken cancellationToken);
+    Task PersistCopartLotWatermarksAsync(IReadOnlyCollection<CopartLotWatermarkUpdate> updates, CancellationToken cancellationToken);
     Task PersistProviderUsageAsync(string provider, JsonElement usage, DateTimeOffset capturedAt, CancellationToken cancellationToken);
     Task PersistEligibilityDecisionAsync(EligibilityEvaluation evaluation, DateTimeOffset evaluatedAt, CancellationToken cancellationToken);
     Task<EligibilityAuditPage> GetDiscardedEligibilityDecisionsAsync(int page, int pageSize, string? ruleCode, string? query, CancellationToken cancellationToken);
@@ -94,7 +96,8 @@ public sealed record CopartSnapshotCompletion(
     bool IsComplete,
     IReadOnlyList<string> Failures,
     CopartInlineScoringMetrics? InlineScoring = null,
-    CopartTitleTaxonomyMetrics? TitleTaxonomy = null);
+    CopartTitleTaxonomyMetrics? TitleTaxonomy = null,
+    CopartIncrementalMetrics? Incremental = null);
 
 public sealed record StoredVehicleSnapshot(
     string Identity,
@@ -134,6 +137,12 @@ public sealed record CopartTitleTaxonomyMetrics(
     int Unverified,
     int ReviewRequired,
     IReadOnlyDictionary<string, int> CategoryCounts);
+
+public sealed record CopartIncrementalMetrics(
+    int WatermarkCandidates,
+    int WatermarkSkipped,
+    int WatermarkFallback,
+    string ProcessingVersion);
 
 public sealed record CopartInlineScoringMetrics(
     int Created,
@@ -358,6 +367,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     private readonly ConcurrentDictionary<string, CopartSnapshotReceipt> _copartSnapshots = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _copartSnapshotStatuses = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, string> _copartRuns = new();
+    private readonly ConcurrentDictionary<string, (DateTimeOffset SourceUpdatedAt, string RowFingerprint, string ProcessingVersion, EligibilityEvaluation Eligibility)> _copartLotWatermarks = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> _syncRuns = new();
     private readonly ConcurrentDictionary<string, CopartAuctionObservation> _copartAuctionObservations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (AuctionVehicle Vehicle, DateTimeOffset ObservedAt, int Attempts, int Priority)> _scoringQueue = new(StringComparer.OrdinalIgnoreCase);
@@ -366,6 +376,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
 
     public IReadOnlyDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> SyncRuns => _syncRuns;
     public int CopartAuctionObservationCount => _copartAuctionObservations.Count;
+    public int CopartLotWatermarkCount => _copartLotWatermarks.Count;
     public bool FailNextCopartInlineScoringPersistence { get; set; }
     public bool FailNextScoringPersistence { get; set; }
     private int _copartProcessingLeaseHeld;
@@ -449,6 +460,36 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             _copartSnapshotStatuses[sha256] = completion.Errors == 0 && completion.IsComplete
                 ? "succeeded"
                 : "completed_with_errors";
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyDictionary<string, CopartLotWatermarkState>> GetCopartLotWatermarkStatesAsync(IReadOnlyCollection<string> lotKeys, string processingVersion, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = new Dictionary<string, CopartLotWatermarkState>(StringComparer.OrdinalIgnoreCase);
+        foreach (var lotKey in lotKeys.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (_copartLotWatermarks.TryGetValue(lotKey, out var entry) &&
+                string.Equals(entry.ProcessingVersion, processingVersion, StringComparison.Ordinal))
+            {
+                result[lotKey] = new CopartLotWatermarkState(entry.SourceUpdatedAt, entry.RowFingerprint, entry.Eligibility);
+            }
+        }
+        return Task.FromResult<IReadOnlyDictionary<string, CopartLotWatermarkState>>(result);
+    }
+
+    public Task PersistCopartLotWatermarksAsync(IReadOnlyCollection<CopartLotWatermarkUpdate> updates, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var update in updates)
+        {
+            _copartLotWatermarks.AddOrUpdate(
+                update.LotKey,
+                _ => (update.SourceUpdatedAt, update.RowFingerprint, update.ProcessingVersion, update.Eligibility),
+                (_, current) => update.SourceUpdatedAt >= current.SourceUpdatedAt || !string.Equals(update.RowFingerprint, current.RowFingerprint, StringComparison.Ordinal)
+                    ? (update.SourceUpdatedAt, update.RowFingerprint, update.ProcessingVersion, update.Eligibility)
+                    : current);
         }
         return Task.CompletedTask;
     }
