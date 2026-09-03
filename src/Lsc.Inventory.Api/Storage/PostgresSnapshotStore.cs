@@ -1347,6 +1347,7 @@ public sealed partial class PostgresSnapshotStore(
                 order by versions.lot_key, versions.observed_at desc
             ) latest
             left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = latest.lot_key
+            left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
             """;
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -1404,6 +1405,7 @@ public sealed partial class PostgresSnapshotStore(
                 order by versions.lot_key, versions.observed_at desc
             ) latest
             left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = latest.lot_key
+            left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
             """;
         const string active = "coalesce(lifecycle.is_active, true)";
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -1902,9 +1904,9 @@ public sealed partial class PostgresSnapshotStore(
 
     private static bool IsPreGradeBaselineSearch(InventorySearchRequest request)
     {
-        var requestedSort = request.Sort?.Trim().ToLowerInvariant();
-        return (string.IsNullOrWhiteSpace(requestedSort) || requestedSort is "pregrade-desc")
-            && (IsDefaultVisibleSearch(request) || IsPlatformOnlyVisibleSearch(request));
+        // The baseline path partitions scored and unscored rows, so it cannot
+        // preserve a global grading-first plus secondary-sort order.
+        return false;
     }
 
     private static string ProjectionVisibilityClause(InventorySearchRequest request) =>
@@ -1988,23 +1990,26 @@ public sealed partial class PostgresSnapshotStore(
         if (string.Equals(request.AuctionStatus, "finished", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.lot_status, latest.lot_sub_status)) like any(array['%finished%', '%ended%', '%sold%'])");
     }
 
-    private static string GetProjectionOrdering(string? sort) => sort?.Trim().ToLowerInvariant() switch
+    private static string GetProjectionOrdering(string? sort)
     {
-        "year-asc" => "latest.year asc nulls last",
-        "year-desc" => "latest.year desc nulls last",
-        "estimate-asc" => "latest.provider_estimate_from asc nulls last",
-        "estimate-desc" => "latest.provider_estimate_to desc nulls last",
-        "buy-asc" => "latest.buy_now_usd asc nulls last",
-        "buy-desc" => "latest.buy_now_usd desc nulls last",
-        "bid-asc" => "latest.current_bid_usd asc nulls last",
-        "bid-desc" => "latest.current_bid_usd desc nulls last",
-        "odometer-asc" => "latest.odometer asc nulls last",
-        "odometer-desc" => "latest.odometer desc nulls last",
-        "pregrade-asc" => "score.pre_grade asc nulls last",
-        "pregrade-desc" => "score.pre_grade desc nulls last",
-        "auction-desc" => "latest.auction_at desc nulls last",
-        _ => "score.pre_grade desc nulls last",
-    };
+        var secondary = sort?.Trim().ToLowerInvariant() switch
+        {
+            "auction" => "latest.auction_at asc nulls last",
+            "auction-desc" => "latest.auction_at desc nulls last",
+            "year-asc" => "latest.year asc nulls last",
+            "year-desc" => "latest.year desc nulls last",
+            "estimate-asc" => "latest.provider_estimate_from asc nulls last",
+            "estimate-desc" => "latest.provider_estimate_to desc nulls last",
+            "buy-asc" => "latest.buy_now_usd asc nulls last",
+            "buy-desc" => "latest.buy_now_usd desc nulls last",
+            "bid-asc" => "latest.current_bid_usd asc nulls last",
+            "bid-desc" => "latest.current_bid_usd desc nulls last",
+            "odometer-asc" => "latest.odometer asc nulls last",
+            "odometer-desc" => "latest.odometer desc nulls last",
+            _ => "latest.observed_at desc nulls last",
+        };
+        return $"score.pre_grade desc nulls last, {secondary}";
+    }
 
     public async Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken)
     {
@@ -2423,21 +2428,26 @@ public sealed partial class PostgresSnapshotStore(
         if (string.Equals(request.AuctionStatus, "finished", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.payload #>> '{Auction,LotStatus}', latest.payload #>> '{Auction,LotSubStatus}')) like any(array['%finished%', '%ended%', '%sold%'])");
     }
 
-    private static string GetSearchOrdering(string? sort) => sort?.Trim().ToLowerInvariant() switch
+    private static string GetSearchOrdering(string? sort)
     {
-        "year-asc" => "latest.year asc nulls last",
-        "year-desc" => "latest.year desc nulls last",
-        "estimate-asc" => "nullif(latest.payload #>> '{Pricing,EstimatedCost,FromUsd}', '')::numeric asc nulls last",
-        "estimate-desc" => "nullif(latest.payload #>> '{Pricing,EstimatedCost,ToUsd}', '')::numeric desc nulls last",
-        "buy-asc" => "latest.buy_now_usd asc nulls last",
-        "buy-desc" => "latest.buy_now_usd desc nulls last",
-        "bid-asc" => "latest.current_bid_usd asc nulls last",
-        "bid-desc" => "latest.current_bid_usd desc nulls last",
-        "odometer-asc" => "latest.odometer asc nulls last",
-        "odometer-desc" => "latest.odometer desc nulls last",
-        "auction-desc" => "latest.auction_at desc nulls last",
-        _ => "score.pre_grade desc nulls last",
-    };
+        var secondary = sort?.Trim().ToLowerInvariant() switch
+        {
+            "auction" => "latest.auction_at asc nulls last",
+            "auction-desc" => "latest.auction_at desc nulls last",
+            "year-asc" => "latest.year asc nulls last",
+            "year-desc" => "latest.year desc nulls last",
+            "estimate-asc" => "nullif(latest.payload #>> '{Pricing,EstimatedCost,FromUsd}', '')::numeric asc nulls last",
+            "estimate-desc" => "nullif(latest.payload #>> '{Pricing,EstimatedCost,ToUsd}', '')::numeric desc nulls last",
+            "buy-asc" => "latest.buy_now_usd asc nulls last",
+            "buy-desc" => "latest.buy_now_usd desc nulls last",
+            "bid-asc" => "latest.current_bid_usd asc nulls last",
+            "bid-desc" => "latest.current_bid_usd desc nulls last",
+            "odometer-asc" => "latest.odometer asc nulls last",
+            "odometer-desc" => "latest.odometer desc nulls last",
+            _ => "latest.observed_at desc nulls last",
+        };
+        return $"score.pre_grade desc nulls last, {secondary}";
+    }
 
     private static string? ReadOptionalString(NpgsqlDataReader reader, string column)
     {

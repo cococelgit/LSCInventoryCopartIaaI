@@ -816,32 +816,24 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             .Where(snapshot => !_lifecycle.TryGetValue(snapshot.Identity, out var lifecycle) || lifecycle.Active)
             .Where(snapshot => Matches(snapshot, request))
             .Where(snapshot => MatchesScoring(snapshot.Identity, request));
-        IOrderedEnumerable<StoredVehicleSnapshot> orderedQuery = string.Equals(request.Sort, "year-asc", StringComparison.OrdinalIgnoreCase)
-            ? query.OrderBy(snapshot => snapshot.Vehicle.Year ?? int.MaxValue)
-            : string.Equals(request.Sort, "year-desc", StringComparison.OrdinalIgnoreCase)
-                ? query.OrderByDescending(snapshot => snapshot.Vehicle.Year ?? 0)
-                : string.Equals(request.Sort, "estimate-asc", StringComparison.OrdinalIgnoreCase)
-                    ? query.OrderBy(snapshot => snapshot.Vehicle.Pricing?.EstimatedCost?.FromUsd ?? decimal.MaxValue)
-                    : string.Equals(request.Sort, "estimate-desc", StringComparison.OrdinalIgnoreCase)
-                        ? query.OrderByDescending(snapshot => snapshot.Vehicle.Pricing?.EstimatedCost?.ToUsd ?? 0)
-                        : string.Equals(request.Sort, "buy-asc", StringComparison.OrdinalIgnoreCase)
-                            ? query.OrderBy(snapshot => snapshot.Vehicle.Pricing?.BuyNowUsd ?? decimal.MaxValue)
-                            : string.Equals(request.Sort, "buy-desc", StringComparison.OrdinalIgnoreCase)
-                                ? query.OrderByDescending(snapshot => snapshot.Vehicle.Pricing?.BuyNowUsd ?? 0)
-                                : string.Equals(request.Sort, "pregrade-desc", StringComparison.OrdinalIgnoreCase)
-                                    ? query.OrderByDescending(snapshot => _scores.TryGetValue(snapshot.Identity, out var score) ? score.PreGrade ?? decimal.MinValue : decimal.MinValue)
-                                    : string.Equals(request.Sort, "pregrade-asc", StringComparison.OrdinalIgnoreCase)
-                                        ? query.OrderBy(snapshot => _scores.TryGetValue(snapshot.Identity, out var score) ? score.PreGrade ?? decimal.MaxValue : decimal.MaxValue)
-                : string.Equals(request.Sort, "pregrade-high", StringComparison.OrdinalIgnoreCase)
-                    ? query.OrderByDescending(snapshot => _scores.TryGetValue(snapshot.Identity, out var score) ? score.PreGrade ?? decimal.MinValue : decimal.MinValue)
-                : string.Equals(request.Sort, "pregrade-low", StringComparison.OrdinalIgnoreCase)
-                    ? query.OrderBy(snapshot => _scores.TryGetValue(snapshot.Identity, out var score) ? score.PreGrade ?? decimal.MaxValue : decimal.MaxValue)
-                : string.Equals(request.Sort, "bid-asc", StringComparison.OrdinalIgnoreCase)
-                    ? query.OrderBy(snapshot => snapshot.Vehicle.Pricing?.CurrentBidUsd ?? decimal.MaxValue)
-                    : string.Equals(request.Sort, "bid-desc", StringComparison.OrdinalIgnoreCase)
-                        ? query.OrderByDescending(snapshot => snapshot.Vehicle.Pricing?.CurrentBidUsd ?? 0)
-                        : query.OrderByDescending(snapshot => _scores.TryGetValue(snapshot.Identity, out var score) ? score.PreGrade ?? decimal.MinValue : decimal.MinValue);
-        var ordered = orderedQuery.ThenByDescending(snapshot => snapshot.ObservedAt).ToArray();
+        var gradingFirst = query.OrderByDescending(snapshot => _scores.TryGetValue(snapshot.Identity, out var score) ? score.PreGrade ?? decimal.MinValue : decimal.MinValue);
+        IOrderedEnumerable<StoredVehicleSnapshot> orderedQuery = request.Sort?.Trim().ToLowerInvariant() switch
+        {
+            "auction" => gradingFirst.ThenBy(snapshot => snapshot.Vehicle.Auction?.AuctionAt ?? DateTimeOffset.MaxValue),
+            "auction-desc" => gradingFirst.ThenByDescending(snapshot => snapshot.Vehicle.Auction?.AuctionAt ?? DateTimeOffset.MinValue),
+            "year-asc" => gradingFirst.ThenBy(snapshot => snapshot.Vehicle.Year ?? int.MaxValue),
+            "year-desc" => gradingFirst.ThenByDescending(snapshot => snapshot.Vehicle.Year ?? 0),
+            "estimate-asc" => gradingFirst.ThenBy(snapshot => snapshot.Vehicle.Pricing?.EstimatedCost?.FromUsd ?? decimal.MaxValue),
+            "estimate-desc" => gradingFirst.ThenByDescending(snapshot => snapshot.Vehicle.Pricing?.EstimatedCost?.ToUsd ?? 0),
+            "buy-asc" => gradingFirst.ThenBy(snapshot => snapshot.Vehicle.Pricing?.BuyNowUsd ?? decimal.MaxValue),
+            "buy-desc" => gradingFirst.ThenByDescending(snapshot => snapshot.Vehicle.Pricing?.BuyNowUsd ?? 0),
+            "bid-asc" => gradingFirst.ThenBy(snapshot => snapshot.Vehicle.Pricing?.CurrentBidUsd ?? decimal.MaxValue),
+            "bid-desc" => gradingFirst.ThenByDescending(snapshot => snapshot.Vehicle.Pricing?.CurrentBidUsd ?? 0),
+            "odometer-asc" => gradingFirst.ThenBy(snapshot => snapshot.Vehicle.Odometer ?? decimal.MaxValue),
+            "odometer-desc" => gradingFirst.ThenByDescending(snapshot => snapshot.Vehicle.Odometer ?? 0),
+            _ => gradingFirst.ThenByDescending(snapshot => snapshot.ObservedAt),
+        };
+        var ordered = orderedQuery.ThenBy(snapshot => snapshot.Identity, StringComparer.Ordinal).ToArray();
         var total = ordered.Length;
         var items = ordered.Skip((page - 1) * pageSize).Take(pageSize).Select(AttachScoring).ToArray();
         var generatedAt = ordered.Length == 0 ? DateTimeOffset.UtcNow : ordered.Max(snapshot => snapshot.ObservedAt);
