@@ -66,10 +66,10 @@ public sealed class IaaIScheduleWindowTests
     }
 
     [Fact]
-    public void Requires_the_scheduler_to_wake_on_the_hour()
+    public void Runs_when_started_inside_the_valid_hour_without_requiring_minute_zero()
     {
         var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 11, 30, 0, TimeSpan.Zero), Options());
-        Assert.False(decision.ShouldRun);
-        Assert.Equal("not-scheduled-minute", decision.Reason);
+        Assert.True(decision.ShouldRun);
+        Assert.Equal("scheduled", decision.Reason);
     }
 }

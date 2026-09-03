@@ -10,8 +10,6 @@ public static class IaaIScheduleWindow
     {
         var timeZone = ResolveTimeZone(options.ScheduleTimeZoneId);
         var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
-        if (localNow.Minute != 0)
-            return new(false, "not-scheduled-minute", utcNow, localNow);
         var isMidnightEnd = options.ScheduleEndLocalHour == 24;
         var withinWindow = isMidnightEnd
             ? localNow.Hour >= options.ScheduleStartLocalHour || localNow.Hour == 0
