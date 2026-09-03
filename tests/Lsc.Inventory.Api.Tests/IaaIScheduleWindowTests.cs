@@ -15,27 +15,27 @@ public sealed class IaaIScheduleWindowTests
     };
 
     [Fact]
-    public void Runs_at_odd_local_hours_inside_full_window_during_edt()
+    public void Runs_at_three_hour_boundary_inside_full_window_during_edt()
     {
-        var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 11, 0, 0, TimeSpan.Zero), Options());
+        var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 10, 0, 0, TimeSpan.Zero), Options(6, 24, 3));
         Assert.True(decision.ShouldRun);
         Assert.Equal("scheduled", decision.Reason);
-        Assert.Equal(7, decision.LocalNow.Hour);
+        Assert.Equal(6, decision.LocalNow.Hour);
     }
 
     [Fact]
-    public void Runs_at_odd_local_hours_inside_full_window_during_est()
+    public void Runs_at_three_hour_boundary_inside_full_window_during_est()
     {
-        var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 1, 7, 12, 0, 0, TimeSpan.Zero), Options());
+        var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 12, 2, 11, 0, 0, TimeSpan.Zero), Options(6, 24, 3));
         Assert.True(decision.ShouldRun);
-        Assert.Equal(7, decision.LocalNow.Hour);
+        Assert.Equal(6, decision.LocalNow.Hour);
     }
 
     [Fact]
     public void Runs_inside_the_window_and_skips_only_outside_it()
     {
-        var inside = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 12, 0, 0, TimeSpan.Zero), Options());
-        var outside = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 9, 0, 0, TimeSpan.Zero), Options());
+        var inside = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 12, 0, 0, TimeSpan.Zero), Options(6, 24, 3));
+        var outside = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 8, 0, 0, TimeSpan.Zero), Options(6, 24, 3));
         Assert.True(inside.ShouldRun);
         Assert.Equal("scheduled", inside.Reason);
         Assert.False(outside.ShouldRun);
@@ -56,7 +56,7 @@ public sealed class IaaIScheduleWindowTests
     }
 
     [Fact]
-    public void Runs_at_any_hour_inside_the_midnight_window()
+    public void Runs_at_any_minute_inside_a_valid_local_hour()
     {
         var options = Options(6, 24, 3);
         var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 3, 14, 37, 0, TimeSpan.Zero), options);
@@ -66,9 +66,9 @@ public sealed class IaaIScheduleWindowTests
     }
 
     [Fact]
-    public void Runs_when_started_inside_the_valid_hour_without_requiring_minute_zero()
+    public void Does_not_require_minute_zero_for_an_hourly_wakeup()
     {
-        var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 11, 30, 0, TimeSpan.Zero), Options());
+        var decision = IaaIScheduleWindow.Evaluate(new DateTimeOffset(2026, 9, 2, 11, 30, 0, TimeSpan.Zero), Options(7, 23, 2));
         Assert.True(decision.ShouldRun);
         Assert.Equal("scheduled", decision.Reason);
     }

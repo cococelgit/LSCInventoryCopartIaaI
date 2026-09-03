@@ -1045,17 +1045,8 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         };
     }
 
-    private static string NormalizeFacetsV2RunCondition(AuctionVehicle vehicle)
-    {
-        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase)) return "UNVERIFIED";
-        var value = vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label;
-        if (string.IsNullOrWhiteSpace(value)) return "UNVERIFIED";
-        var normalized = value.Trim().ToUpperInvariant().Replace("&", " AND ", StringComparison.Ordinal);
-        if (normalized.Contains("RUNS AND DRIVES", StringComparison.Ordinal)) return "RUNS_AND_DRIVES";
-        if (normalized.Contains("START", StringComparison.Ordinal)) return "STARTS";
-        if (normalized.Contains("STATIONARY", StringComparison.Ordinal)) return "STATIONARY";
-        return "UNVERIFIED";
-    }
+    private static string NormalizeFacetsV2RunCondition(AuctionVehicle vehicle) =>
+        RunConditionTaxonomy.Normalize(vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label);
 
     public Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken)
     {

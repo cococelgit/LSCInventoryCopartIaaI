@@ -254,12 +254,8 @@ static PublicInventoryVehicle ToPublicVehicle(
     var scoring = ToPublicScoring(snapshot.Scoring, fullScoring);
     var titleDescriptor = TitleFacetCategory.Describe(vehicle);
     var titleTaxonomy = ReadCopartTitleTaxonomy(platform, vehicle.AdditionalData);
-    var runConditionRaw = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)
-        ? vehicle.Condition?.RunCondition?.Label ?? vehicle.Condition?.RunCondition?.Value
-        : null;
-    var runCondition = string.Equals(platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase)
-        ? NormalizePublicRunCondition(vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label)
-        : null;
+    var runConditionRaw = vehicle.Condition?.RunCondition?.Label ?? vehicle.Condition?.RunCondition?.Value;
+    var runCondition = RunConditionTaxonomy.Normalize(vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label);
     var buyNowUsd = vehicle.Pricing?.BuyNowUsd is > 0m ? vehicle.Pricing.BuyNowUsd : null;
     return new PublicInventoryVehicle
     {
@@ -407,17 +403,6 @@ static (string? Category, string? DisplayLabel, IReadOnlyList<string> Flags, str
         ["OTHER_UNVERIFIED"] = "Tipo de título por verificar"
     };
     return (category, category is not null && labels.TryGetValue(category, out var label) ? label : null, ReadFlags(additionalData), ReadString(additionalData, "title_review_status"), ReadString(additionalData, "title_taxonomy_version"));
-}
-
-static string? NormalizePublicRunCondition(string? value)
-{
-    if (string.IsNullOrWhiteSpace(value)) return "UNVERIFIED";
-    var normalized = value.Trim().ToUpperInvariant().Replace("&", " AND ", StringComparison.Ordinal);
-    if (normalized.Contains("RUNS AND DRIVES", StringComparison.Ordinal)) return "RUNS_AND_DRIVES";
-    if (normalized.Contains("START", StringComparison.Ordinal)) return "STARTS";
-    if (normalized.Contains("STATIONARY", StringComparison.Ordinal)) return "STATIONARY";
-    if (normalized.Contains("NO INFORMATION", StringComparison.Ordinal)) return "UNVERIFIED";
-    return "UNVERIFIED";
 }
 
 static decimal? ParseMoney(string? value)

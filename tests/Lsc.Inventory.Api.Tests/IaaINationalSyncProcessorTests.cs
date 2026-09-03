@@ -39,6 +39,29 @@ public sealed class IaaINationalSyncProcessorTests
     }
 
     [Fact]
+    public async Task Finalizes_the_run_as_cancelled_when_provider_operation_is_cancelled()
+    {
+        var client = new CancellingListClient();
+        var store = new InMemorySnapshotStore();
+        var processor = CreateProcessor(client, store, Microsoft.Extensions.Options.Options.Create(new IaaINationalOptions
+        {
+            Enabled = true,
+            BackfillPagesPerRun = 1,
+            BackfillMaxRequestsPerRun = 3,
+            EnrichVehicleDetails = false,
+            CaptureUsage = false
+        }));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => processor.RunAsync(CancellationToken.None));
+
+        var history = await store.GetExecutionHistoryAsync(new InventoryExecutionHistoryRequest(1, 10, "iaai"), CancellationToken.None);
+        var execution = Assert.Single(history.Items);
+        Assert.Equal("cancelled", execution.Status);
+        Assert.NotNull(execution.FinishedAt);
+        Assert.Contains("cancelled", execution.Failures.Single(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Resumes_from_persisted_cursor_and_reconciles_only_after_the_complete_cycle()
     {
         var client = new CursorClient();
@@ -299,6 +322,16 @@ public sealed class IaaINationalSyncProcessorTests
         public Task<LocationsResponse> GetLocationsAsync(string platform, string state, int perPage, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<VehicleDetailsResponse> GetVehicleAsync(string vinOrLot, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<UsageResponse> GetUsageAsync(CancellationToken cancellationToken) => Task.FromResult(new UsageResponse(JsonSerializer.SerializeToElement(new { })));
+    }
+
+    private sealed class CancellingListClient : IApibaraClient
+    {
+        public Task<VehicleListResponse> SearchVehiclesAsync(VehicleSearchRequest request, CancellationToken cancellationToken) =>
+            Task.FromException<VehicleListResponse>(new OperationCanceledException("Azure cancellation simulated for regression test."));
+
+        public Task<LocationsResponse> GetLocationsAsync(string platform, string state, int perPage, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<VehicleDetailsResponse> GetVehicleAsync(string vinOrLot, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<UsageResponse> GetUsageAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class AlwaysFailingListClient : IApibaraClient
