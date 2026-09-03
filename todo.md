@@ -299,3 +299,8 @@
 - [ ] Habilitar acceso público y crear una única regla `/32` para `48.221.10.88`, sin `Allow Azure services`.
 - [ ] Validar desde la laptop con `osniel_readonly`, SSL obligatorio y escritura bloqueada.
 - [ ] Documentar configuración final, evidencia, riesgos y procedimiento para revocar la regla pública.
+
+- [x] Use the Copart Excel `Body Style` column as the canonical source for the portal vehicle-type filter, preserving the raw `Vehicle Type` field separately.
+- [x] Add Body Style mapping coverage for the categories confirmed in the supplied screenshot.
+- [x] Normalize IAAI Run & Drive values through a shared taxonomy and close cancelled runs with terminal status and partial metrics.
+- [ ] Promote the cancellation-safe engine and Body Style mapping to production and verify live portal filters and counters.
