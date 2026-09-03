@@ -599,8 +599,8 @@ public sealed partial class PostgresSnapshotStore(
                              manifest.downloaded_at desc
                     limit 1
                 ) copart_manifest on history.provider = 'copart-excel'
-                where (@platform = '' or platform = @platform) and (@status = '' or status = @status)
-                order by started_at desc
+                where (@platform = '' or history.platform = @platform) and (@status = '' or history.status = @status)
+                order by history.started_at desc
                 limit @limit offset @offset;
                 """;
             AddParameter(command, "platform", platform);

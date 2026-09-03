@@ -22,6 +22,8 @@ public sealed class ExecutionHistoryReadModelContractTests
         Assert.Contains("copart_manifest.status = 'succeeded'", method, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("copart_manifest.is_complete = true", method, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("when history.provider <> 'copart-excel' and events.event_count > 0", method, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("where (@platform = '' or history.platform = @platform) and (@status = '' or history.status = @status)", method, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("order by history.started_at desc", method, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("ReadNullableInt32(reader, 23)", method, StringComparison.Ordinal);
         Assert.Contains("ReadStringArray(reader, 22)", method, StringComparison.Ordinal);
         Assert.DoesNotContain("coalesce(events.created_count, 0)", method, StringComparison.OrdinalIgnoreCase);
