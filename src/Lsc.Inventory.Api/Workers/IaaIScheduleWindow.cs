@@ -16,10 +16,9 @@ public static class IaaIScheduleWindow
             : localNow.Hour >= options.ScheduleStartLocalHour && localNow.Hour <= options.ScheduleEndLocalHour;
         if (!withinWindow)
             return new(false, "outside-operating-window", utcNow, localNow);
-        var effectiveLocalHour = isMidnightEnd && localNow.Hour == 0 ? 24 : localNow.Hour;
-        var elapsedHours = effectiveLocalHour - options.ScheduleStartLocalHour;
-        if (elapsedHours % options.ScheduleIntervalHours != 0)
-            return new(false, "between-scheduled-hours", utcNow, localNow);
+        // Azure's cron is the wake-up mechanism. Once the job is awake inside the
+        // configured Florida window, process the run regardless of its exact minute
+        // or whether the hour matches a nominal interval slot.
         return new(true, "scheduled", utcNow, localNow);
     }
 
