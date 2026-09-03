@@ -12,9 +12,14 @@ public static class IaaIScheduleWindow
         var localNow = TimeZoneInfo.ConvertTime(utcNow, timeZone).DateTime;
         if (localNow.Minute != 0)
             return new(false, "not-scheduled-minute", utcNow, localNow);
-        if (localNow.Hour < options.ScheduleStartLocalHour || localNow.Hour > options.ScheduleEndLocalHour)
+        var isMidnightEnd = options.ScheduleEndLocalHour == 24;
+        var withinWindow = isMidnightEnd
+            ? localNow.Hour >= options.ScheduleStartLocalHour || localNow.Hour == 0
+            : localNow.Hour >= options.ScheduleStartLocalHour && localNow.Hour <= options.ScheduleEndLocalHour;
+        if (!withinWindow)
             return new(false, "outside-operating-window", utcNow, localNow);
-        var elapsedHours = localNow.Hour - options.ScheduleStartLocalHour;
+        var effectiveLocalHour = isMidnightEnd && localNow.Hour == 0 ? 24 : localNow.Hour;
+        var elapsedHours = effectiveLocalHour - options.ScheduleStartLocalHour;
         if (elapsedHours % options.ScheduleIntervalHours != 0)
             return new(false, "between-scheduled-hours", utcNow, localNow);
         return new(true, "scheduled", utcNow, localNow);

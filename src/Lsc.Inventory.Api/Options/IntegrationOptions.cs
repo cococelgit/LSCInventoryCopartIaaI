@@ -193,7 +193,8 @@ public sealed class IaaINationalOptions
     [Range(0, 23)]
     public int ScheduleStartLocalHour { get; init; } = 7;
 
-    [Range(0, 23)]
+    // 24 is a supported sentinel for midnight at the end of the local window.
+    [Range(0, 24)]
     public int ScheduleEndLocalHour { get; init; } = 23;
 
     [Range(1, 24)]
