@@ -17,8 +17,13 @@ public sealed class ExecutionHistoryReadModelContractTests
         Assert.Contains("group by run_id", method, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("max(loaded_count)", method, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("bool_or(cycle_completed) filter (where cycle_completed is not null)", method, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("case when events.event_count = 0 then null else events.created_count end", method, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("ReadNullableInt32(reader, 20)", method, StringComparison.Ordinal);
+        Assert.Contains("copart_snapshot_manifests", method, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("where manifest.run_id = history.run_id", method, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("copart_manifest.status = 'succeeded'", method, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("copart_manifest.is_complete = true", method, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("when history.provider <> 'copart-excel' and events.event_count > 0", method, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ReadNullableInt32(reader, 23)", method, StringComparison.Ordinal);
+        Assert.Contains("ReadStringArray(reader, 22)", method, StringComparison.Ordinal);
         Assert.DoesNotContain("coalesce(events.created_count, 0)", method, StringComparison.OrdinalIgnoreCase);
     }
 

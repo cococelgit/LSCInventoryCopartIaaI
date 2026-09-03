@@ -504,6 +504,7 @@ public sealed partial class PostgresSnapshotStore(
                        metrics.loaded_count, metrics.marked_count, metrics.discarded_count, metrics.quarantined_count,
                        metrics.error_count, metrics.pages_processed, metrics.cycle_completed, metrics.reactivated_count,
                        metrics.misses_incremented_count, metrics.deactivated_count,
+                       null::integer as created_count, null::integer as updated_count, null::integer as unchanged_count,
                        coalesce(metrics.failures, base.failures, '[]'::jsonb)::text as failures, 0 as source_rank
                 from inventory_sync_runs base
                 left join inventory_execution_run_metrics metrics on metrics.run_id = base.run_id
@@ -513,6 +514,7 @@ public sealed partial class PostgresSnapshotStore(
                        accepted_count as loaded_count, marked_count, discarded_count, quarantined_count, error_count,
                        null::integer as pages_processed, is_complete as cycle_completed, null::integer as reactivated_count,
                        null::integer as misses_incremented_count, null::integer as deactivated_count,
+                       created_count, updated_count, unchanged_count,
                        failures::text as failures, 1 as source_rank
                 from copart_snapshot_manifests
             )
@@ -528,6 +530,8 @@ public sealed partial class PostgresSnapshotStore(
                    bool_or(cycle_completed) filter (where cycle_completed is not null) as cycle_completed,
                    max(reactivated_count) as reactivated_count, max(misses_incremented_count) as misses_incremented_count,
                    max(deactivated_count) as deactivated_count,
+                   max(created_count) as created_count, max(updated_count) as updated_count,
+                   max(unchanged_count) as unchanged_count,
                    (array_agg(failures order by length(failures) desc, source_rank desc))[1] as failures
             from raw_history
             group by run_id
@@ -548,9 +552,33 @@ public sealed partial class PostgresSnapshotStore(
             command.CommandTimeout = _persistence.CommandTimeoutSeconds;
             command.CommandText = $"""
                 select history.*,
-                       case when events.event_count = 0 then null else events.created_count end,
-                       case when events.event_count = 0 then null else events.updated_count end,
-                       case when events.event_count = 0 then null else events.unchanged_count end
+                       case
+                           when history.provider = 'copart-excel'
+                                and copart_manifest.status = 'succeeded'
+                                and copart_manifest.is_complete = true
+                           then copart_manifest.created_count
+                           when history.provider <> 'copart-excel' and events.event_count > 0
+                           then events.created_count
+                           else null
+                       end as created_count,
+                       case
+                           when history.provider = 'copart-excel'
+                                and copart_manifest.status = 'succeeded'
+                                and copart_manifest.is_complete = true
+                           then copart_manifest.updated_count
+                           when history.provider <> 'copart-excel' and events.event_count > 0
+                           then events.updated_count
+                           else null
+                       end as updated_count,
+                       case
+                           when history.provider = 'copart-excel'
+                                and copart_manifest.status = 'succeeded'
+                                and copart_manifest.is_complete = true
+                           then copart_manifest.unchanged_count
+                           when history.provider <> 'copart-excel' and events.event_count > 0
+                           then events.unchanged_count
+                           else null
+                       end as unchanged_count
                 from ({runs}) history
                 left join lateral (
                     select count(*)::int as event_count,
@@ -559,6 +587,18 @@ public sealed partial class PostgresSnapshotStore(
                            count(*) filter (where action = 'unchanged')::int as unchanged_count
                     from inventory_sync_run_events where run_id = history.run_id
                 ) events on true
+                left join lateral (
+                    select manifest.created_count,
+                           manifest.updated_count,
+                           manifest.unchanged_count,
+                           manifest.status,
+                           manifest.is_complete
+                    from copart_snapshot_manifests manifest
+                    where manifest.run_id = history.run_id
+                    order by manifest.finished_at desc nulls last,
+                             manifest.downloaded_at desc
+                    limit 1
+                ) copart_manifest on history.provider = 'copart-excel'
                 where (@platform = '' or platform = @platform) and (@status = '' or status = @status)
                 order by started_at desc
                 limit @limit offset @offset;
@@ -572,10 +612,10 @@ public sealed partial class PostgresSnapshotStore(
                 results.Add(new InventoryExecutionSummary(
                     reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
                     reader.GetFieldValue<DateTimeOffset>(5), ReadNullableDateTimeOffset(reader, 6), reader.GetInt32(7), reader.GetInt32(8),
-                    ReadNullableInt32(reader, 9), ReadNullableInt32(reader, 20), ReadNullableInt32(reader, 21), ReadNullableInt32(reader, 22),
+                    ReadNullableInt32(reader, 9), ReadNullableInt32(reader, 23), ReadNullableInt32(reader, 24), ReadNullableInt32(reader, 25),
                     ReadNullableInt32(reader, 10), ReadNullableInt32(reader, 11), ReadNullableInt32(reader, 12), ReadNullableInt32(reader, 13),
                     ReadNullableInt32(reader, 16), ReadNullableInt32(reader, 17), ReadNullableInt32(reader, 18), ReadNullableInt32(reader, 14),
-                    reader.IsDBNull(15) ? null : reader.GetBoolean(15), ReadStringArray(reader, 19)));
+                    reader.IsDBNull(15) ? null : reader.GetBoolean(15), ReadStringArray(reader, 22)));
         }
         return new InventoryExecutionHistoryPage(page, pageSize, total, Math.Max(1, (int)Math.Ceiling(total / (double)pageSize)), results);
     }
