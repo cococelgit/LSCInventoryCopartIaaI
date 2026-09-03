@@ -113,7 +113,7 @@ jobs:
               "IaaINational__FallbackProvider=apibara" \
               "IaaINational__ScheduleTimeZoneId=America/New_York" \
               "IaaINational__ScheduleStartLocalHour=6" \
-              "IaaINational__ScheduleEndLocalHour=12" \
+              "IaaINational__ScheduleEndLocalHour=24" \
               "IaaINational__ScheduleIntervalHours=3" \
               "IaaINational__RequireInitialImportCompleted=false" \
               "IaaINational__EnforceScheduleWindow=true" \
@@ -151,7 +151,7 @@ jobs:
           echo "IAAI_JOB_PROMOTION_COMPLETED"
           echo "IMAGE=$image_after"
           echo "TRIGGER=$trigger_after"
-          echo "CRON_UTC=0 * * * * (guarded by America/New_York 06:00, 09:00, 12:00)"
+          echo "CRON_UTC=0 * * * * (guarded by America/New_York 06:00, 09:00, 12:00, 15:00, 18:00, 21:00, 24:00)"
           echo "PRIMARY_PROVIDER=auctionsapi"
           echo "FALLBACK_PROVIDER=apibara"
           echo "PARALLELISM=1"
