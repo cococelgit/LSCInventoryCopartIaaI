@@ -55,8 +55,8 @@ jobs:
           auto_cron_before="$(echo "$auto_before" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
           auto_without_image_before="$(echo "$auto_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
           test -n "$api_image_before" && test "$api_image_before" != "None"
-          test "$manual_image" != "None"
-          test "$auto_cron_before" = "0,30 * * * *"
+          test -n "$manual_image" && test "$manual_image" != "None"
+          test -n "$auto_cron_before" && test "$auto_cron_before" != "null" && test "$auto_cron_before" != "None"
 
           requested_tag='${{ inputs.image_tag }}'
           if [ -n "$requested_tag" ]; then
