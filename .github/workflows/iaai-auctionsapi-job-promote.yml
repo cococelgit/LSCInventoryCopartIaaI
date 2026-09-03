@@ -59,7 +59,7 @@ jobs:
           trigger_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
           identity_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'identity' -o json | sha256sum | awk '{print $1}')"
           command_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].command' -o json | sha256sum | awk '{print $1}')"
-          test "$trigger_before" = "Manual"
+          test "$trigger_before" = "Manual" || test "$trigger_before" = "Schedule"
           test -n "$image_before" && test "$image_before" != "None"
           echo "CURRENT_JOB_IMAGE=$image_before" >> "$GITHUB_ENV"
           echo "CURRENT_JOB_TRIGGER=$trigger_before" >> "$GITHUB_ENV"
