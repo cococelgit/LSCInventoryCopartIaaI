@@ -1192,6 +1192,10 @@ public sealed partial class PostgresSnapshotStore(
                 inline_scoring_duration_ms = null,
                 inline_scoring_p50_ms = null,
                 inline_scoring_p95_ms = null,
+                watermark_candidate_count = null,
+                watermark_skipped_count = null,
+                watermark_fallback_count = null,
+                watermark_processing_version = null,
                 failures = '[]'::jsonb,
                 updated_at = now()
             where copart_snapshot_manifests.status = 'completed_with_errors'
@@ -1236,6 +1240,10 @@ public sealed partial class PostgresSnapshotStore(
                 inline_scoring_duration_ms = @inline_scoring_duration_ms,
                 inline_scoring_p50_ms = @inline_scoring_p50_ms,
                 inline_scoring_p95_ms = @inline_scoring_p95_ms,
+                watermark_candidate_count = @watermark_candidate_count,
+                watermark_skipped_count = @watermark_skipped_count,
+                watermark_fallback_count = @watermark_fallback_count,
+                watermark_processing_version = @watermark_processing_version,
                 is_complete = @is_complete,
                 status = @status,
                 failures = cast(@failures as jsonb),
@@ -1259,9 +1267,85 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "inline_scoring_duration_ms", completion.InlineScoring?.InlineScoringDurationMs);
         AddParameter(command, "inline_scoring_p50_ms", completion.InlineScoring?.InlineScoringP50Ms);
         AddParameter(command, "inline_scoring_p95_ms", completion.InlineScoring?.InlineScoringP95Ms);
+        AddParameter(command, "watermark_candidate_count", completion.Incremental?.WatermarkCandidates);
+        AddParameter(command, "watermark_skipped_count", completion.Incremental?.WatermarkSkipped);
+        AddParameter(command, "watermark_fallback_count", completion.Incremental?.WatermarkFallback);
+        AddParameter(command, "watermark_processing_version", completion.Incremental?.ProcessingVersion);
         AddParameter(command, "is_complete", completion.IsComplete);
         AddParameter(command, "status", completion.Failures.Count == 0 && completion.IsComplete ? "succeeded" : "completed_with_errors");
         AddParameter(command, "failures", JsonSerializer.Serialize(completion.Failures));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyDictionary<string, CopartLotWatermarkState>> GetCopartLotWatermarkStatesAsync(
+        IReadOnlyCollection<string> lotKeys,
+        string processingVersion,
+        CancellationToken cancellationToken)
+    {
+        if (lotKeys.Count == 0)
+            return new Dictionary<string, CopartLotWatermarkState>(StringComparer.OrdinalIgnoreCase);
+
+        await EnsureCopartSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select lot_key, source_updated_at, row_fingerprint, eligibility::text
+            from copart_lot_watermarks
+            where processing_version = @processing_version
+              and row_fingerprint is not null
+              and lot_key = any(@lot_keys);
+            """;
+        AddParameter(command, "processing_version", processingVersion);
+        AddParameter(command, "lot_keys", lotKeys.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+
+        var result = new Dictionary<string, CopartLotWatermarkState>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var eligibility = JsonSerializer.Deserialize<EligibilityEvaluation>(reader.GetString(3));
+            if (eligibility is not null)
+                result[reader.GetString(0)] = new CopartLotWatermarkState(reader.GetFieldValue<DateTimeOffset>(1), reader.GetString(2), eligibility);
+        }
+        return result;
+    }
+
+    public async Task PersistCopartLotWatermarksAsync(IReadOnlyCollection<CopartLotWatermarkUpdate> updates, CancellationToken cancellationToken)
+    {
+        if (updates.Count == 0) return;
+
+        await EnsureCopartSchemaAsync(cancellationToken);
+        var payload = JsonSerializer.Serialize(updates.Select(update => new
+        {
+            lot_key = update.LotKey,
+            source_updated_at = update.SourceUpdatedAt.ToUniversalTime(),
+            row_fingerprint = update.RowFingerprint,
+            processing_version = update.ProcessingVersion,
+            eligibility = update.Eligibility
+        }));
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            insert into copart_lot_watermarks (lot_key, source_updated_at, row_fingerprint, processing_version, eligibility)
+            select item.lot_key, item.source_updated_at, item.row_fingerprint, item.processing_version, item.eligibility
+            from jsonb_to_recordset(cast(@updates as jsonb)) as item(
+                lot_key text,
+                source_updated_at timestamptz,
+                row_fingerprint text,
+                processing_version text,
+                eligibility jsonb)
+            on conflict (lot_key) do update set
+                source_updated_at = excluded.source_updated_at,
+                row_fingerprint = excluded.row_fingerprint,
+                processing_version = excluded.processing_version,
+                eligibility = excluded.eligibility,
+                updated_at = now()
+            where excluded.source_updated_at >= copart_lot_watermarks.source_updated_at
+               or excluded.row_fingerprint <> copart_lot_watermarks.row_fingerprint
+               or excluded.processing_version <> copart_lot_watermarks.processing_version;
+            """;
+        AddParameter(command, "updates", payload);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -2217,6 +2301,10 @@ public sealed partial class PostgresSnapshotStore(
                     inline_scoring_duration_ms bigint,
                     inline_scoring_p50_ms bigint,
                     inline_scoring_p95_ms bigint,
+                    watermark_candidate_count integer,
+                    watermark_skipped_count integer,
+                    watermark_fallback_count integer,
+                    watermark_processing_version text,
                     failures jsonb not null default '[]'::jsonb,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
@@ -2231,6 +2319,10 @@ public sealed partial class PostgresSnapshotStore(
                 alter table copart_snapshot_manifests add column if not exists inline_scoring_duration_ms bigint;
                 alter table copart_snapshot_manifests add column if not exists inline_scoring_p50_ms bigint;
                 alter table copart_snapshot_manifests add column if not exists inline_scoring_p95_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists watermark_candidate_count integer;
+                alter table copart_snapshot_manifests add column if not exists watermark_skipped_count integer;
+                alter table copart_snapshot_manifests add column if not exists watermark_fallback_count integer;
+                alter table copart_snapshot_manifests add column if not exists watermark_processing_version text;
 
                 create index if not exists ix_copart_snapshot_manifests_status_downloaded on copart_snapshot_manifests (status, downloaded_at desc);
 
@@ -2440,6 +2532,10 @@ public sealed partial class PostgresSnapshotStore(
                     inline_scoring_duration_ms bigint,
                     inline_scoring_p50_ms bigint,
                     inline_scoring_p95_ms bigint,
+                    watermark_candidate_count integer,
+                    watermark_skipped_count integer,
+                    watermark_fallback_count integer,
+                    watermark_processing_version text,
                     failures jsonb not null default '[]'::jsonb,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
@@ -2453,9 +2549,28 @@ public sealed partial class PostgresSnapshotStore(
                 alter table copart_snapshot_manifests add column if not exists inline_scoring_duration_ms bigint;
                 alter table copart_snapshot_manifests add column if not exists inline_scoring_p50_ms bigint;
                 alter table copart_snapshot_manifests add column if not exists inline_scoring_p95_ms bigint;
+                alter table copart_snapshot_manifests add column if not exists watermark_candidate_count integer;
+                alter table copart_snapshot_manifests add column if not exists watermark_skipped_count integer;
+                alter table copart_snapshot_manifests add column if not exists watermark_fallback_count integer;
+                alter table copart_snapshot_manifests add column if not exists watermark_processing_version text;
 
                 create index if not exists ix_copart_snapshot_manifests_status_downloaded
                     on copart_snapshot_manifests (status, downloaded_at desc);
+
+                create table if not exists copart_lot_watermarks (
+                    lot_key text primary key,
+                    source_updated_at timestamptz not null,
+                    row_fingerprint text not null,
+                    processing_version text not null,
+                    eligibility jsonb not null,
+                    created_at timestamptz not null default now(),
+                    updated_at timestamptz not null default now()
+                );
+
+                alter table copart_lot_watermarks add column if not exists row_fingerprint text;
+
+                create index if not exists ix_copart_lot_watermarks_processing_version
+                    on copart_lot_watermarks (processing_version);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
             _copartSchemaInitialized = true;

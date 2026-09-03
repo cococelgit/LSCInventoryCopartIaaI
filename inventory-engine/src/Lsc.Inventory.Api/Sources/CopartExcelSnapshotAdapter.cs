@@ -197,6 +197,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
         var secondaryDamage = Get(row, "Secondary Damage");
         var saleStatus = Get(row, "Sale Status");
         var runConditionRaw = Get(row, "Runs/Drives");
+        var sourceUpdatedAt = ParseSourceUpdatedAt(Get(row, "Last Updated Time"));
         var raw = JsonSerializer.SerializeToElement(row);
 
         return CopartTitleMapper.Apply(new AuctionVehicle
@@ -271,6 +272,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             RawSource = raw,
             AdditionalData = new Dictionary<string, JsonElement>
             {
+                ["source_updated_at"] = JsonSerializer.SerializeToElement(sourceUpdatedAt),
                 ["source_title_type_code"] = JsonSerializer.SerializeToElement(titleCode),
                 ["source_title_mapping"] = JsonSerializer.SerializeToElement(hasTitleMapping ? "mapped" : "unmapped"),
                 ["source_title_mapping_version"] = JsonSerializer.SerializeToElement(CopartTitleCatalog.Version),
@@ -320,6 +322,18 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
     };
 
     private static JsonElement? ToJson(string? value) => string.IsNullOrWhiteSpace(value) ? null : JsonSerializer.SerializeToElement(value);
+
+    private static DateTimeOffset? ParseSourceUpdatedAt(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return DateTimeOffset.TryParse(
+            value.Trim(),
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var parsed)
+            ? parsed.ToUniversalTime()
+            : null;
+    }
 
     private static string? SafeMediaUrl(string? value)
     {

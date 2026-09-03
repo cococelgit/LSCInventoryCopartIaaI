@@ -277,3 +277,14 @@
 - [x] Mantener `N/D` para duplicados, lock ocupado, snapshots inválidos e invocaciones sin procesamiento por filas.
 - [x] Añadir pruebas de conteo por resultado de persistencia y de no-op seguro.
 - [x] Ejecutar validación .NET y TypeScript, revisar el diff y publicar únicamente los cambios Copart autorizados. La promoción queda bloqueada hasta que el API interno implemente la unión de auditoría.
+
+## Watermark temporal Copart por `Last Updated Time`
+
+- [x] Mapear `Last Updated Time` como timestamp UTC de origen sin convertirlo en columna obligatoria del CSV.
+- [x] Vincular el watermark por lote a la versión vigente de elegibilidad, taxonomía y scoring para invalidarlo cuando cambien reglas.
+- [x] Procesar completamente lotes nuevos, timestamps posteriores, fingerprints diferentes y timestamps ausentes/inválidos.
+- [x] Mantener todos los lotes elegibles presentes dentro de la reconciliación, incluidos los omitidos por watermark.
+- [x] Evitar falsos `unchanged` exigiendo un watermark previo del lote y coincidencia de fingerprint.
+- [x] Persistir watermark y métricas incrementales auditables en el manifiesto Copart.
+- [x] Añadir pruebas de primera corrida, lote nuevo con timestamp viejo, actualización, mismo timestamp con cambio, timestamp inválido y reconciliación segura.
+- [x] Ejecutar pruebas .NET y simulación de desarrollo con el CSV real: 145/145 pruebas; 146,248 observados, 2,031 candidatos, 144,217 omitidos, 5 fallback, 0 errores, 21.612 s; sin deployment.

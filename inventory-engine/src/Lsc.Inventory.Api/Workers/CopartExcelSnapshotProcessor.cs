@@ -26,7 +26,8 @@ public sealed record CopartExcelProcessingResult(
     IReadOnlyDictionary<string, int> FlagRuleCounts,
     IReadOnlyList<string> Failures,
     CopartInlineScoringMetrics? InlineScoring = null,
-    CopartTitleTaxonomyMetrics? TitleTaxonomy = null);
+    CopartTitleTaxonomyMetrics? TitleTaxonomy = null,
+    CopartIncrementalMetrics? Incremental = null);
 
 public interface ICopartExcelSnapshotProcessor
 {
@@ -130,7 +131,7 @@ public sealed class CopartExcelSnapshotProcessor(
                     var batchStartedAt = Stopwatch.GetTimestamp();
                     logger.LogInformation("Copart snapshot {FileName} starting batch {BatchNumber}; observed before batch {Observed}.", snapshot.FileName, batchNumber, state.Observed);
                     await ProcessBatchAsync(batch, observedLotKeys, state, snapshot.Sha256, snapshot.DownloadedAt, cancellationToken);
-                    logger.LogInformation("Copart snapshot {FileName} completed batch {BatchNumber}; observed {Observed}, accepted {Accepted}, discarded {Discarded}, errors {Errors}, duration {DurationMs} ms.", snapshot.FileName, batchNumber, state.Observed, state.Accepted, state.Discarded, state.Errors, Stopwatch.GetElapsedTime(batchStartedAt).TotalMilliseconds);
+                    logger.LogInformation("Copart snapshot {FileName} completed batch {BatchNumber}; observed {Observed}, accepted {Accepted}, discarded {Discarded}, watermark candidates {WatermarkCandidates}, skipped {WatermarkSkipped}, fallback {WatermarkFallback}, errors {Errors}, duration {DurationMs} ms.", snapshot.FileName, batchNumber, state.Observed, state.Accepted, state.Discarded, state.WatermarkCandidates, state.WatermarkSkipped, state.WatermarkFallback, state.Errors, Stopwatch.GetElapsedTime(batchStartedAt).TotalMilliseconds);
                     batch.Clear();
                 }
             }
@@ -140,7 +141,7 @@ public sealed class CopartExcelSnapshotProcessor(
                 var batchStartedAt = Stopwatch.GetTimestamp();
                 logger.LogInformation("Copart snapshot {FileName} starting final batch {BatchNumber}; observed before batch {Observed}.", snapshot.FileName, batchNumber, state.Observed);
                 await ProcessBatchAsync(batch, observedLotKeys, state, snapshot.Sha256, snapshot.DownloadedAt, cancellationToken);
-                logger.LogInformation("Copart snapshot {FileName} completed final batch {BatchNumber}; observed {Observed}, accepted {Accepted}, discarded {Discarded}, errors {Errors}, duration {DurationMs} ms.", snapshot.FileName, batchNumber, state.Observed, state.Accepted, state.Discarded, state.Errors, Stopwatch.GetElapsedTime(batchStartedAt).TotalMilliseconds);
+                logger.LogInformation("Copart snapshot {FileName} completed final batch {BatchNumber}; observed {Observed}, accepted {Accepted}, discarded {Discarded}, watermark candidates {WatermarkCandidates}, skipped {WatermarkSkipped}, fallback {WatermarkFallback}, errors {Errors}, duration {DurationMs} ms.", snapshot.FileName, batchNumber, state.Observed, state.Accepted, state.Discarded, state.WatermarkCandidates, state.WatermarkSkipped, state.WatermarkFallback, state.Errors, Stopwatch.GetElapsedTime(batchStartedAt).TotalMilliseconds);
             }
 
             var isComplete = state.Errors == 0 && state.Failures.Count == 0 && state.Observed == validation.RowCount;
@@ -151,7 +152,7 @@ public sealed class CopartExcelSnapshotProcessor(
 
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteCopartSnapshotAsync(registration.RunId!.Value,
-                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, isComplete, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics()),
+                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, isComplete, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics(), state.BuildIncrementalMetrics()),
                 cancellationToken);
             if (isComplete)
             {
@@ -169,7 +170,7 @@ public sealed class CopartExcelSnapshotProcessor(
                 new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
                 cancellationToken);
 
-            return new CopartExcelProcessingResult(true, false, isComplete, null, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, reconciliation, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics());
+            return new CopartExcelProcessingResult(true, false, isComplete, null, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, reconciliation, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics(), state.BuildIncrementalMetrics());
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -177,14 +178,14 @@ public sealed class CopartExcelSnapshotProcessor(
             state.Failures.Add($"processing: {exception.Message}");
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteCopartSnapshotAsync(registration.RunId!.Value,
-                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, false, state.Failures, state.BuildInlineScoringMetrics()),
+                new CopartSnapshotCompletion(finishedAt, state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, false, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics(), state.BuildIncrementalMetrics()),
                 cancellationToken);
             await snapshotStore.CompleteSyncRunAsync(
                 executionRunId,
                 new InventorySyncRunCompletion(finishedAt, state.Observed, 1, state.Failures),
                 cancellationToken);
             logger.LogError(exception, "Copart snapshot {FileName} failed after {Observed} observed rows.", snapshot.FileName, state.Observed);
-            return new CopartExcelProcessingResult(false, false, false, "Copart processing failed; reconciliation was blocked.", state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, null, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics());
+            return new CopartExcelProcessingResult(false, false, false, "Copart processing failed; reconciliation was blocked.", state.Observed, state.Accepted, state.Discarded, state.Quarantined, state.Marked, state.Errors, finishedAt - startedAt, null, state.DiscardRuleCounts, state.FlagRuleCounts, state.Failures, state.BuildInlineScoringMetrics(), state.BuildTaxonomyMetrics(), state.BuildIncrementalMetrics());
         }
     }
 
@@ -213,17 +214,47 @@ public sealed class CopartExcelSnapshotProcessor(
     private async Task ProcessBatchAsync(IReadOnlyList<AuctionVehicle> batch, ISet<string> observedLotKeys, ProcessingState state, string snapshotSha256, DateTimeOffset snapshotDownloadedAt, CancellationToken cancellationToken)
     {
         var observations = new List<CopartAuctionObservation>(batch.Count);
+        var watermarkUpdates = new List<CopartLotWatermarkUpdate>(batch.Count);
         var concurrency = Math.Clamp(_options.PersistenceConcurrency, 1, 64);
+        var processingVersion = CopartLotWatermarkPolicy.CurrentProcessingVersion;
+        var lotKeys = batch.Select(BuildCopartLotKey).Where(static key => key is not null).Cast<string>().ToArray();
+        var watermarkStates = await snapshotStore.GetCopartLotWatermarkStatesAsync(lotKeys, processingVersion, cancellationToken);
+
         for (var offset = 0; offset < batch.Count; offset += concurrency)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var window = batch.Skip(offset).Take(concurrency).ToArray();
             var firstRowNumber = state.Observed + 1;
-            var outcomes = await Task.WhenAll(window.Select((row, index) => ProcessRowAsync(row, firstRowNumber + index, cancellationToken)));
+            var outcomes = await Task.WhenAll(window.Select((row, index) =>
+            {
+                var rowNumber = firstRowNumber + index;
+                var lotKey = BuildCopartLotKey(row);
+                var rowFingerprint = CopartLotWatermarkPolicy.ComputeRowFingerprint(row);
+                var sourceUpdatedAt = CopartLotWatermarkPolicy.GetSourceUpdatedAt(row);
+                var fallback = lotKey is null || sourceUpdatedAt is null;
+                if (!fallback && watermarkStates.TryGetValue(lotKey!, out var existing) &&
+                    sourceUpdatedAt!.Value <= existing.SourceUpdatedAt &&
+                    string.Equals(rowFingerprint, existing.RowFingerprint, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(new RowProcessingOutcome(
+                        rowNumber,
+                        row,
+                        existing.Eligibility,
+                        null,
+                        null,
+                        rowFingerprint,
+                        WatermarkSkipped: true,
+                        WatermarkFallback: false));
+                }
+                return ProcessRowAsync(row, rowNumber, fallback, rowFingerprint, cancellationToken);
+            }));
 
             foreach (var outcome in outcomes)
             {
                 state.Observed++;
+                if (outcome.WatermarkSkipped) state.RecordWatermarkSkipped();
+                else state.RecordWatermarkCandidate(outcome.WatermarkFallback);
+
                 if (outcome.Evaluation is not null)
                 {
                     foreach (var reason in outcome.Evaluation.DiscardReasons) state.IncrementDiscardRule(reason.Code);
@@ -244,26 +275,51 @@ public sealed class CopartExcelSnapshotProcessor(
                 {
                     if (outcome.Evaluation.Decision == "CUARENTENA") state.Quarantined++;
                     else state.Discarded++;
-                    continue;
+                }
+                else
+                {
+                    state.Accepted++;
+                    if (outcome.WatermarkSkipped)
+                    {
+                        state.RecordWatermarkSkippedAccepted();
+                        state.RecordTaxonomy(CopartTitleMapper.ApplyTaxonomy(outcome.Vehicle!));
+                    }
+                    else
+                    {
+                        state.RecordInlineScoring(outcome.Persistence!);
+                        state.RecordTaxonomy(outcome.Vehicle!);
+                    }
+                    if (outcome.Evaluation.Decision == "MARCAR") state.Marked++;
+                    if (!string.IsNullOrWhiteSpace(outcome.Vehicle!.LotNumber))
+                        observedLotKeys.Add($"{InventorySourcePolicy.CopartExcelSource}:{outcome.Vehicle.LotNumber}");
                 }
 
-                state.Accepted++;
-                state.RecordInlineScoring(outcome.Persistence!);
-                state.RecordTaxonomy(outcome.Vehicle!);
-                if (outcome.Evaluation.Decision == "MARCAR") state.Marked++;
-                if (!string.IsNullOrWhiteSpace(outcome.Vehicle!.LotNumber))
+                if (!string.IsNullOrWhiteSpace(outcome.Vehicle?.LotNumber))
                 {
-                    observedLotKeys.Add($"{InventorySourcePolicy.CopartExcelSource}:{outcome.Vehicle.LotNumber}");
                     var observation = CopartAuctionObservationFactory.Create(outcome.Vehicle, snapshotSha256, snapshotDownloadedAt);
-                    if (observation is not null) observations.Add(observation);
+                    if (observation is not null && outcome.Evaluation.LoadToSystem) observations.Add(observation);
+                }
+
+                var outcomeSourceUpdatedAt = outcome.Vehicle is null ? null : CopartLotWatermarkPolicy.GetSourceUpdatedAt(outcome.Vehicle);
+                if (!outcome.WatermarkSkipped && outcomeSourceUpdatedAt is not null)
+                {
+                    var lotKey = BuildCopartLotKey(outcome.Vehicle!);
+                    if (lotKey is not null)
+                    {
+                        var sourceUpdatedAt = outcomeSourceUpdatedAt.Value;
+                        if (watermarkStates.TryGetValue(lotKey, out var existing) && existing.SourceUpdatedAt > sourceUpdatedAt)
+                            sourceUpdatedAt = existing.SourceUpdatedAt;
+                        watermarkUpdates.Add(new CopartLotWatermarkUpdate(lotKey, sourceUpdatedAt, outcome.RowFingerprint, processingVersion, outcome.Evaluation));
+                    }
                 }
             }
         }
 
         await snapshotStore.RecordCopartAuctionObservationsAsync(observations, cancellationToken);
+        await snapshotStore.PersistCopartLotWatermarksAsync(watermarkUpdates, cancellationToken);
     }
 
-    private async Task<RowProcessingOutcome> ProcessRowAsync(AuctionVehicle row, int rowNumber, CancellationToken cancellationToken)
+    private async Task<RowProcessingOutcome> ProcessRowAsync(AuctionVehicle row, int rowNumber, bool watermarkFallback, string rowFingerprint, CancellationToken cancellationToken)
     {
         AuctionVehicle? vehicle = null;
         EligibilityEvaluation? evaluation = null;
@@ -282,22 +338,38 @@ public sealed class CopartExcelSnapshotProcessor(
                 logger.LogDebug("Copart row {RowNumber} persisting accepted lot and inline scoring.", rowNumber);
                 persistence = await snapshotStore.PersistCopartAcceptedWithScoringAsync(vehicle, evaluation, DateTimeOffset.UtcNow, rowCts.Token);
             }
-            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, persistence, null);
+            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, persistence, null, rowFingerprint, WatermarkSkipped: false, WatermarkFallback: watermarkFallback);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, null, new TimeoutException($"Copart row {rowNumber} exceeded the 2-minute persistence timeout."));
+            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, null, new TimeoutException($"Copart row {rowNumber} exceeded the 2-minute persistence timeout."), rowFingerprint, WatermarkSkipped: false, WatermarkFallback: watermarkFallback);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, null, exception);
+            return new RowProcessingOutcome(rowNumber, vehicle, evaluation, null, exception, rowFingerprint, WatermarkSkipped: false, WatermarkFallback: watermarkFallback);
         }
     }
 
     private static CopartExcelProcessingResult Failed(IReadOnlyList<string> failures, int rows, DateTimeOffset startedAt, string reason) =>
         new(false, false, false, reason, rows, 0, 0, 0, 0, 0, DateTimeOffset.UtcNow - startedAt, null, new Dictionary<string, int>(), new Dictionary<string, int>(), failures.Append(reason).ToArray());
 
-    private sealed record RowProcessingOutcome(int RowNumber, AuctionVehicle? Vehicle, EligibilityEvaluation? Evaluation, CopartInlineScoringPersistenceResult? Persistence, Exception? Exception);
+    private static string? BuildCopartLotKey(AuctionVehicle vehicle)
+    {
+        var lotNumber = vehicle.LotNumber?.Trim();
+        return string.IsNullOrWhiteSpace(lotNumber) || !lotNumber.All(char.IsDigit)
+            ? null
+            : $"{InventorySourcePolicy.CopartExcelSource}:{lotNumber}";
+    }
+
+    private sealed record RowProcessingOutcome(
+        int RowNumber,
+        AuctionVehicle? Vehicle,
+        EligibilityEvaluation? Evaluation,
+        CopartInlineScoringPersistenceResult? Persistence,
+        Exception? Exception,
+        string RowFingerprint,
+        bool WatermarkSkipped,
+        bool WatermarkFallback);
 
     private sealed class ProcessingState
     {
@@ -319,8 +391,25 @@ public sealed class CopartExcelSnapshotProcessor(
         public int TaxonomyClassified { get; private set; }
         public int TaxonomyUnverified { get; private set; }
         public int TaxonomyReviewRequired { get; private set; }
+        public int WatermarkCandidates { get; private set; }
+        public int WatermarkSkipped { get; private set; }
+        public int WatermarkFallback { get; private set; }
         private readonly Dictionary<string, int> _taxonomyCategoryCounts = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<long> _inlineScoringDurationsMs = [];
+
+        public void RecordWatermarkCandidate(bool fallback)
+        {
+            WatermarkCandidates++;
+            if (fallback) WatermarkFallback++;
+        }
+
+        public void RecordWatermarkSkipped() => WatermarkSkipped++;
+
+        public void RecordWatermarkSkippedAccepted()
+        {
+            Unchanged++;
+            ScoreSkippedUnchanged++;
+        }
 
         public void RecordInlineScoring(CopartInlineScoringPersistenceResult result)
         {
@@ -359,6 +448,9 @@ public sealed class CopartExcelSnapshotProcessor(
         public CopartTitleTaxonomyMetrics BuildTaxonomyMetrics() =>
             new(TaxonomyClassified, TaxonomyUnverified, TaxonomyReviewRequired,
                 new Dictionary<string, int>(_taxonomyCategoryCounts, StringComparer.OrdinalIgnoreCase));
+
+        public CopartIncrementalMetrics BuildIncrementalMetrics() =>
+            new(WatermarkCandidates, WatermarkSkipped, WatermarkFallback, CopartLotWatermarkPolicy.CurrentProcessingVersion);
 
         public CopartInlineScoringMetrics BuildInlineScoringMetrics()
         {
