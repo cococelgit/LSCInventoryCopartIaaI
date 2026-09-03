@@ -121,6 +121,16 @@ public sealed class IaaIPilotProcessor(
                 if (string.IsNullOrWhiteSpace(cursor)) break;
             }
         }
+        catch (OperationCanceledException exception)
+        {
+            failures.Add("cancelled");
+            logger.LogWarning("IAAI pilot {RunId} cancelled after {Observed} vehicles.", runId, observed);
+            await snapshotStore.CompleteSyncRunAsync(
+                runId,
+                new InventorySyncRunCompletion(DateTimeOffset.UtcNow, observed, requests, failures, Cancelled: true),
+                CancellationToken.None);
+            throw new OperationCanceledException($"IAAI pilot {runId} cancelled after {observed} vehicles.", exception, CancellationToken.None);
+        }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             failures.Add(exception.Message);
@@ -131,7 +141,7 @@ public sealed class IaaIPilotProcessor(
         await snapshotStore.CompleteSyncRunAsync(
             runId,
             new InventorySyncRunCompletion(finishedAt, observed, requests, failures),
-            cancellationToken);
+            CancellationToken.None);
 
         return new IaaIPilotResult(runId, startedAt, finishedAt, observed, loaded, marked, discarded, quarantined, requests, ruleCounts, failures);
     }

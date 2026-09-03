@@ -121,14 +121,21 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 deactivated = await snapshotStore.DeactivateArchivedLotsAsync(normalizedPlatform, archivedKeys, DateTimeOffset.UtcNow, cancellationToken, runId);
 
             var finishedAt = DateTimeOffset.UtcNow;
-            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, changed + archived, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), cancellationToken);
+            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, changed + archived, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), CancellationToken.None);
             return new(runId, normalizedPlatform, persist, changed, archived, loaded, marked, discarded, quarantined, deactivated, pages, requests, failures);
+        }
+        catch (OperationCanceledException exception)
+        {
+            failures.Add("cancelled");
+            logger.LogWarning("AuctionsAPI incremental sync {RunId} cancelled for {Platform} after {Changed} changed lots.", runId, normalizedPlatform, changed + archived);
+            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, changed + archived, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false, null, true), CancellationToken.None);
+            throw new OperationCanceledException($"AuctionsAPI incremental sync {runId} cancelled for {normalizedPlatform}.", exception, CancellationToken.None);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             failures.Add(exception.Message);
             logger.LogError(exception, "AuctionsAPI incremental sync {RunId} failed for {Platform}.", runId, normalizedPlatform);
-            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, changed + archived, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), cancellationToken);
+            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(DateTimeOffset.UtcNow, changed + archived, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), CancellationToken.None);
             throw;
         }
         finally

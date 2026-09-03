@@ -261,7 +261,7 @@ public sealed class IaaINationalSyncProcessor(
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
                 finishedAt, observed, requests, failures, Loaded: loaded, Marked: marked, Discarded: discarded,
                 Quarantined: quarantined, Errors: failures.Count, PagesProcessed: pagesProcessed,
-                CycleCompleted: cycleCompleted, Reconciliation: reconciliation), cancellationToken);
+                CycleCompleted: cycleCompleted, Reconciliation: reconciliation), CancellationToken.None);
             return new IaaINationalSyncResult(runId, startedAt, finishedAt, false, null, cycleId, observed, loaded, marked, discarded, quarantined, pagesProcessed, requests, cycleCompleted, reconciliation, rules, failures, false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -274,8 +274,18 @@ public sealed class IaaINationalSyncProcessor(
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
                 finishedAt, observed, requests, failures, Loaded: loaded, Marked: marked, Discarded: discarded,
                 Quarantined: quarantined, Errors: failures.Count, PagesProcessed: pagesProcessed,
-                CycleCompleted: checkpoint.CycleCompleted), cancellationToken);
+                CycleCompleted: checkpoint.CycleCompleted), CancellationToken.None);
             return new IaaINationalSyncResult(runId, startedAt, finishedAt, false, null, checkpoint.CycleId ?? Guid.Empty, observed, loaded, marked, discarded, quarantined, pagesProcessed, requests, checkpoint.CycleCompleted, null, rules, failures, !deterministicCursorFailure);
+        }
+        catch (OperationCanceledException exception)
+        {
+            failures.Add("cancelled");
+            logger.LogWarning("IAAI national sync {RunId} cancelled after {Observed} vehicles.", runId, observed);
+            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
+                DateTimeOffset.UtcNow, observed, requests, failures, Loaded: loaded, Marked: marked, Discarded: discarded,
+                Quarantined: quarantined, Errors: failures.Count, PagesProcessed: pagesProcessed,
+                CycleCompleted: false, Cancelled: true), CancellationToken.None);
+            throw new OperationCanceledException($"IAAI national sync {runId} cancelled after {observed} vehicles.", exception, CancellationToken.None);
         }
         finally
         {

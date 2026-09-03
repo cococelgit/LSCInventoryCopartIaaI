@@ -37,6 +37,26 @@ public sealed class IaaIPilotProcessorTests
     }
 
     [Fact]
+    public async Task Marks_the_iaai_pilot_run_cancelled_when_the_provider_cancels()
+    {
+        var client = new FakeApibaraClient(cancelOnList: true);
+        var store = new InMemorySnapshotStore();
+        var processor = new IaaIPilotProcessor(
+            client,
+            store,
+            Microsoft.Extensions.Options.Options.Create(new ApibaraOptions { ApiKey = "test", PageSize = 20 }),
+            Microsoft.Extensions.Options.Options.Create(new IaaIPilotOptions { Enabled = true, MaxVehicles = 10, MaxListRequests = 1 }),
+            NullLogger<IaaIPilotProcessor>.Instance);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => processor.RunAsync(CancellationToken.None));
+
+        var history = await store.GetExecutionHistoryAsync(new InventoryExecutionHistoryRequest(1, 10, "iaai"), CancellationToken.None);
+        Assert.Single(history.Items);
+        Assert.Equal("cancelled", history.Items[0].Status);
+        Assert.NotNull(history.Items[0].FinishedAt);
+    }
+
+    [Fact]
     public async Task Enriches_only_the_configured_number_of_iaai_vehicles_with_details()
     {
         var client = new FakeApibaraClient(supportDetails: true);
@@ -62,8 +82,13 @@ public sealed class IaaIPilotProcessorTests
     private sealed class FakeApibaraClient : IApibaraClient
     {
         private readonly bool _supportDetails;
+        private readonly bool _cancelOnList;
 
-        public FakeApibaraClient(bool supportDetails = false) => _supportDetails = supportDetails;
+        public FakeApibaraClient(bool supportDetails = false, bool cancelOnList = false)
+        {
+            _supportDetails = supportDetails;
+            _cancelOnList = cancelOnList;
+        }
 
         public int ListRequests { get; private set; }
         public int DetailRequests { get; private set; }
@@ -71,6 +96,7 @@ public sealed class IaaIPilotProcessorTests
 
         public Task<VehicleListResponse> SearchVehiclesAsync(VehicleSearchRequest request, CancellationToken cancellationToken)
         {
+            if (_cancelOnList) throw new OperationCanceledException("provider cancelled", cancellationToken);
             Requests.Add(request);
             var page = ListRequests++;
             var vehicles = Enumerable.Range(1, 20).Select(index => new AuctionVehicle
