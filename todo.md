@@ -288,3 +288,14 @@
 - [x] Persistir watermark y métricas incrementales auditables en el manifiesto Copart.
 - [x] Añadir pruebas de primera corrida, lote nuevo con timestamp viejo, actualización, mismo timestamp con cambio, timestamp inválido y reconciliación segura.
 - [x] Ejecutar pruebas .NET y simulación de desarrollo con el CSV real: 145/145 pruebas; 146,248 observados, 2,031 candidatos, 144,217 omitidos, 5 fallback, 0 errores, 21.612 s; sin deployment.
+
+## Acceso PostgreSQL público restringido a una IP
+
+- [ ] Capturar baseline de red, DNS, jobs activos, API y backups antes de migrar.
+- [ ] Abortar automáticamente si IAAI/Copart están ejecutándose o si el servidor no está `Ready`.
+- [ ] Migrar PostgreSQL desde VNet Integration al modelo compatible con Private Endpoint.
+- [ ] Crear Private Endpoint en `snet-private-endpoints` y zona `privatelink.postgres.database.azure.com` enlazada a las VNet de datos y Container Apps.
+- [ ] Verificar conectividad privada de API y jobs usando el mismo FQDN antes de habilitar acceso público.
+- [ ] Habilitar acceso público y crear una única regla `/32` para `48.221.10.88`, sin `Allow Azure services`.
+- [ ] Validar desde la laptop con `osniel_readonly`, SSL obligatorio y escritura bloqueada.
+- [ ] Documentar configuración final, evidencia, riesgos y procedimiento para revocar la regla pública.
