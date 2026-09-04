@@ -86,7 +86,8 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessorTests
         Assert.Equal(1, result.AuctionsApiMatched);
         Assert.Equal(0, result.ApibaraFallbacks);
         Assert.Equal(1, result.Updated);
-        Assert.Equal(1, auctions.ChangedRequests);
+        Assert.Equal(1, auctions.LotRequests);
+        Assert.Equal(0, auctions.ChangedRequests);
         Assert.Equal(0, apibara.DetailRequests);
 
         var updated = await store.GetByPlatformAndLotAsync("iaai", "12345678", CancellationToken.None);
@@ -98,10 +99,13 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessorTests
     private sealed class FakeAuctionsApiClient : IAuctionsApiClient
     {
         public int ChangedRequests { get; private set; }
+        public int LotRequests { get; private set; }
 
         public Task<AuctionsApiPage> GetChangedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken)
         {
             ChangedRequests++;
+            throw new InvalidOperationException("Global pagination must not be used by the directed backfill.");
+#pragma warning disable CS0162
             using var document = JsonDocument.Parse("""
                 [{
                   "vin":"1HGCM82633A004352",
@@ -123,10 +127,20 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessorTests
                 }]
                 """);
             return Task.FromResult(new AuctionsApiPage(document.RootElement.Clone(), JsonDocument.Parse("{}").RootElement.Clone()));
+#pragma warning restore CS0162
         }
 
         public Task<AuctionsApiPage> GetArchivedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken) =>
             Task.FromResult(new AuctionsApiPage(JsonDocument.Parse("[]").RootElement.Clone(), JsonDocument.Parse("{}").RootElement.Clone()));
+
+        public Task<AuctionsApiPage> GetLotAsync(string lot, int domainId, bool searchById, bool includePricesHistory, CancellationToken cancellationToken)
+        {
+            LotRequests++;
+            using var document = JsonDocument.Parse("""
+                {"data":{"lot":"12345678","vin":"1HGCM82633A004352","year":2020,"manufacturer":{"name":"Toyota"},"model":{"name":"Camry"},"run_condition":{"value":"RUNS AND DRIVES"},"airbags":"Intact","keys_available":true,"damage":{"primary":"Front End"},"seller":{"name":"State Farm","type":"Insurance"},"sale_date":"2030-01-01T12:00:00Z","title":"CERTIFICATE OF TITLE"},"meta":{}}
+                """);
+            return Task.FromResult(new AuctionsApiPage(document.RootElement.GetProperty("data").Clone(), document.RootElement.GetProperty("meta").Clone()));
+        }
     }
 
     private sealed class FakeApibaraClient : IApibaraClient

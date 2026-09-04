@@ -50,5 +50,8 @@ public sealed class AuctionsApiInitialImportCancellationTests
 
         public Task<AuctionsApiPage> GetArchivedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<AuctionsApiPage> GetLotAsync(string lot, int domainId, bool searchById, bool includePricesHistory, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

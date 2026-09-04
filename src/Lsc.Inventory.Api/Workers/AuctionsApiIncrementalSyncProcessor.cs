@@ -217,7 +217,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         }
     }
 
-    internal static IEnumerable<AuctionVehicle> MapRows(IEnumerable<JsonElement> rows, string platform)
+    internal static IEnumerable<AuctionVehicle> MapRows(IEnumerable<JsonElement> rows, string platform, bool trustRequestedDomain = false)
     {
         foreach (var row in rows)
         {
@@ -226,21 +226,22 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             {
                 foreach (var lot in lots.EnumerateArray())
                 {
-                    var vehicle = MapVehicle(row, lot, platform);
+                    var vehicle = MapVehicle(row, lot, platform, trustRequestedDomain);
                     if (vehicle is not null) yield return vehicle;
                 }
             }
             else
             {
-                var vehicle = MapVehicle(row, row, platform);
+                var vehicle = MapVehicle(row, row, platform, trustRequestedDomain);
                 if (vehicle is not null) yield return vehicle;
             }
         }
     }
 
-    private static AuctionVehicle? MapVehicle(JsonElement vehicleRow, JsonElement lotRow, string platform)
+    private static AuctionVehicle? MapVehicle(JsonElement vehicleRow, JsonElement lotRow, string platform, bool trustRequestedDomain)
     {
         var domain = Scalar(lotRow, "domain.id", "domain_id") ?? Scalar(vehicleRow, "domain.id", "domain_id");
+        if (domain is null && trustRequestedDomain) domain = DomainId(platform).ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (!string.Equals(domain, DomainId(platform).ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase)) return null;
         var raw = JsonSerializer.SerializeToElement(new { vehicle = vehicleRow, lot = lotRow });
         var payload = new Dictionary<string, object?>

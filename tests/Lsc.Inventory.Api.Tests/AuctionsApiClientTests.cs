@@ -38,6 +38,19 @@ public sealed class AuctionsApiClientTests
     }
 
     [Fact]
+    public async Task Builds_a_directed_iaai_lot_request_with_documented_parameters()
+    {
+        var handler = new CapturingHandler("{\"data\":{\"lot\":\"12345678\"},\"meta\":{}}" );
+        var client = CreateClient(handler, enabled: true);
+
+        await client.GetLotAsync("12345678", 1, searchById: true, includePricesHistory: true, CancellationToken.None);
+
+        Assert.Equal(1, handler.Requests);
+        Assert.Equal("/api/search-lot/12345678/1?search_by_id=1&prices_history=1", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("test-key", handler.LastRequest.Headers.GetValues("x-api-key").Single());
+    }
+
+    [Fact]
     public async Task Restricts_domains_and_windows_before_network_io()
     {
         var handler = new CapturingHandler();

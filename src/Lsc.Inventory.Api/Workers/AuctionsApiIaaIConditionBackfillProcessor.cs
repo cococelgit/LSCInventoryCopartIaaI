@@ -63,34 +63,44 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
         var noEvidence = 0;
         var failed = 0;
         var requests = 0;
-        var page = 1;
-        var pages = 0;
-        var pageLimit = dryRun ? 5 : 1000;
+        var calls = 0;
 
         try
         {
-            while (matched.Count < byLot.Count && page <= pageLimit)
+            foreach (var candidate in candidates)
             {
-                var response = await auctionsApiClient.GetChangedLotsAsync(
-                    new AuctionsApiWindowRequest(1, null, page, _options.PageSize),
-                    cancellationToken);
-                requests++;
-                pages++;
-                foreach (var vehicle in AuctionsApiIncrementalSyncProcessor.MapRows(
-                    AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data), "iaai"))
+                cancellationToken.ThrowIfCancellationRequested();
+                var lot = candidate.Vehicle.LotNumber!;
+                try
                 {
-                    if (string.IsNullOrWhiteSpace(vehicle.LotNumber) || !byLot.TryGetValue(vehicle.LotNumber, out var existing))
+                    requests++;
+                    calls++;
+                    var response = await auctionsApiClient.GetLotAsync(lot, 1, searchById: false, includePricesHistory: false, cancellationToken);
+                    var rows = AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data).ToList();
+                    if (rows.Count == 0 && response.Data.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        rows.Add(response.Data);
+                    var vehicle = AuctionsApiIncrementalSyncProcessor.MapRows(rows, "iaai", trustRequestedDomain: true)
+                        .FirstOrDefault(mapped => string.Equals(mapped.LotNumber, lot, StringComparison.OrdinalIgnoreCase));
+                    if (vehicle is null)
+                    {
+                        noEvidence++;
+                        failures.Add($"{lot}:auctionsapi:not-found");
                         continue;
-                    if (!matched.Add(vehicle.LotNumber)) continue;
-                    var result = await PersistMappedAsync(vehicle, existing, runId, cancellationToken, dryRun);
+                    }
+
+                    matched.Add(lot);
+                    var result = await PersistMappedAsync(vehicle, candidate, runId, cancellationToken, dryRun);
                     updated += result.Updated;
                     noEvidence += result.NoEvidence;
                     failed += result.Failed;
                     failures.AddRange(result.Failures);
                 }
-
-                if (response.NextPage is null || response.NextPage <= page) break;
-                page = response.NextPage.Value;
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    noEvidence++;
+                    failures.Add($"{lot}:auctionsapi:{exception.Message}");
+                    logger.LogWarning(exception, "AuctionsAPI directed lookup failed for IAAI lot {LotNumber}.", lot);
+                }
             }
 
             foreach (var missingLot in dryRun ? Enumerable.Empty<string>() : byLot.Keys.Except(matched, StringComparer.OrdinalIgnoreCase))
@@ -117,16 +127,16 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
             if (!dryRun)
             {
                 await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
-                    DateTimeOffset.UtcNow, candidates.Count, requests, failures, updated, 0, 0, 0, failed, pages, true), CancellationToken.None);
+                    DateTimeOffset.UtcNow, candidates.Count, requests, failures, updated, 0, 0, 0, failed, calls, true), CancellationToken.None);
             }
-            return new(runId, candidates.Count, matched.Count, dryRun ? 0 : byLot.Count - matched.Count, updated, dryRun ? byLot.Count - matched.Count : noEvidence, failed, requests, failures.Take(20).ToArray(), dryRun);
+            return new(runId, candidates.Count, matched.Count, dryRun ? 0 : byLot.Count - matched.Count, updated, noEvidence, failed, requests, failures.Take(20).ToArray(), dryRun);
         }
         catch (OperationCanceledException)
         {
             if (!dryRun)
             {
                 await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
-                    DateTimeOffset.UtcNow, candidates.Count, requests, ["cancelled"], updated, 0, 0, 0, failed + 1, pages, false, null, true), CancellationToken.None);
+                    DateTimeOffset.UtcNow, candidates.Count, requests, ["cancelled"], updated, 0, 0, 0, failed + 1, calls, false, null, true), CancellationToken.None);
             }
             throw;
         }
