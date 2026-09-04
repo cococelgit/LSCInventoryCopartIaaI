@@ -80,6 +80,7 @@ builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
 builder.Services.AddScoped<ICopartMediaEnrichmentProcessor, CopartMediaEnrichmentProcessor>();
 builder.Services.AddScoped<ICopartTitleBackfillProcessor, CopartTitleBackfillProcessor>();
+builder.Services.AddScoped<ICopartFutureBodyStyleBackfillProcessor, CopartFutureBodyStyleBackfillProcessor>();
 builder.Services.AddScoped<ICopartAuctionHistoryBackfillProcessor, CopartAuctionHistoryBackfillProcessor>();
 builder.Services.AddScoped<ICopartScoringBackfillProcessor, CopartScoringBackfillProcessor>();
 builder.Services.AddHostedService<InventorySyncWorker>();
@@ -549,6 +550,19 @@ if (args.Contains("--copart-media-enrich", StringComparer.OrdinalIgnoreCase))
     await using var scope = app.Services.CreateAsyncScope();
     var processor = scope.ServiceProvider.GetRequiredService<ICopartMediaEnrichmentProcessor>();
     Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await processor.RunAsync(CancellationToken.None)));
+    return;
+}
+
+if (args.Contains("--copart-future-body-style-backfill", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var bodyStyleProcessor = scope.ServiceProvider.GetRequiredService<ICopartFutureBodyStyleBackfillProcessor>();
+    var mediaProcessor = scope.ServiceProvider.GetRequiredService<ICopartMediaEnrichmentProcessor>();
+    var bodyStyle = await bodyStyleProcessor.RunAsync(CancellationToken.None);
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { stage = "body-style", result = bodyStyle }));
+    var media = await mediaProcessor.RunAsync(CancellationToken.None);
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { stage = "media", result = media }));
+    if (!bodyStyle.Processed || bodyStyle.Failed > 0 || !media.Processed || media.Failed > 0) Environment.ExitCode = 1;
     return;
 }
 

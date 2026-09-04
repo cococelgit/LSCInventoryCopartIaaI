@@ -209,7 +209,7 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             Year = ParseInteger(Get(row, "Year")),
             Make = Get(row, "Make"),
             Model = FirstPresent(Get(row, "Model Detail"), Get(row, "Model Group")),
-            VehicleType = Get(row, "Vehicle Type"),
+            VehicleType = FirstPresent(Get(row, "Body Style"), Get(row, "Body Type"), Get(row, "Vehicle Type")),
             Color = Get(row, "Color"),
             FuelType = Get(row, "Fuel Type"),
             Transmission = Get(row, "Transmission"),
@@ -277,6 +277,8 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
                 ["source_title_mapping"] = JsonSerializer.SerializeToElement(hasTitleMapping ? "mapped" : "unmapped"),
                 ["source_title_mapping_version"] = JsonSerializer.SerializeToElement(CopartTitleCatalog.Version),
                 ["source_title_description_es"] = JsonSerializer.SerializeToElement(hasTitleMapping ? titleDefinition.SpanishDescription : null),
+                ["source_vehicle_type"] = JsonSerializer.SerializeToElement(Get(row, "Vehicle Type")),
+                ["source_body_style"] = JsonSerializer.SerializeToElement(FirstPresent(Get(row, "Body Style"), Get(row, "Body Type"))),
                 ["source_row_kind"] = JsonSerializer.SerializeToElement("copart-csv")
             }
         });

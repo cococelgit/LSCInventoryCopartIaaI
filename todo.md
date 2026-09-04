@@ -308,3 +308,13 @@
 - [ ] Audit Copart RawSource for Body Style and calculate an update-only backfill impact without writing.
 - [ ] Execute an idempotent Copart Body Style backfill preserving raw Vehicle Type, VIN, source, grading, and unrelated fields.
 - [ ] Verify Copart facet values/counts and result integrity in the production portal after backfill.
+
+- [ ] Backfill only Copart records; never update IAAI records.
+- [ ] Replace Copart vehicle-type codes with the textual Body Type/Body Style value, preserving the raw source code for auditability.
+- [ ] Restrict the backfill to Copart lots with sale date from tomorrow onward in America/New_York; exclude today and all past dates.
+- [ ] Ensure the Copart backfill retrieves and persists all available images for each eligible vehicle, including vehicles currently missing images.
+- [ ] Verify counts, dates, source isolation, vehicle-type text values, and image coverage after the backfill.
+
+- [ ] Add and validate a Copart-only update-only backfill mode with a tomorrow-in-America/New_York sale-date cutoff.
+- [ ] Add progress reporting for Body Style updates, image enrichment, missing images, skipped dates, and failures.
+- [ ] Launch the controlled Copart backfill and monitor its execution without reconciling or deactivating older lots.
