@@ -12,6 +12,11 @@ on:
         required: true
         default: "48.221.10.88"
         type: string
+      allow_active_jobs:
+        description: "Explicitly authorize idempotent network completion while jobs are active"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -127,8 +132,12 @@ jobs:
               --query "[?properties.status=='Running' || properties.status=='Processing' || properties.status=='Pending'] | length(@)" \
               -o tsv)"
             if [[ "${active_count:-0}" != "0" ]]; then
-              echo "ABORT: $job has $active_count active execution(s)." >&2
-              exit 20
+              if [[ "${{ inputs.allow_active_jobs }}" = "true" ]]; then
+                echo "WARNING: continuing by explicit authorization while $job has $active_count active execution(s)."
+              else
+                echo "ABORT: $job has $active_count active execution(s)." >&2
+                exit 20
+              fi
             fi
           done
 
@@ -162,7 +171,8 @@ jobs:
           echo "SERVER_FQDN=$fqdn"
           echo "CURRENT_DELEGATED_SUBNET=${delegated_subnet:-none}"
           echo "CURRENT_PUBLIC_ACCESS=${public_access:-none}"
-          echo "ACTIVE_JOBS=0"
+          echo "ACTIVE_JOBS_CHECKED=true"
+          echo "ACTIVE_JOBS_OVERRIDE=${{ inputs.allow_active_jobs }}"
           echo "PROTECTED_API_IMAGE=$api_image"
 
       - name: Migrate from VNet integration when required
