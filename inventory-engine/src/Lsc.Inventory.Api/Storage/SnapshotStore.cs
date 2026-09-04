@@ -137,7 +137,12 @@ public sealed record CopartScoringCoverageReport(
     long ActiveCopartLots,
     long CurrentPolicyScores,
     long PendingScores,
-    IReadOnlyDictionary<string, long> StatusCounts);
+    IReadOnlyDictionary<string, long> StatusCounts,
+    long LotsWithAuctionFromToday = 0,
+    long AuctionToday = 0,
+    long FutureAuctions = 0,
+    long WithoutAuctionDate = 0,
+    string EligibilityDateUtc = "");
 
 public sealed record CopartScoringBackfillResult(
     int Scanned,
