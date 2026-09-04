@@ -318,3 +318,6 @@
 - [ ] Add and validate a Copart-only update-only backfill mode with a tomorrow-in-America/New_York sale-date cutoff.
 - [ ] Add progress reporting for Body Style updates, image enrichment, missing images, skipped dates, and failures.
 - [ ] Launch the controlled Copart backfill and monitor its execution without reconciling or deactivating older lots.
+
+- [ ] Remove duplicate `CopartExcel__MediaEnrichmentBatchSize` from the isolated Copart workflow and validate unique environment variables.
+- [ ] Relaunch the controlled future-only Copart Body Style and image backfill after the workflow fix.

@@ -117,7 +117,6 @@ jobs:
             "CopartExcel__RecentSnapshotCountForBaseline=6"
             "CopartExcel__ProcessingBatchSize=1000"
             "CopartExcel__PersistenceConcurrency=12"
-            "CopartExcel__MediaEnrichmentBatchSize=1000"
             "CopartExcel__MediaResolutionConcurrency=8"
             "CopartExcel__AuctionHistoryBackfillBatchSize=100000"
             "CopartExcel__ScoringBackfillBatchSize=500"
