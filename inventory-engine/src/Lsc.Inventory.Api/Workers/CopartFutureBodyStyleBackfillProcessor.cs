@@ -104,7 +104,7 @@ public sealed class CopartFutureBodyStyleBackfillProcessor(
         }
     }
 
-    private static string? ReadBodyStyle(AuctionVehicle vehicle)
+    internal static string? ReadBodyStyle(AuctionVehicle vehicle)
     {
         var direct = vehicle.VehicleSpecs?.BodyStyle;
         if (!string.IsNullOrWhiteSpace(direct)) return direct;
@@ -115,7 +115,10 @@ public sealed class CopartFutureBodyStyleBackfillProcessor(
                     return value.GetString();
         }
         if (vehicle.AdditionalData is not null && vehicle.AdditionalData.TryGetValue("source_body_style", out var source) && source.ValueKind == System.Text.Json.JsonValueKind.String)
-            return source.GetString();
+        {
+            var sourceBodyStyle = source.GetString();
+            if (!string.IsNullOrWhiteSpace(sourceBodyStyle)) return sourceBodyStyle;
+        }
         return null;
     }
 

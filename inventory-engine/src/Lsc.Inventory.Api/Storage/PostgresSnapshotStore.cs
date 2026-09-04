@@ -535,7 +535,7 @@ public sealed partial class PostgresSnapshotStore(
             ) versions on true
             where lots.platform = 'copart'
               and coalesce(lifecycle.is_active, true)
-              and (lots.auction_at at time zone 'America/New_York')::date >= ((now() at time zone 'America/New_York')::date + 1)
+              and (lots.auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
               and coalesce(lots.media_photos_count, 0) <= 1
               and coalesce(versions.payload #>> '{_raw_source,Image URL}', '') <> ''
               and not exists (
@@ -649,9 +649,23 @@ public sealed partial class PostgresSnapshotStore(
                 limit 1
             ) versions on true
             where lots.platform = 'copart'
-              and (lots.auction_at at time zone 'America/New_York')::date >= ((now() at time zone 'America/New_York')::date + 1)
-              and coalesce(versions.payload #>> '{vehicle_specs,body_style}', versions.payload #>> '{_raw_source,Body Style}', versions.payload #>> '{_raw_source,Body Type}', '') <> ''
-              and coalesce(lots.vehicle_type, '') <> coalesce(versions.payload #>> '{vehicle_specs,body_style}', versions.payload #>> '{_raw_source,Body Style}', versions.payload #>> '{_raw_source,Body Type}', '')
+              and (lots.auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
+              and coalesce(
+                    versions.payload #>> '{vehicle_specs,body_style}',
+                    versions.payload #>> '{vehicle_specs,bodyStyle}',
+                    versions.payload #>> '{_raw_source,Body Style}',
+                    versions.payload #>> '{_raw_source,Body Type}',
+                    versions.payload #>> '{source_body_style}',
+                    versions.payload #>> '{additional_data,source_body_style}',
+                    '') <> ''
+              and coalesce(lots.vehicle_type, '') <> coalesce(
+                    versions.payload #>> '{vehicle_specs,body_style}',
+                    versions.payload #>> '{vehicle_specs,bodyStyle}',
+                    versions.payload #>> '{_raw_source,Body Style}',
+                    versions.payload #>> '{_raw_source,Body Type}',
+                    versions.payload #>> '{source_body_style}',
+                    versions.payload #>> '{additional_data,source_body_style}',
+                    '')
             order by lots.auction_at asc, lots.lot_key
             limit @limit;
             """;
@@ -692,7 +706,7 @@ public sealed partial class PostgresSnapshotStore(
                 where lot_key = @lot_key
                   and platform = 'copart'
                   and observed_at = @observed_at
-                  and (auction_at at time zone 'America/New_York')::date >= ((now() at time zone 'America/New_York')::date + 1);
+                  and (auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date;
                 """;
             AddParameter(update, "vehicle_type", vehicle.VehicleType);
             AddParameter(update, "lot_key", identity);

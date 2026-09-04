@@ -44,7 +44,7 @@ public sealed class CopartExcelOptions
     [Range(1, 32)]
     public int MediaResolutionConcurrency { get; init; } = 8;
 
-    /// <summary>Limits a maintenance backfill to Copart lots with a sale date after tomorrow's local cutoff.</summary>
+    /// <summary>Limits a maintenance backfill to Copart lots with a sale date on or after today's local cutoff.</summary>
     public bool FutureBodyStyleBackfillOnly { get; init; }
 
     /// <summary>America/New_York is used for the Copart sale-date cutoff.</summary>
