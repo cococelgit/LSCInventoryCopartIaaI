@@ -2052,6 +2052,7 @@ public sealed partial class PostgresSnapshotStore(
                     case when lower(lots.platform) = 'copart' then coalesce(
                         nullif(btrim(latest.payload #>> '{vehicle_specs,body_style}'), ''),
                         nullif(btrim(latest.payload #>> '{details,vehicle_description,BodyStyle}'), ''),
+                        nullif(btrim(latest.payload #>> '{BodyStyle}'), ''),
                         lots.vehicle_type)
                         else lots.vehicle_type end,
                     title_facet.category,
@@ -2059,7 +2060,11 @@ public sealed partial class PostgresSnapshotStore(
                     coalesce(lots.fuel_type, latest.payload #>> '{vehicle_specs,fuel_type}'),
                     coalesce(lots.transmission, latest.payload #>> '{vehicle_specs,transmission}'),
                     coalesce(lots.drive_type, latest.payload #>> '{vehicle_specs,drive_type}'),
-                    coalesce(latest.payload #>> '{vehicle_specs,body_style}', latest.payload #>> '{details,vehicle_description,BodyStyle}'),
+                    coalesce(
+                        nullif(btrim(latest.payload #>> '{vehicle_specs,body_style}'), ''),
+                        nullif(btrim(latest.payload #>> '{details,vehicle_description,BodyStyle}'), ''),
+                        nullif(btrim(latest.payload #>> '{BodyStyle}'), '')),
+
                     coalesce(lots.damage, latest.payload #>> '{condition,primary_damage}'),
                     latest.payload #>> '{condition,secondary_damage}', __SELLER_TYPE_SQL__,
                     latest.payload #>> '{vehicle_specs,engine,layout}', latest.payload #>> '{details,vehicle_description,Cylinders}',
