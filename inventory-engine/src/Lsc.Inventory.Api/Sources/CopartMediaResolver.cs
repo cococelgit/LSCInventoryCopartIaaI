@@ -28,34 +28,62 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
         if (catalogUrl is null)
             return new CopartMediaResolution(vehicle, false, 0, 0, catalogUrlInvalid ? "INVALID_URL" : "MISSING_CATALOG_URL");
 
-        try
+        var candidates = BuildCatalogCandidates(catalogUrl, vehicle.LotNumber);
+        string? lastFailure = null;
+        foreach (var candidateUrl in candidates)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, catalogUrl);
-            request.Headers.Accept.ParseAdd("application/json");
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-                return new CopartMediaResolution(vehicle, false, 0, 0,
-                    response.StatusCode == System.Net.HttpStatusCode.NotFound ? "NOT_FOUND_404" : $"HTTP_{(int)response.StatusCode}");
-            if (response.Content.Headers.ContentType?.MediaType?.Contains("json", StringComparison.OrdinalIgnoreCase) != true)
-                return new CopartMediaResolution(vehicle, false, 0, 0, "INVALID_CATALOG_RESPONSE");
-
-            using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
-            var resolved = ResolveGallery(document.RootElement, out var invalidLinks);
-            if (resolved.Photos.Count == 0)
-                return new CopartMediaResolution(vehicle, false, 0, 0, invalidLinks > 0 ? "INVALID_URL" : "INCOMPLETE_GALLERY");
-
-            var media = new MediaInfo
+            try
             {
-                Photos = resolved.Photos,
-                ThumbnailsCount = resolved.Photos.Count,
-                Has360 = vehicle.Media?.Has360
-            };
-            return new CopartMediaResolution(vehicle with { Media = media }, true, resolved.Photos.Count, resolved.HdImages, null);
+                using var request = new HttpRequestMessage(HttpMethod.Get, candidateUrl);
+                request.Headers.Accept.ParseAdd("application/json");
+                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    lastFailure = response.StatusCode == System.Net.HttpStatusCode.NotFound ? "NOT_FOUND_404" : $"HTTP_{(int)response.StatusCode}";
+                    continue;
+                }
+                if (response.Content.Headers.ContentType?.MediaType?.Contains("json", StringComparison.OrdinalIgnoreCase) != true)
+                {
+                    lastFailure = "INVALID_CATALOG_RESPONSE";
+                    continue;
+                }
+
+                using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+                var resolved = ResolveGallery(document.RootElement, out var invalidLinks);
+                if (resolved.Photos.Count == 0)
+                {
+                    lastFailure = invalidLinks > 0 ? "INVALID_URL" : "INCOMPLETE_GALLERY";
+                    continue;
+                }
+
+                var media = new MediaInfo
+                {
+                    Photos = resolved.Photos,
+                    ThumbnailsCount = resolved.Photos.Count,
+                    Has360 = vehicle.Media?.Has360
+                };
+                return new CopartMediaResolution(vehicle with { Media = media }, true, resolved.Photos.Count, resolved.HdImages, null);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                lastFailure = $"REQUEST_{exception.GetType().Name.ToUpperInvariant()}";
+            }
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+
+        return new CopartMediaResolution(vehicle, false, 0, 0, lastFailure ?? "MISSING_CATALOG_URL");
+    }
+
+    private static IReadOnlyList<string> BuildCatalogCandidates(string catalogUrl, string? lotNumber)
+    {
+        var candidates = new List<string>();
+        if (Uri.TryCreate(catalogUrl, UriKind.Absolute, out var uri))
         {
-            return new CopartMediaResolution(vehicle, false, 0, 0, $"REQUEST_{exception.GetType().Name.ToUpperInvariant()}");
+            candidates.Add(new UriBuilder(uri) { Scheme = Uri.UriSchemeHttps, Port = -1 }.Uri.ToString());
+            if (!string.IsNullOrWhiteSpace(lotNumber))
+                candidates.Add($"https://inventoryv2.copart.io/v1/lotImages/{Uri.EscapeDataString(lotNumber)}");
         }
+        candidates.Add(catalogUrl);
+        return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static (IReadOnlyList<string> Photos, int HdImages) ResolveGallery(JsonElement root, out int invalidLinks)
