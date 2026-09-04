@@ -47,7 +47,10 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
         if (!dryRun && !_options.AllowWrites)
             throw new InvalidOperationException("AuctionsAPI canonical writes are disabled for IAAI backfill.");
 
+        var candidateQueryStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        logger.LogInformation("IAAI backfill candidate query starting. Maximum={Maximum}, Cutoff={Cutoff:o}, DryRun={DryRun}.", maximum, cutoff, dryRun);
         var candidates = await snapshotStore.GetIaaIConditionBackfillCandidatesAsync(maximum, cutoff, cancellationToken);
+        logger.LogInformation("IAAI backfill candidate query completed. Candidates={CandidateCount}, ElapsedMs={ElapsedMs}.", candidates.Count, System.Diagnostics.Stopwatch.GetElapsedTime(candidateQueryStarted).TotalMilliseconds);
         var byLot = candidates
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Vehicle.LotNumber))
             .ToDictionary(candidate => candidate.Vehicle.LotNumber!, StringComparer.OrdinalIgnoreCase);
@@ -75,7 +78,10 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
                 {
                     requests++;
                     calls++;
+                    var requestStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                    logger.LogInformation("IAAI backfill AuctionsAPI request starting. Lot={LotNumber}, Domain=1, SearchById=false, RequestNumber={RequestNumber}, DryRun={DryRun}.", lot, requests, dryRun);
                     var response = await auctionsApiClient.GetLotAsync(lot, 1, searchById: false, includePricesHistory: false, cancellationToken);
+                    logger.LogInformation("IAAI backfill AuctionsAPI request completed. Lot={LotNumber}, DataKind={DataKind}, ElapsedMs={ElapsedMs}.", lot, response.Data.ValueKind, System.Diagnostics.Stopwatch.GetElapsedTime(requestStarted).TotalMilliseconds);
                     var rows = response.Data.ValueKind == System.Text.Json.JsonValueKind.Object && response.Data.TryGetProperty("lots", out var nestedLots) && nestedLots.ValueKind == System.Text.Json.JsonValueKind.Array
                         ? new List<System.Text.Json.JsonElement> { response.Data }
                         : AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data).ToList();
@@ -111,7 +117,10 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
                 try
                 {
                     requests++;
+                    var fallbackStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                    logger.LogInformation("IAAI backfill Apibara fallback request starting. Lot={LotNumber}, RequestNumber={RequestNumber}.", missingLot, requests);
                     var detail = await apibaraClient.GetVehicleAsync(missingLot, cancellationToken);
+                    logger.LogInformation("IAAI backfill Apibara fallback request completed. Lot={LotNumber}, ElapsedMs={ElapsedMs}.", missingLot, System.Diagnostics.Stopwatch.GetElapsedTime(fallbackStarted).TotalMilliseconds);
                     var result = await PersistMappedAsync(detail.Data with { SourceProvider = "apibara" }, byLot[missingLot], runId, cancellationToken, dryRun);
                     updated += result.Updated;
                     noEvidence += result.NoEvidence;
