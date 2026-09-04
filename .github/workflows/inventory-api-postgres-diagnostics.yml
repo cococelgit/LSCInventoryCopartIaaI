@@ -118,12 +118,35 @@ jobs:
           test -n "$inventory_token"
 
           health_code="$(curl --silent --show-error --output diagnostics/health-response.json --write-out '%{http_code}' "https://${api_fqdn}/healthz")"
-          db_code="$(curl --silent --show-error --max-time 70 --output diagnostics/database-response.json --write-out '%{http_code}' --header "Authorization: Bearer $inventory_token" "https://${api_fqdn}/api/v1/inventory/recent?take=1" || true)"
+          declare -A probes=(
+            [recent]="/api/v1/inventory/recent?take=1"
+            [summary]="/api/v1/inventory/summary"
+            [title_taxonomy]="/api/v1/inventory/title-taxonomy/status"
+            [seller_taxonomy]="/api/v1/inventory/seller-taxonomy/audit"
+            [vehicle_missing]="/api/v1/inventory/vehicle/__network_probe__?platform=copart"
+          )
+
+          printf '{"healthHttpCode":"%s","databaseProbes":{' "$health_code" > diagnostics/http-status.json
+          first=true
+          for probe_name in recent summary title_taxonomy seller_taxonomy vehicle_missing; do
+            probe_path="${probes[$probe_name]}"
+            probe_code="$(curl --silent --show-error --max-time 70 \
+              --output "diagnostics/${probe_name}-response.json" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer $inventory_token" \
+              "https://${api_fqdn}${probe_path}" || true)"
+            if [ "$first" = true ]; then
+              first=false
+            else
+              printf ',' >> diagnostics/http-status.json
+            fi
+            printf '"%s":"%s"' "$probe_name" "$probe_code" >> diagnostics/http-status.json
+            echo "DATABASE_PROBE_${probe_name^^}_HTTP_CODE=$probe_code"
+          done
+          printf '}}\n' >> diagnostics/http-status.json
           unset inventory_token
 
-          printf '{"healthHttpCode":"%s","databaseHttpCode":"%s"}\n' "$health_code" "$db_code" > diagnostics/http-status.json
           echo "HEALTH_HTTP_CODE=$health_code"
-          echo "DATABASE_HTTP_CODE=$db_code"
           test "$health_code" = "200"
 
       - name: Query recent Inventory API logs
