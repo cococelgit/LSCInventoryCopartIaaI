@@ -622,7 +622,7 @@ if (args.Contains("--seller-audit-report", StringComparer.OrdinalIgnoreCase))
     Console.WriteLine($"SELLER_AUDIT_TOTAL|{report.TotalVehicles}|{report.SaleDateFrom:O}");
     foreach (var row in report.Rows)
     {
-        Console.WriteLine($"SELLER_AUDIT_ROW|{row.Platform}|{row.SellerName}|{row.SellerType}|{row.SellerClass}|{row.SellerTextClass}|{row.VehicleCount}");
+        Console.WriteLine($"SELLER_AUDIT_ROW|{row.Platform}|{row.SellerName}|{row.SellerType}|{row.SellerClass}|{row.SellerTextClass}|{row.SellerCategory}|{row.ClassificationConfidence:0.00}|{row.NeedsReview}|{row.VehicleCount}");
     }
     return;
 }
