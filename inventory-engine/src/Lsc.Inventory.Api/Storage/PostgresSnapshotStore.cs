@@ -635,7 +635,9 @@ public sealed partial class PostgresSnapshotStore(
         var limit = Math.Clamp(maximum, 1, 100000);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        // This maintenance query inspects the latest JSONB version per future lot.
+        // Allow the bounded candidate read more time than normal persistence writes.
+        command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 180);
         command.CommandText = """
             select lots.lot_key, lots.observed_at, versions.payload::text
             from auction_lots lots
