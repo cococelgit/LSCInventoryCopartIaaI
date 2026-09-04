@@ -1,5 +1,4 @@
 using Lsc.Inventory.Api.Contracts;
-using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Services;
@@ -29,6 +28,7 @@ public interface IIaaIPilotProcessor
 public sealed class IaaIPilotProcessor(
     IApibaraClient apibaraClient,
     IInventorySnapshotStore snapshotStore,
+    ICanonicalInventoryIngestionPipeline canonicalPipeline,
     IOptions<ApibaraOptions> apibaraOptions,
     IOptions<IaaIPilotOptions> pilotOptions,
     ILogger<IaaIPilotProcessor> logger) : IIaaIPilotProcessor
@@ -89,31 +89,20 @@ public sealed class IaaIPilotProcessor(
                             }
                         }
                     }
-                    var vehicle = CanonicalVehicleCleaner.Clean(AuctionVehicleNormalizer.Normalize(providerVehicle, null, null));
-                    var eligibility = AuctionEligibilityEvaluator.Evaluate(vehicle, evaluatedAt);
-                    await snapshotStore.PersistEligibilityDecisionAsync(eligibility, evaluatedAt, cancellationToken);
+                    providerVehicle = providerVehicle with { SourceProvider = "apibara" };
+                    var ingestion = await canonicalPipeline.ProcessAsync(providerVehicle, evaluatedAt, cancellationToken, runId);
+                    var eligibility = ingestion.Eligibility;
                     observed++;
 
                     foreach (var code in eligibility.DiscardReasons.Concat(eligibility.Flags).Select(reason => reason.Code))
                         ruleCounts[code] = ruleCounts.GetValueOrDefault(code) + 1;
 
-                    switch (eligibility.Decision)
+                    if (ingestion.Quarantined) quarantined++;
+                    else if (ingestion.Discarded) discarded++;
+                    else
                     {
-                        case "CUARENTENA":
-                            quarantined++;
-                            break;
-                        case "DESCARTAR":
-                            discarded++;
-                            break;
-                        case "MARCAR":
-                            marked++;
-                            loaded++;
-                            await snapshotStore.PersistAsync(vehicle, evaluatedAt, cancellationToken);
-                            break;
-                        default:
-                            loaded++;
-                            await snapshotStore.PersistAsync(vehicle, evaluatedAt, cancellationToken);
-                            break;
+                        loaded++;
+                        if (ingestion.Marked) marked++;
                     }
                 }
 

@@ -24,6 +24,7 @@ public interface IInventorySnapshotStore
     Task<InventoryValidationReport> GetValidationReportAsync(CancellationToken cancellationToken);
     Task<InventoryLotPersistenceResult> PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken, Guid? runId = null);
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
+    Task<IReadOnlyList<StoredVehicleSnapshot>> GetIaaIConditionBackfillCandidatesAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<InventorySearchPage> SearchAsync(InventorySearchRequest request, CancellationToken cancellationToken);
     Task<InventorySearchSummary> GetInventorySearchSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken);
     Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken);
@@ -804,6 +805,25 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             completion?.Quarantined, completion?.Errors, completion?.Reconciliation?.Reactivated,
             completion?.Reconciliation?.MissesIncremented, completion?.Reconciliation?.Deactivated,
             completion?.PagesProcessed, completion?.CycleCompleted, completion?.Failures ?? []);
+    }
+
+    public Task<IReadOnlyList<StoredVehicleSnapshot>> GetIaaIConditionBackfillCandidatesAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var limit = Math.Clamp(maximum, 1, 10_000);
+        IReadOnlyList<StoredVehicleSnapshot> result = _snapshots.Values
+            .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, "iaai", StringComparison.OrdinalIgnoreCase))
+            .Where(snapshot => !_lifecycle.TryGetValue(snapshot.Identity, out var lifecycle) || lifecycle.Active)
+            .Where(snapshot => snapshot.Vehicle.Auction?.AuctionAt >= cutoff)
+            .Where(snapshot => string.IsNullOrWhiteSpace(snapshot.Vehicle.Condition?.RunCondition?.Value)
+                || string.IsNullOrWhiteSpace(snapshot.Vehicle.VehicleSpecs?.Airbags)
+                || snapshot.Vehicle.Condition?.HasKey is null
+                || string.IsNullOrWhiteSpace(snapshot.Vehicle.Seller?.Name))
+            .OrderBy(snapshot => snapshot.Vehicle.Auction?.AuctionAt)
+            .ThenBy(snapshot => snapshot.Identity, StringComparer.OrdinalIgnoreCase)
+            .Take(limit)
+            .ToArray();
+        return Task.FromResult(result);
     }
 
     public Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)

@@ -1284,6 +1284,50 @@ public sealed partial class PostgresSnapshotStore(
         return JsonSerializer.Serialize(lots);
     }
 
+    public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetIaaIConditionBackfillCandidatesAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        var limit = Math.Clamp(maximum, 1, 10_000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select latest.lot_key, latest.observed_at, latest.payload::text
+            from (
+                select distinct on (versions.lot_key) versions.lot_key, versions.observed_at, versions.payload
+                from auction_lot_versions versions
+                order by versions.lot_key, versions.observed_at desc, versions.id desc
+            ) latest
+            join auction_lots lots on lots.lot_key = latest.lot_key
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = latest.lot_key
+            where lots.platform = 'iaai'
+              and lots.auction_at >= @cutoff
+              and coalesce(lifecycle.is_active, true)
+              and (
+                    coalesce(latest.payload #>> '{condition,run_condition,value}', '') = ''
+                 or coalesce(latest.payload #>> '{vehicle_specs,airbags}', '') = ''
+                 or latest.payload #>> '{condition,has_key}' is null
+                 or coalesce(latest.payload #>> '{seller,name}', '') = ''
+              )
+            order by lots.auction_at asc, latest.lot_key
+            limit @limit;
+            """;
+        AddParameter(command, "cutoff", cutoff.ToUniversalTime());
+        AddParameter(command, "limit", limit);
+        var snapshots = new List<StoredVehicleSnapshot>(limit);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var rawJson = reader.GetString(2);
+            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (vehicle is not null)
+                snapshots.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
+        }
+        return snapshots;
+    }
+
     public async Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);

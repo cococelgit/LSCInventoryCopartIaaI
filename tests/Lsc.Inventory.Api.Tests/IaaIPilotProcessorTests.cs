@@ -20,6 +20,7 @@ public sealed class IaaIPilotProcessorTests
         var processor = new IaaIPilotProcessor(
             client,
             store,
+            new CanonicalInventoryIngestionPipeline(store),
             Microsoft.Extensions.Options.Options.Create(new ApibaraOptions { ApiKey = "test", PageSize = 20 }),
             Microsoft.Extensions.Options.Options.Create(new IaaIPilotOptions { Enabled = true, MaxVehicles = 1000, MaxListRequests = 50 }),
             NullLogger<IaaIPilotProcessor>.Instance);
@@ -44,6 +45,7 @@ public sealed class IaaIPilotProcessorTests
         var processor = new IaaIPilotProcessor(
             client,
             store,
+            new CanonicalInventoryIngestionPipeline(store),
             Microsoft.Extensions.Options.Options.Create(new ApibaraOptions { ApiKey = "test", PageSize = 20 }),
             Microsoft.Extensions.Options.Options.Create(new IaaIPilotOptions { Enabled = true, MaxVehicles = 10, MaxListRequests = 1 }),
             NullLogger<IaaIPilotProcessor>.Instance);
@@ -64,6 +66,7 @@ public sealed class IaaIPilotProcessorTests
         var processor = new IaaIPilotProcessor(
             client,
             store,
+            new CanonicalInventoryIngestionPipeline(store),
             Microsoft.Extensions.Options.Options.Create(new ApibaraOptions { ApiKey = "test", PageSize = 20 }),
             Microsoft.Extensions.Options.Options.Create(new IaaIPilotOptions { Enabled = true, MaxVehicles = 2, MaxListRequests = 1, EnrichDetails = true, DetailEnrichmentLimit = 2 }),
             NullLogger<IaaIPilotProcessor>.Instance);

@@ -258,16 +258,31 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             ["transmission"] = Scalar(vehicleRow, "transmission.name", "transmission"),
             ["drive_type"] = Scalar(vehicleRow, "drive_wheel.name", "drive_wheel"),
             ["title"] = Scalar(lotRow, "title", "detailed_title") ?? Scalar(vehicleRow, "title"),
+            ["vehicle_specs"] = new Dictionary<string, object?>
+            {
+                ["body_style"] = Scalar(vehicleRow, "body_style", "vehicle_type.name", "vehicle_type"),
+                ["airbags"] = Scalar(lotRow, "vehicle_specs.airbags", "airbags", "airbag"),
+                ["restraint_system"] = Scalar(lotRow, "vehicle_specs.restraint_system", "restraint_system", "restraint"),
+            },
             ["condition"] = new Dictionary<string, object?>
             {
                 ["primary_damage"] = Scalar(lotRow, "damage.primary", "damage.primary_damage", "damage"),
                 ["secondary_damage"] = Scalar(lotRow, "damage.secondary", "damage.secondary_damage"),
-                ["has_key"] = Bool(lotRow, "keys_available"),
+                ["has_key"] = Bool(lotRow, "keys_available", "key_available", "keys"),
+                ["run_condition"] = new Dictionary<string, object?>
+                {
+                    ["value"] = Scalar(lotRow, "condition.run_condition.value", "run_condition.value", "run_and_drive", "run_drive", "start_code"),
+                    ["label"] = Scalar(lotRow, "condition.run_condition.label", "run_condition.label", "run_and_drive_label"),
+                    ["class_hint"] = Scalar(lotRow, "condition.run_condition.class_hint", "run_condition.class_hint"),
+                },
             },
             ["seller"] = new Dictionary<string, object?>
             {
                 ["name"] = Scalar(lotRow, "seller.name", "seller"),
-                ["type"] = Scalar(lotRow, "seller_type"),
+                ["raw_type"] = Scalar(lotRow, "seller.raw_type", "seller_type"),
+                ["type"] = Scalar(lotRow, "seller.type", "seller_type"),
+                ["class"] = Scalar(lotRow, "seller.class", "seller_class"),
+                ["text_class"] = Scalar(lotRow, "seller.text_class", "seller_text_class"),
             },
             ["odometer"] = new Dictionary<string, object?>
             {
