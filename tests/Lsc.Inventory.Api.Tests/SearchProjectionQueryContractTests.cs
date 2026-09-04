@@ -38,6 +38,23 @@ public sealed class SearchProjectionQueryContractTests
     }
 
     [Fact]
+    public void ProjectionRebuildUsesCopartBodyStyleAsCanonicalVehicleType()
+    {
+        var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");
+        var source = File.ReadAllText(sourcePath);
+        var methodStart = source.IndexOf("public async Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "RebuildSearchProjectionAsync must remain present.");
+        var methodEnd = source.IndexOf("public async Task<InventorySearchProjectionStatus> GetSearchProjectionStatusAsync", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "RebuildSearchProjectionAsync boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("lower(lots.platform) = 'copart'", method);
+        Assert.Contains("latest.payload #>> '{vehicle_specs,body_style}'", method);
+        Assert.Contains("latest.payload #>> '{details,vehicle_description,BodyStyle}'", method);
+        Assert.Contains("else lots.vehicle_type end", method);
+    }
+
+    [Fact]
     public void ProjectionRebuildPersistsTheVisibleActiveCount()
     {
         var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");

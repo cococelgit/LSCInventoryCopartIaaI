@@ -2049,7 +2049,11 @@ public sealed partial class PostgresSnapshotStore(
                     horsepower, has_key, has_photos, media_has_360, is_buy_now, is_special_title, is_active,
                     observed_at, payload, search_text, updated_at)
                 select lots.lot_key, lower(lots.platform), lots.lot_number, lots.vin, lots.title, lots.year, lots.make, lots.model,
-                    lots.vehicle_type,
+                    case when lower(lots.platform) = 'copart' then coalesce(
+                        nullif(btrim(latest.payload #>> '{vehicle_specs,body_style}'), ''),
+                        nullif(btrim(latest.payload #>> '{details,vehicle_description,BodyStyle}'), ''),
+                        lots.vehicle_type)
+                        else lots.vehicle_type end,
                     title_facet.category,
                     coalesce(lots.color, latest.payload #>> '{vehicle_specs,exterior_color}'),
                     coalesce(lots.fuel_type, latest.payload #>> '{vehicle_specs,fuel_type}'),

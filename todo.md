@@ -304,3 +304,7 @@
 - [x] Add Body Style mapping coverage for the categories confirmed in the supplied screenshot.
 - [x] Normalize IAAI Run & Drive values through a shared taxonomy and close cancelled runs with terminal status and partial metrics.
 - [ ] Promote the cancellation-safe engine and Body Style mapping to production and verify live portal filters and counters.
+
+- [ ] Audit Copart RawSource for Body Style and calculate an update-only backfill impact without writing.
+- [ ] Execute an idempotent Copart Body Style backfill preserving raw Vehicle Type, VIN, source, grading, and unrelated fields.
+- [ ] Verify Copart facet values/counts and result integrity in the production portal after backfill.
