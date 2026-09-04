@@ -1,0 +1,39 @@
+name: Stop IAAI Job Execution
+
+on:
+  workflow_dispatch:
+    inputs:
+      execution_name:
+        description: "Exact IAAI Container Apps execution name"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB_NAME: job-lsc-iaai-pilot-prod
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Stop exact execution
+        env:
+          EXECUTION_NAME: ${{ inputs.execution_name }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTION_NAME" =~ ^job-lsc-iaai-pilot-prod-[a-z0-9]+$ ]] || { echo "Invalid execution name" >&2; exit 1; }
+          az containerapp job stop --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION_NAME" --only-show-errors
+          az containerapp job execution show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION_NAME" -o json
