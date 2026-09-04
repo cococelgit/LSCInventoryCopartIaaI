@@ -568,7 +568,7 @@ public sealed partial class PostgresSnapshotStore(
             ) versions on true
             where lots.platform = 'copart'
               and coalesce(lifecycle.is_active, true)
-              and (lots.auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
+              and (lots.auction_at at time zone 'America/New_York')::date > DATE '2026-09-04'
               and (
                     select count(*)
                     from jsonb_array_elements_text(coalesce(versions.payload #> '{media,thumbs}', '[]'::jsonb)) photo(value)
@@ -681,7 +681,7 @@ public sealed partial class PostgresSnapshotStore(
                 select lot_key, observed_at, auction_at
                 from auction_lots
                 where platform = 'copart'
-                  and (auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
+                  and (auction_at at time zone 'America/New_York')::date > DATE '2026-09-04'
                   and trim(coalesce(vehicle_type, '')) <> ''
                   and trim(vehicle_type) ~ '^[A-Za-z]{1,3}$'
                 order by auction_at asc, lot_key
@@ -768,7 +768,7 @@ public sealed partial class PostgresSnapshotStore(
                 where lot_key = @lot_key
                   and platform = 'copart'
                   and observed_at = @observed_at
-                  and (auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date;
+                  and (auction_at at time zone 'America/New_York')::date > DATE '2026-09-04';
                 """;
             AddParameter(update, "vehicle_type", vehicle.VehicleType);
             AddParameter(update, "lot_key", identity);
@@ -820,6 +820,7 @@ public sealed partial class PostgresSnapshotStore(
                 limit 1
             ) versions on true
             where lots.platform = 'copart'
+              and (lots.auction_at at time zone 'America/New_York')::date > DATE '2026-09-04'
               and (
                   coalesce(versions.payload ->> 'source_title_mapping_version', '') <> @mapping_version
                   or coalesce(versions.payload ->> 'title_taxonomy_version', '') <> @taxonomy_version

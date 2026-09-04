@@ -69,6 +69,8 @@ public sealed partial class PostgresSnapshotStore
             left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
             where current.is_active
               and lower(current.platform) = 'copart'
+              and (current.payload->'auction'->>'auction_at') is not null
+              and left(current.payload->'auction'->>'auction_at', 10) > '2026-09-04'
               and (
                   score.lot_key is null
                   or score.policy_version <> @policy_version
