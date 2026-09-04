@@ -228,7 +228,8 @@ public sealed record InventorySearchProjectionStatus(
     long Rows,
     DateTimeOffset? GeneratedAt,
     DateTimeOffset? FacetsRefreshedAt,
-    TimeSpan Duration);
+    TimeSpan Duration,
+    int SchemaVersion = 1);
 
 public sealed record CopartTitleTaxonomyCoverage(
     string Version,
