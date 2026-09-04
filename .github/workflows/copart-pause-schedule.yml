@@ -1,0 +1,115 @@
+name: Copart Pause or Restore Schedule
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Pause schedule or restore it
+        required: true
+        default: pause
+        type: choice
+        options:
+          - pause
+          - restore
+      restore_cron:
+        description: Required only for restore; exact cron captured before pause
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-pause-or-restore-schedule
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  COPART_AUTO_JOB_NAME: job-lsc-copart-auto-prod
+  INVENTORY_API_APP_NAME: ca-lsc-inventory-api-prod
+
+jobs:
+  schedule:
+    name: Pause or restore Copart schedule only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture and protect baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          auto_before="$(az containerapp job show --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          trigger_before="$(echo "$auto_before" | jq -r '.properties.configuration.triggerType')"
+          cron_before="$(echo "$auto_before" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression // empty')"
+          image_before="$(echo "$auto_before" | jq -r '.properties.template.containers[0].image')"
+          active="$(az containerapp job execution list --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json)"
+          active_count="$(echo "$active" | jq 'length')"
+          test "$active_count" -eq 0
+          test -n "$image_before" && test "$image_before" != "None"
+          if [ '${{ inputs.action }}' = pause ]; then
+            test "$trigger_before" = Schedule
+            test -n "$cron_before"
+            echo "COPART_CRON_BEFORE=$cron_before" >> "$GITHUB_ENV"
+          else
+            requested='${{ inputs.restore_cron }}'
+            test -n "$requested"
+            test "$trigger_before" = Manual
+            cron_before="$requested"
+          fi
+          echo "COPART_TRIGGER_BEFORE=$trigger_before" >> "$GITHUB_ENV"
+          echo "COPART_CRON_BEFORE=${cron_before:-}" >> "$GITHUB_ENV"
+          echo "COPART_IMAGE_BEFORE=$image_before" >> "$GITHUB_ENV"
+          echo "ACTIVE_EXECUTIONS_BEFORE=$active_count" >> "$GITHUB_ENV"
+          echo "Trigger before: $trigger_before"
+          echo "Cron before: ${cron_before:-none}"
+          echo "Image before: $image_before"
+          echo "Active executions before: $active_count"
+
+      - name: Apply requested schedule state
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ '${{ inputs.action }}' = pause ]; then
+            az containerapp job update --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" --trigger-type Manual --only-show-errors
+          else
+            az containerapp job update --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" --trigger-type Schedule --cron-expression "$COPART_CRON_BEFORE" --only-show-errors
+          fi
+
+      - name: Verify schedule-only change and protected API
+        shell: bash
+        run: |
+          set -euo pipefail
+          auto_after="$(az containerapp job show --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          trigger_after="$(echo "$auto_after" | jq -r '.properties.configuration.triggerType')"
+          cron_after="$(echo "$auto_after" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression // empty')"
+          image_after="$(echo "$auto_after" | jq -r '.properties.template.containers[0].image')"
+          api_image="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          if [ '${{ inputs.action }}' = pause ]; then
+            test "$trigger_after" = Manual
+            test "$image_after" = "$COPART_IMAGE_BEFORE"
+          else
+            test "$trigger_after" = Schedule
+            test "$cron_after" = "$COPART_CRON_BEFORE"
+            test "$image_after" = "$COPART_IMAGE_BEFORE"
+          fi
+          test -n "$api_image" && test "$api_image" != None
+          echo "COPART_TRIGGER_AFTER=$trigger_after"
+          echo "COPART_CRON_AFTER=${cron_after:-none}"
+          echo "COPART_IMAGE_AFTER=$image_after"
+          echo "API_IMAGE_UNCHANGED=$api_image"
+          echo "Verified: only Copart schedule state changed; no execution was started."
