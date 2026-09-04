@@ -125,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ inputs.activate_schedule }}" != "true" ]]; then
-            echo "Schedule remains Manual; image and variables were promoted only."
+            echo "Schedule remains unchanged (${CURRENT_JOB_TRIGGER}); image and variables were promoted only."
             exit 0
           fi
           uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${IAAI_JOB_NAME}?api-version=2024-03-01"
@@ -146,7 +146,7 @@ jobs:
           if [[ "${{ inputs.activate_schedule }}" == "true" ]]; then
             test "$trigger_after" = "Schedule"
           else
-            test "$trigger_after" = "Manual"
+            test "$trigger_after" = "$CURRENT_JOB_TRIGGER"
           fi
           echo "IAAI_JOB_PROMOTION_COMPLETED"
           echo "IMAGE=$image_after"
