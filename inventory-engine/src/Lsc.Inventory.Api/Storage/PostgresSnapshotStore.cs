@@ -536,7 +536,11 @@ public sealed partial class PostgresSnapshotStore(
             where lots.platform = 'copart'
               and coalesce(lifecycle.is_active, true)
               and (lots.auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
-              and coalesce(lots.media_photos_count, 0) <= 1
+              and (
+                    select count(*)
+                    from jsonb_array_elements_text(coalesce(versions.payload #> '{media,thumbs}', '[]'::jsonb)) photo(value)
+                    where photo.value <> coalesce(versions.payload #>> '{_raw_source,Image URL}', '')
+                  ) <= 1
               and coalesce(versions.payload #>> '{_raw_source,Image URL}', '') <> ''
               and not exists (
                   select 1
@@ -1968,7 +1972,7 @@ public sealed partial class PostgresSnapshotStore(
         command.CommandText = """
             select distinct on (lot_key) lot_key, coalesce(payload #> '{media,photos}', '[]'::jsonb)
             from auction_lot_versions
-            order by lot_key, observed_at desc;
+            order by lot_key, observed_at desc, id desc;
             """;
 
         var lots = new List<object>();
@@ -2131,7 +2135,7 @@ public sealed partial class PostgresSnapshotStore(
             from (
                 select distinct on (lot_key) lot_key, observed_at, payload
                 from auction_lot_versions
-                order by lot_key, observed_at desc
+                order by lot_key, observed_at desc, id desc
             ) as latest_lots
             left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = latest_lots.lot_key
             where coalesce(lifecycle.is_active, true)
@@ -2183,7 +2187,7 @@ public sealed partial class PostgresSnapshotStore(
                     select payload
                     from auction_lot_versions versions
                     where versions.lot_key = lots.lot_key
-                    order by versions.observed_at desc
+                    order by versions.observed_at desc, versions.id desc
                     limit 1
                 ) latest on true
                 left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
