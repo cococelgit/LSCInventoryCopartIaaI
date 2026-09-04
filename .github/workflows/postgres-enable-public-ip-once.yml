@@ -89,9 +89,19 @@ jobs:
       - name: Verify final state and protected resources
         run: |
           set -euo pipefail
-          server_json="$(az postgres flexible-server show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" -o json)"
+          server_json=""
+          rule_json=""
+          for attempt in $(seq 1 18); do
+            server_json="$(az postgres flexible-server show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" -o json)"
+            rule_json="$(az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$FIREWALL_RULE" -o json 2>/dev/null || true)"
+            public_state="$(jq -r '.network.publicNetworkAccess // empty' <<<"$server_json")"
+            start_ip="$(jq -r '.startIpAddress // empty' <<<"$rule_json")"
+            end_ip="$(jq -r '.endIpAddress // empty' <<<"$rule_json")"
+            echo "VERIFY_ATTEMPT=$attempt PUBLIC_ACCESS=$public_state START_IP=$start_ip END_IP=$end_ip"
+            if [[ "$public_state" = "Enabled" && "$start_ip" = "$APPROVED_IP" && "$end_ip" = "$APPROVED_IP" ]]; then break; fi
+            sleep 10
+          done
           test "$(jq -r '.network.publicNetworkAccess // empty' <<<"$server_json")" = "Enabled"
-          rule_json="$(az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$FIREWALL_RULE" -o json)"
           test "$(jq -r '.startIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
           test "$(jq -r '.endIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
           test "$(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')] | length(@)" -o tsv)" = "0"
