@@ -10,7 +10,7 @@ on:
       approved_ip:
         description: "Single approved public IPv4 address"
         required: true
-        default: "48.221.10.88"
+        default: "12.34.198.160"
         type: string
 
 permissions:
@@ -27,7 +27,7 @@ env:
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
   POSTGRES_SERVER: psql-lsc-inventory-cu
-  APPROVED_IP: 48.221.10.88
+  APPROVED_IP: 12.34.198.160
   FIREWALL_RULE: allow-osniel-readonly-48-221-10-88
   INVENTORY_API_APP: ca-lsc-inventory-api-prod
   IAAI_JOB: job-lsc-iaai-pilot-prod
