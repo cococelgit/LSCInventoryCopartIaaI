@@ -25,6 +25,11 @@ on:
           - scoring_report
           - seller_audit_report
           - recover
+      scoring_limit:
+        description: Optional Copart scoring backfill cap; 0 means unlimited
+        required: false
+        default: '0'
+        type: string
 
 permissions:
   contents: read
@@ -125,6 +130,7 @@ jobs:
             "CopartExcel__AuctionHistoryBackfillBatchSize=100000"
             "CopartExcel__ScoringBackfillBatchSize=500"
             "CopartExcel__ScoringBackfillConcurrency=8"
+            "CopartExcel__ScoringBackfillLimit=${{ inputs.scoring_limit }}"
             "CopartExcel__DiagnosticHoldSeconds=300"
             "CopartExcel__PublicationReportHoldSeconds=60"
             "CopartExcel__AllowInterruptedSnapshotRetry=${allow_interrupted_retry}"
