@@ -77,13 +77,13 @@ jobs:
         run: |
           set -euo pipefail
           az postgres flexible-server update -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --public-access Enabled --only-show-errors >/dev/null
-          if az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" >/dev/null 2>&1; then
-            az postgres flexible-server firewall-rule update -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" --start-ip-address "$APPROVED_IP" --end-ip-address "$APPROVED_IP" --only-show-errors >/dev/null
+          if az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$FIREWALL_RULE" >/dev/null 2>&1; then
+            az postgres flexible-server firewall-rule update -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$FIREWALL_RULE" --start-ip-address "$APPROVED_IP" --end-ip-address "$APPROVED_IP" --only-show-errors >/dev/null
           else
-            az postgres flexible-server firewall-rule create -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" --start-ip-address "$APPROVED_IP" --end-ip-address "$APPROVED_IP" --only-show-errors >/dev/null
+            az postgres flexible-server firewall-rule create -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$FIREWALL_RULE" --start-ip-address "$APPROVED_IP" --end-ip-address "$APPROVED_IP" --only-show-errors >/dev/null
           fi
-          for rule in $(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')].name" -o tsv); do
-            az postgres flexible-server firewall-rule delete -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$rule" --yes --only-show-errors >/dev/null
+          for rule in $(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')].name" -o tsv); do
+            az postgres flexible-server firewall-rule delete -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$rule" --yes --only-show-errors >/dev/null
           done
 
       - name: Verify final state and protected resources
@@ -91,10 +91,10 @@ jobs:
           set -euo pipefail
           server_json="$(az postgres flexible-server show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" -o json)"
           test "$(jq -r '.network.publicNetworkAccess // empty' <<<"$server_json")" = "Enabled"
-          rule_json="$(az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" -o json)"
+          rule_json="$(az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$FIREWALL_RULE" -o json)"
           test "$(jq -r '.startIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
           test "$(jq -r '.endIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
-          test "$(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')] | length(@)" -o tsv)" = "0"
+          test "$(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')] | length(@)" -o tsv)" = "0"
           api_image_after="$(az containerapp show -g "$RESOURCE_GROUP" -n "$INVENTORY_API_APP" --query 'properties.template.containers[0].image' -o tsv)"
           iaai_hash_after="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$IAAI_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
           copart_auto_hash_after="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$COPART_AUTO_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
@@ -113,7 +113,7 @@ jobs:
           echo "NO_JOB_EXECUTION_STARTED=true"
           mkdir -p evidence
           jq '{id,name,state,network,authConfig,fullyQualifiedDomainName}' <<<"$server_json" > evidence/postgres-after.json
-          az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" -o json > evidence/firewall-after.json
+          az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" -o json > evidence/firewall-after.json
 
       - name: Upload evidence
         if: always()
