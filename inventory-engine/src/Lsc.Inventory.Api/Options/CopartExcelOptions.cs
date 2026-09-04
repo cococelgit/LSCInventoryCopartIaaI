@@ -53,6 +53,10 @@ public sealed class CopartExcelOptions
     [Range(1, 100000)]
     public int BodyStyleBackfillBatchSize { get; init; } = 5000;
 
+    /// <summary>Optional hard cap for a controlled maintenance sample; zero means no cap.</summary>
+    [Range(0, 1000000)]
+    public int BodyStyleBackfillLimit { get; init; }
+
     [Range(1, 32)]
     public int BodyStyleBackfillConcurrency { get; init; } = 8;
 

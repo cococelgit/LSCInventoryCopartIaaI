@@ -33,6 +33,7 @@ public sealed class CopartFutureBodyStyleBackfillProcessor(
         var startedAt = DateTimeOffset.UtcNow;
         var batchSize = Math.Clamp(_options.BodyStyleBackfillBatchSize, 1, 10_000);
         var concurrency = Math.Clamp(_options.BodyStyleBackfillConcurrency, 1, 32);
+        var limit = _options.BodyStyleBackfillLimit > 0 ? _options.BodyStyleBackfillLimit : int.MaxValue;
         var runId = await snapshotStore.StartSyncRunAsync(
             new InventorySyncRunStart("copart-body-style-backfill", InventorySourcePolicy.CopartExcelSource, "future-sale-body-style", 1, batchSize, startedAt), cancellationToken);
         var candidates = 0;
@@ -45,7 +46,9 @@ public sealed class CopartFutureBodyStyleBackfillProcessor(
         {
             while (true)
             {
-                var batch = await snapshotStore.GetCopartFutureBodyStyleCandidatesAsync(batchSize, cancellationToken);
+                var remaining = limit - candidates;
+                if (remaining <= 0) break;
+                var batch = await snapshotStore.GetCopartFutureBodyStyleCandidatesAsync(Math.Min(batchSize, remaining), cancellationToken);
                 if (batch.Count == 0) break;
                 candidates += batch.Count;
                 var updatedThisBatch = 0;
@@ -61,7 +64,7 @@ public sealed class CopartFutureBodyStyleBackfillProcessor(
                     }
                 }
                 logger.LogInformation("Copart Body Style backfill progress: candidates={Candidates}, updated={Updated}, skipped={Skipped}, failed={Failed}.", candidates, updated, skipped, failed);
-                if (updatedThisBatch == 0 || batch.Count < batchSize) break;
+                if (updatedThisBatch == 0 || batch.Count < batchSize || candidates >= limit) break;
             }
 
             var finishedAt = DateTimeOffset.UtcNow;

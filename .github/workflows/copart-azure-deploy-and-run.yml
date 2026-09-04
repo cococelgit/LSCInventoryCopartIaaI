@@ -127,9 +127,11 @@ jobs:
             "CopartExcel__PublicationReportHoldSeconds=60"
             "CopartExcel__AllowInterruptedSnapshotRetry=${allow_interrupted_retry}"
             "CopartExcel__FutureBodyStyleBackfillOnly=${{ inputs.run_mode == 'future_body_style_backfill' }}"
-            "CopartExcel__BodyStyleBackfillBatchSize=5000"
+            "CopartExcel__BodyStyleBackfillBatchSize=100"
+            "CopartExcel__BodyStyleBackfillLimit=100"
             "CopartExcel__BodyStyleBackfillConcurrency=8"
-            "CopartExcel__MediaEnrichmentBatchSize=10000"
+            "CopartExcel__MediaEnrichmentBatchSize=100"
+            "CopartExcel__FutureMediaEnrichmentBatchSize=100"
           )
           env_args+=("Persistence__RunMigrations=false")
 

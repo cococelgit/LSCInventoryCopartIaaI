@@ -341,3 +341,7 @@
 - [ ] Execute the confirmed Copart-only reset after recording pre-delete Copart and IAAI counts.
 - [ ] Load a fresh Copart snapshot with Seller Name, Body Style, year/make/model, future sale dates, LSC grading, and media metrics.
 - [ ] Keep Copart scheduler paused until fresh-load acceptance gates pass, then verify portal and reactivate it.
+
+- [ ] Run a controlled Copart backfill limited to 100 vehicles.
+- [ ] Capture updated date before and after the 100-vehicle run and verify every updated record changes correctly.
+- [ ] Report Body Style, seller, Trim, grading, image, created/updated, and error metrics for the 100-vehicle run.
