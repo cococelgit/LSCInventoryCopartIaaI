@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
+using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Scoring;
 using Lsc.Inventory.Api.Sources;
 
@@ -644,9 +645,10 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             .Where(snapshot => string.Equals(snapshot.Vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
             .Where(snapshot =>
             {
-                var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle, snapshot.ObservedAt);
+                var recovered = CanonicalVehicleCleaner.Clean(CopartRawFieldRecovery.Recover(snapshot.Vehicle));
+                var eligibility = AuctionEligibilityEvaluator.Evaluate(recovered, snapshot.ObservedAt);
                 if (!eligibility.LoadToSystem) return false;
-                var inputHash = LscVehicleScoringEngine.CreateInputHash(snapshot.Vehicle, eligibility);
+                var inputHash = LscVehicleScoringEngine.CreateInputHash(recovered, eligibility);
                 return !_scores.TryGetValue(snapshot.Identity, out var score) ||
                        !string.Equals(score.PolicyVersion, LscScoringPolicy.CopartPolicyVersion, StringComparison.Ordinal) ||
                        !string.Equals(score.InputHash, inputHash, StringComparison.Ordinal) ||
