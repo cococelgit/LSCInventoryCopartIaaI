@@ -65,10 +65,11 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
         var requests = 0;
         var page = 1;
         var pages = 0;
+        var pageLimit = dryRun ? 5 : 1000;
 
         try
         {
-            while (matched.Count < byLot.Count && page <= 1000)
+            while (matched.Count < byLot.Count && page <= pageLimit)
             {
                 var response = await auctionsApiClient.GetChangedLotsAsync(
                     new AuctionsApiWindowRequest(1, null, page, _options.PageSize),
