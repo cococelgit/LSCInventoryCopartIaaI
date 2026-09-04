@@ -60,6 +60,57 @@ public sealed class CopartMediaResolverTests
     }
 
     [Fact]
+    public async Task Resolver_accepts_case_variants_and_width_as_hd_evidence()
+    {
+        const string catalog = """
+        {
+          "lotImages": [
+            { "sequence": "2", "link": [
+              { "URL": "https://cs.copart.com/v1/low.jpg", "isThumbnail": "true", "width": "640" },
+              { "imageUrl": "https://cs.copart.com/v1/high.jpg?width=2048", "isHD": "false", "width": "2048" }
+            ] },
+            { "sequence": 1, "link": [
+              { "href": "https://cs.copart.com/v1/one.jpg", "isThumb": false }
+            ] }
+          ]
+        }
+        """;
+        var resolver = new CopartMediaResolver(new HttpClient(new StubHandler(_ => JsonResponse(catalog))));
+
+        var result = await resolver.ResolveAsync(Source("https://inventoryv2.copart.io/v1/lotImages/1000"), CancellationToken.None);
+
+        Assert.True(result.Resolved);
+        Assert.Equal(new[] { "https://cs.copart.com/v1/one.jpg", "https://cs.copart.com/v1/high.jpg?width=2048" }, result.Vehicle.Media!.Photos);
+        Assert.Equal(1, result.HdImages);
+    }
+
+    [Fact]
+    public async Task Resolver_keeps_best_candidate_per_sequence_and_deduplicates_urls()
+    {
+        const string catalog = """
+        {
+          "lotImages": [
+            { "sequence": 1, "link": [
+              { "url": "https://cs.copart.com/v1/one-small.jpg", "width": 640 },
+              { "url": "https://cs.copart.com/v1/one-large.jpg", "width": 1920 },
+              { "url": "https://cs.copart.com/v1/one-large.jpg", "width": 1920 }
+            ] },
+            { "sequence": 2, "link": [
+              { "url": "https://cs.copart.com/v1/two.jpg", "isHdImage": true }
+            ] }
+          ]
+        }
+        """;
+        var resolver = new CopartMediaResolver(new HttpClient(new StubHandler(_ => JsonResponse(catalog))));
+
+        var result = await resolver.ResolveAsync(Source("https://inventoryv2.copart.io/v1/lotImages/1000"), CancellationToken.None);
+
+        Assert.True(result.Resolved);
+        Assert.Equal(new[] { "https://cs.copart.com/v1/one-large.jpg", "https://cs.copart.com/v1/two.jpg" }, result.Vehicle.Media!.Photos);
+        Assert.Equal(2, result.HdImages);
+    }
+
+    [Fact]
     public async Task Resolver_returns_controlled_not_found_without_changing_media()
     {
         var resolver = new CopartMediaResolver(new HttpClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound))));

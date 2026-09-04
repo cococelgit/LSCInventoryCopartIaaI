@@ -28,6 +28,13 @@ public sealed class CopartMediaEnrichmentProcessor(
     public async Task<CopartMediaEnrichmentResult> RunAsync(CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.UtcNow;
+        await using var processingLease = await snapshotStore.TryAcquireCopartProcessingLeaseAsync(cancellationToken);
+        if (processingLease is null)
+        {
+            logger.LogWarning("Copart media enrichment skipped because another Copart processor holds the distributed PostgreSQL lease.");
+            return new CopartMediaEnrichmentResult(false, 0, 0, 0, 0, TimeSpan.Zero, new[] { "COPART_PROCESSING_LOCK_NOT_ACQUIRED" });
+        }
+
         var runId = await snapshotStore.StartSyncRunAsync(
             new InventorySyncRunStart("copart-media", InventorySourcePolicy.CopartExcelSource, "media-enrichment", 1, _options.MediaEnrichmentBatchSize, startedAt),
             cancellationToken);

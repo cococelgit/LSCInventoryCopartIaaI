@@ -191,9 +191,10 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             ["title_mapping_status"] = hasTitleMapping ? "mapped" : "unmapped",
             ["source_process_recommendation"] = hasTitleMapping ? (titleDefinition.SourceProcessRecommendation ? "yes" : "no") : null
         };
+        // Copart's Image URL is a catalog endpoint, not a public photo. Keep it only in RawSource
+        // so the media resolver can fetch the gallery; count only actual image URLs here.
         var thumbnail = SafeMediaUrl(Get(row, "Image Thumbnail"));
-        var image = SafeMediaUrl(Get(row, "Image URL"));
-        var photos = new[] { thumbnail, image }.Where(static value => value is not null).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
+        var photos = thumbnail is null ? Array.Empty<string>() : new[] { thumbnail };
         var primaryDamage = Get(row, "Damage Description");
         var secondaryDamage = Get(row, "Secondary Damage");
         var saleStatus = Get(row, "Sale Status");

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
 
@@ -60,78 +61,143 @@ public sealed class CopartMediaResolver(HttpClient client) : ICopartMediaResolve
     private static (IReadOnlyList<string> Photos, int HdImages) ResolveGallery(JsonElement root, out int invalidLinks)
     {
         invalidLinks = 0;
-        if (!root.TryGetProperty("lotImages", out var lotImages) || lotImages.ValueKind != JsonValueKind.Array)
+        if (!TryGetProperty(root, "lotImages", out var lotImages) || lotImages.ValueKind != JsonValueKind.Array)
             return (Array.Empty<string>(), 0);
 
-        var sequences = new List<(int Sequence, string? Hd, string? Standard, string? Thumbnail)>();
+        var candidates = new List<ImageCandidate>();
         var fallbackSequence = 0;
         foreach (var image in lotImages.EnumerateArray())
         {
-            var sequence = image.TryGetProperty("sequence", out var sequenceValue) && sequenceValue.TryGetInt32(out var parsedSequence)
-                ? parsedSequence
-                : fallbackSequence;
+            var sequence = GetInt(image, "sequence") ?? fallbackSequence;
             fallbackSequence++;
-            if (!image.TryGetProperty("link", out var links) || links.ValueKind != JsonValueKind.Array) continue;
+            if (!TryGetProperty(image, "link", out var links) || links.ValueKind != JsonValueKind.Array) continue;
 
-            string? hd = null;
-            string? standard = null;
-            string? thumbnail = null;
             foreach (var link in links.EnumerateArray())
             {
-                if (!TryReadImageLink(link, out var url, out var isThumbnail, out var isHd))
+                if (!TryReadImageLink(link, out var candidate))
                 {
                     invalidLinks++;
                     continue;
                 }
-                if (isHd && hd is null) hd = url;
-                else if (!isThumbnail && standard is null) standard = url;
-                else if (thumbnail is null) thumbnail = url;
+                candidates.Add(candidate with { Sequence = sequence });
             }
-            sequences.Add((sequence, hd, standard, thumbnail));
         }
 
-        var photos = new List<string>(sequences.Count);
-        var unique = new HashSet<string>(StringComparer.Ordinal);
+        var photos = new List<string>();
+        var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var hdImages = 0;
-        foreach (var sequence in sequences.OrderBy(item => item.Sequence))
+        foreach (var group in candidates
+                     .GroupBy(item => item.Sequence)
+                     .OrderBy(item => item.Key))
         {
-            var selected = sequence.Hd ?? sequence.Standard ?? sequence.Thumbnail;
-            if (selected is null || !unique.Add(selected)) continue;
-            photos.Add(selected);
-            if (sequence.Hd == selected) hdImages++;
+            var selected = group
+                .OrderByDescending(item => item.IsHd)
+                .ThenByDescending(item => item.Width ?? 0)
+                .ThenBy(item => item.IsThumbnail)
+                .ThenBy(item => item.Url, StringComparer.Ordinal)
+                .FirstOrDefault();
+            if (selected is null || !unique.Add(selected.Url)) continue;
+            photos.Add(selected.Url);
+            if (selected.IsHd) hdImages++;
         }
         return (photos, hdImages);
     }
 
-    private static bool TryReadImageLink(JsonElement link, out string url, out bool isThumbnail, out bool isHd)
+    private static bool TryReadImageLink(JsonElement link, out ImageCandidate candidate)
     {
-        url = string.Empty;
-        isThumbnail = link.TryGetProperty("isThumbNail", out var thumbnail) && thumbnail.ValueKind == JsonValueKind.True;
-        isHd = link.TryGetProperty("isHdImage", out var hd) && hd.ValueKind == JsonValueKind.True;
-        if (!link.TryGetProperty("url", out var candidate) || candidate.ValueKind != JsonValueKind.String) return false;
-        var value = candidate.GetString()?.Trim();
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
-            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Fragment)) return false;
-        if (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)) return false;
+        candidate = default!;
+        if (link.ValueKind != JsonValueKind.Object) return false;
 
-        // The original approved URL remains only in the private payload. Public API media remains proxy-backed.
-        url = uri.ToString();
+        var value = GetString(link, "url", "imageUrl", "imageURL", "href");
+        if (string.IsNullOrWhiteSpace(value) ||
+            !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            (uri.Host is not "copart.com" && !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        var isThumbnail = GetBool(link, "isThumbNail", "isThumbnail", "thumbnail", "isThumb") ?? false;
+        var explicitHd = GetBool(link, "isHdImage", "isHDImage", "isHd", "hd", "highDefinition");
+        var width = GetInt(link, "width", "imageWidth");
+        var isHd = explicitHd == true || IsHighDefinitionUri(uri, width);
+        candidate = new ImageCandidate(0, uri.ToString(), isHd, isThumbnail, width);
         return true;
     }
+
+    private static bool IsHighDefinitionUri(Uri uri, int? width) =>
+        width >= 1600 ||
+        uri.AbsolutePath.Contains("/hd/", StringComparison.OrdinalIgnoreCase) ||
+        uri.AbsolutePath.Contains("highres", StringComparison.OrdinalIgnoreCase) ||
+        uri.Query.Contains("hd", StringComparison.OrdinalIgnoreCase) ||
+        uri.Query.Contains("width=2048", StringComparison.OrdinalIgnoreCase) ||
+        uri.Query.Contains("width=1920", StringComparison.OrdinalIgnoreCase);
 
     private static string? ReadCatalogUrl(AuctionVehicle vehicle, out bool invalid)
     {
         invalid = false;
-        if (vehicle.RawSource is not { } rawSource || rawSource.ValueKind != JsonValueKind.Object ||
-            !rawSource.TryGetProperty("Image URL", out var candidate) || candidate.ValueKind != JsonValueKind.String) return null;
-        var value = candidate.GetString()?.Trim();
+        if (vehicle.RawSource is not { } rawSource || rawSource.ValueKind != JsonValueKind.Object)
+            return null;
+        var value = GetString(rawSource, "Image URL", "ImageURL", "image_url");
         if (string.IsNullOrWhiteSpace(value)) return null;
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
-            uri.Host is not ("inventoryv2.copart.io" or "inventoryv2.copart.com"))
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") ||
+            (uri.Host is not ("inventoryv2.copart.io" or "inventoryv2.copart.com") &&
+             !uri.Host.EndsWith(".copart.com", StringComparison.OrdinalIgnoreCase)))
         {
             invalid = true;
             return null;
         }
         return uri.ToString();
     }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out value)) return true;
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+        value = default;
+        return false;
+    }
+
+    private static string? GetString(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+            if (TryGetProperty(element, name, out var value) && value.ValueKind == JsonValueKind.String)
+                return value.GetString();
+        return null;
+    }
+
+    private static int? GetInt(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!TryGetProperty(element, name, out var value)) continue;
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)) return number;
+            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number)) return number;
+        }
+        return null;
+    }
+
+    private static bool? GetBool(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!TryGetProperty(element, name, out var value)) continue;
+            if (value.ValueKind is JsonValueKind.True or JsonValueKind.False) return value.GetBoolean();
+            if (value.ValueKind == JsonValueKind.String && bool.TryParse(value.GetString(), out var parsed)) return parsed;
+        }
+        return null;
+    }
+
+    private sealed record ImageCandidate(int Sequence, string Url, bool IsHd, bool IsThumbnail, int? Width);
 }

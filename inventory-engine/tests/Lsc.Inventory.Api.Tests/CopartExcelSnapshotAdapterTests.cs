@@ -34,6 +34,19 @@ public sealed class CopartExcelSnapshotAdapterTests
     }
 
     [Fact]
+    public async Task Catalog_image_url_is_not_counted_as_a_photo()
+    {
+        var adapter = CreateAdapter();
+        var vehicle = Assert.Single(await ReadAllAsync(adapter, CreateSnapshot(BuildCsv(1))));
+
+        var photos = vehicle.Media!.Photos ?? Array.Empty<string>();
+        Assert.Single(photos);
+        Assert.True(vehicle.RawSource!.Value.TryGetProperty("Image URL", out var catalogUrl));
+        Assert.DoesNotContain(catalogUrl.GetString() ?? string.Empty, photos);
+        Assert.Contains("Image URL", vehicle.RawSource.Value.EnumerateObject().Select(property => property.Name));
+    }
+
+    [Fact]
     public async Task Maps_seller_name_to_taxonomy_evidence_for_copart_grading()
     {
         var csv = BuildCsv(1).Replace("Good Seller", "State Farm Insurance", StringComparison.Ordinal);
@@ -315,11 +328,11 @@ public sealed class CopartExcelSnapshotAdapterTests
     private static string BuildCsv(int rows, string runDrives = "Runs and Drives", string currentBid = "5000", string buyNow = "0", string? lastUpdatedTime = null)
     {
         var includeLastUpdated = lastUpdatedTime is not null;
-        var header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Drive,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail" + (includeLastUpdated ? ",Last Updated Time" : string.Empty) + "\n";
+        var header = "Lot number,VIN,Year,Make,Model Group,Model Detail,Vehicle Type,Sale Date M/D/CY,Sale time (HHMM),Time Zone,Damage Description,Secondary Damage,Sale Title Type,Special Note,Announcements,Location state,Location city,Location ZIP,Yard number,Yard name,Seller Name,Has Keys-Yes or No,Drive,Runs/Drives,Odometer,Odometer Brand,Sale Status,\"High Bid =non-vix,Sealed=Vix\",Buy-It-Now Price,Image Thumbnail,Image URL" + (includeLastUpdated ? ",Last Updated Time" : string.Empty) + "\n";
         var builder = new StringBuilder(header);
         for (var index = 0; index < rows; index++)
         {
-            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,FRONT WHEEL DRIVE,{runDrives},10000,Actual,Open,{currentBid},{buyNow},https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg{(includeLastUpdated ? $",{lastUpdatedTime}" : string.Empty)}\n");
+            builder.Append($"{12345678 + index},1HGCM82633A004352,2025,Honda,Accord,Accord LX,Automobile,12/31/2099,1300,EST,Normal Wear,Minor Dent,Salvage,none,none,FL,Miami,33101,100,Miami Yard,Good Seller,Yes,FRONT WHEEL DRIVE,{runDrives},10000,Actual,Open,{currentBid},{buyNow},https://cs.copart.com/v1/AUTH_svc.pdoc00001/lpp/123.jpg,https://inventoryv2.copart.io/v1/lotImages/{12345678 + index}{(includeLastUpdated ? $",{lastUpdatedTime}" : string.Empty)}\n");
         }
         return builder.ToString();
     }

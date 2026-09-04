@@ -1,4 +1,5 @@
 using Lsc.Inventory.Api.Eligibility;
+using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Sources;
 using Lsc.Inventory.Api.Storage;
@@ -25,6 +26,13 @@ public sealed class CopartScoringBackfillProcessor(
     public async Task<CopartScoringBackfillResult> RunAsync(CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.UtcNow;
+        await using var processingLease = await snapshotStore.TryAcquireCopartProcessingLeaseAsync(cancellationToken);
+        if (processingLease is null)
+        {
+            logger.LogWarning("Copart scoring backfill skipped because another Copart processor holds the distributed PostgreSQL lease.");
+            return new CopartScoringBackfillResult(0, 0, 0, 0, 0, 1, TimeSpan.Zero, new[] { "COPART_PROCESSING_LOCK_NOT_ACQUIRED" });
+        }
+
         var batchSize = Math.Clamp(_options.ScoringBackfillBatchSize, 1, 2_000);
         var concurrency = Math.Clamp(_options.ScoringBackfillConcurrency, 1, 16);
         var limit = _options.ScoringBackfillLimit > 0 ? _options.ScoringBackfillLimit : int.MaxValue;
@@ -110,10 +118,14 @@ public sealed class CopartScoringBackfillProcessor(
         {
             if (!string.Equals(candidate.Vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
                 return new ScoringOutcome(ScoringOutcomeKind.Ineligible, null);
-            var eligibility = AuctionEligibilityEvaluator.Evaluate(candidate.Vehicle, candidate.ObservedAt);
+            // Recover only values that already exist in the original Copart row preserved in RawSource.
+            // No inferred values, weight changes, or IAAI paths are involved.
+            var recovered = CopartRawFieldRecovery.Recover(candidate.Vehicle);
+            var canonical = CanonicalVehicleCleaner.Clean(recovered);
+            var eligibility = AuctionEligibilityEvaluator.Evaluate(canonical, candidate.ObservedAt);
             if (!eligibility.LoadToSystem)
                 return new ScoringOutcome(ScoringOutcomeKind.Ineligible, null);
-            await snapshotStore.PersistScoringResultAsync(candidate.Vehicle, eligibility, candidate.ObservedAt, cancellationToken);
+            await snapshotStore.PersistScoringResultAsync(canonical, eligibility, candidate.ObservedAt, cancellationToken);
             return new ScoringOutcome(ScoringOutcomeKind.Scored, null);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
