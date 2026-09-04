@@ -2157,7 +2157,7 @@ public sealed partial class PostgresSnapshotStore(
                     from inventory_search_current where is_active
                 )
                 update inventory_search_projection_state state
-                set is_ready = true, row_count = stats.rows, visible_row_count = stats.visible_rows, generated_at = stats.generated_at,
+                set is_ready = true, schema_version = 2, row_count = stats.rows, visible_row_count = stats.visible_rows, generated_at = stats.generated_at,
                     facets_refreshed_at = now(), updated_at = now()
                 from stats where state.projection_name = 'inventory-current-v1'
                 returning state.row_count, state.generated_at;
@@ -2181,7 +2181,7 @@ public sealed partial class PostgresSnapshotStore(
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
-            select is_ready, row_count, generated_at, facets_refreshed_at
+            select is_ready, schema_version, row_count, generated_at, facets_refreshed_at
             from inventory_search_projection_state
             where projection_name = 'inventory-current-v1';
             """;
@@ -2193,10 +2193,11 @@ public sealed partial class PostgresSnapshotStore(
         Interlocked.Exchange(ref _projectionReadyCheckedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
         return new InventorySearchProjectionStatus(
             ready,
-            reader.GetInt64(1),
-            reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTimeOffset>(2),
+            reader.GetInt64(2),
             reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
-            DateTimeOffset.UtcNow - startedAt);
+            reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4),
+            DateTimeOffset.UtcNow - startedAt,
+            reader.GetInt32(1));
     }
 
     public async Task<CopartTitleTaxonomyCoverage> GetCopartTitleTaxonomyCoverageAsync(CancellationToken cancellationToken)
