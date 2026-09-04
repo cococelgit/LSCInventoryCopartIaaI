@@ -147,7 +147,33 @@ public sealed partial class PostgresSnapshotStore
             await using var reader = await byStatus.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken)) statuses[reader.GetString(0)] = reader.GetInt64(1);
         }
-        return new CopartScoringCoverageReport(activeLots, currentScores, Math.Max(0, activeLots - currentScores), statuses);
+        var cutoffDate = DateTime.UtcNow.Date;
+        long lotsWithAuctionFromToday;
+        long auctionToday;
+        long futureAuctions;
+        long withoutAuctionDate;
+        await using (var auctionCounts = connection.CreateCommand())
+        {
+            auctionCounts.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            auctionCounts.CommandText = """
+                select
+                    count(*) filter (where left(current.payload->'auction'->>'auction_at', 10) >= @cutoff_date)::bigint,
+                    count(*) filter (where left(current.payload->'auction'->>'auction_at', 10) = @cutoff_date::text)::bigint,
+                    count(*) filter (where left(current.payload->'auction'->>'auction_at', 10) > @cutoff_date::text)::bigint,
+                    count(*) filter (where current.payload->'auction'->>'auction_at' is null or current.payload->'auction'->>'auction_at' = '')::bigint
+                from inventory_search_current current
+                where current.is_active and lower(current.platform) = 'copart';
+                """;
+            AddParameter(auctionCounts, "cutoff_date", cutoffDate.ToString("yyyy-MM-dd"));
+            await using var reader = await auctionCounts.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            lotsWithAuctionFromToday = reader.GetInt64(0);
+            auctionToday = reader.GetInt64(1);
+            futureAuctions = reader.GetInt64(2);
+            withoutAuctionDate = reader.GetInt64(3);
+        }
+        return new CopartScoringCoverageReport(activeLots, currentScores, Math.Max(0, activeLots - currentScores), statuses,
+            lotsWithAuctionFromToday, auctionToday, futureAuctions, withoutAuctionDate, cutoffDate.ToString("yyyy-MM-dd"));
     }
 
     public async Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
