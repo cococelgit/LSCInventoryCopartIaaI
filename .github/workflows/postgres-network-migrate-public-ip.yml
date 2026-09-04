@@ -241,28 +241,53 @@ jobs:
               --only-show-errors >/dev/null
           fi
 
-          if ! az network private-endpoint dns-zone-group show \
-            --resource-group "$RESOURCE_GROUP" \
-            --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
-            --name "$PRIVATE_DNS_ZONE_GROUP" >/dev/null 2>&1; then
-            az network private-endpoint dns-zone-group create \
-              --resource-group "$RESOURCE_GROUP" \
-              --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
-              --name "$PRIVATE_DNS_ZONE_GROUP" \
-              --private-dns-zone "$zone_id" \
-              --zone-name "$PRIVATE_DNS_ZONE" \
-              --only-show-errors >/dev/null
-          fi
-
           pe_state="$(az network private-endpoint show --resource-group "$RESOURCE_GROUP" --name "$PRIVATE_ENDPOINT_NAME" --query provisioningState -o tsv)"
           connection_state="$(az network private-endpoint show --resource-group "$RESOURCE_GROUP" --name "$PRIVATE_ENDPOINT_NAME" --query 'privateLinkServiceConnections[0].privateLinkServiceConnectionState.status' -o tsv)"
           private_ip="$(az network private-endpoint show --resource-group "$RESOURCE_GROUP" --name "$PRIVATE_ENDPOINT_NAME" --query 'customDnsConfigs[0].ipAddresses[0]' -o tsv)"
           test "$pe_state" = "Succeeded"
           test "$connection_state" = "Approved"
           test -n "$private_ip"
+
+          zone_group_count="$(az network private-endpoint dns-zone-group list \
+            --resource-group "$RESOURCE_GROUP" \
+            --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
+            --query "length([?name=='$PRIVATE_DNS_ZONE_GROUP'])" -o tsv)"
+          if [ "$zone_group_count" = "0" ]; then
+            az network private-endpoint dns-zone-group create \
+              --resource-group "$RESOURCE_GROUP" \
+              --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
+              --name "$PRIVATE_DNS_ZONE_GROUP" \
+              --private-dns-zone "$zone_id" \
+              --zone-name postgresql \
+              --only-show-errors >/dev/null
+          fi
+
+          configured_zone_id="$(az network private-endpoint dns-zone-group show \
+            --resource-group "$RESOURCE_GROUP" \
+            --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
+            --name "$PRIVATE_DNS_ZONE_GROUP" \
+            --query 'privateDnsZoneConfigs[0].privateDnsZoneId' -o tsv)"
+          test "${configured_zone_id,,}" = "${zone_id,,}"
+
+          private_dns_ip=""
+          for attempt in $(seq 1 30); do
+            private_dns_ip="$(az network private-dns record-set a show \
+              --resource-group "$RESOURCE_GROUP" \
+              --zone-name "$PRIVATE_DNS_ZONE" \
+              --name "$POSTGRES_SERVER" \
+              --query 'aRecords[0].ipv4Address' -o tsv 2>/dev/null || true)"
+            if [ "$private_dns_ip" = "$private_ip" ]; then
+              break
+            fi
+            sleep 10
+          done
+          test "$private_dns_ip" = "$private_ip"
+
           echo "PRIVATE_ENDPOINT_STATE=$pe_state"
           echo "PRIVATE_CONNECTION_STATE=$connection_state"
           echo "PRIVATE_IP=$private_ip"
+          echo "PRIVATE_DNS_ZONE_GROUP=$PRIVATE_DNS_ZONE_GROUP"
+          echo "PRIVATE_DNS_A_RECORD=$private_dns_ip"
 
       - name: Verify private PostgreSQL access through Inventory API
         shell: bash
@@ -355,6 +380,23 @@ jobs:
           test "$(jq -r '.startIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
           test "$(jq -r '.endIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
 
+          zone_id="$(az network private-dns zone show --resource-group "$RESOURCE_GROUP" --name "$PRIVATE_DNS_ZONE" --query id -o tsv)"
+          zone_group_json="$(az network private-endpoint dns-zone-group show \
+            --resource-group "$RESOURCE_GROUP" \
+            --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
+            --name "$PRIVATE_DNS_ZONE_GROUP" -o json)"
+          private_ip="$(az network private-endpoint show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$PRIVATE_ENDPOINT_NAME" \
+            --query 'customDnsConfigs[0].ipAddresses[0]' -o tsv)"
+          private_dns_ip="$(az network private-dns record-set a show \
+            --resource-group "$RESOURCE_GROUP" \
+            --zone-name "$PRIVATE_DNS_ZONE" \
+            --name "$POSTGRES_SERVER" \
+            --query 'aRecords[0].ipv4Address' -o tsv)"
+          test "$(jq -r '.privateDnsZoneConfigs[0].privateDnsZoneId' <<<"$zone_group_json" | tr '[:upper:]' '[:lower:]')" = "$(tr '[:upper:]' '[:lower:]' <<<"$zone_id")"
+          test "$private_dns_ip" = "$private_ip"
+
           api_image_after="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$INVENTORY_API_APP" --query 'properties.template.containers[0].image' -o tsv)"
           iaai_hash_after="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$IAAI_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
           copart_auto_hash_after="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$COPART_AUTO_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
@@ -374,6 +416,8 @@ jobs:
           az network private-endpoint show --resource-group "$RESOURCE_GROUP" --name "$PRIVATE_ENDPOINT_NAME" -o json > migration-evidence/private-endpoint-after.json
           az network private-dns zone show --resource-group "$RESOURCE_GROUP" --name "$PRIVATE_DNS_ZONE" -o json > migration-evidence/private-dns-zone-after.json
           az network private-dns link vnet list --resource-group "$RESOURCE_GROUP" --zone-name "$PRIVATE_DNS_ZONE" -o json > migration-evidence/private-dns-links-after.json
+          az network private-dns record-set a list --resource-group "$RESOURCE_GROUP" --zone-name "$PRIVATE_DNS_ZONE" -o json > migration-evidence/private-dns-a-records-after.json
+          printf '%s\n' "$zone_group_json" > migration-evidence/private-dns-zone-group-after.json
           az postgres flexible-server firewall-rule list --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_SERVER" -o json > migration-evidence/firewall-after.json
 
           echo "POSTGRES_NETWORK_MIGRATION_COMPLETED"
