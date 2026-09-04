@@ -2043,7 +2043,8 @@ public sealed partial class PostgresSnapshotStore(
                 insert into inventory_search_current (
                     lot_key, platform, lot_number, vin, title, year, make, model, vehicle_type, title_type,
                     color, fuel_type, transmission, drive_type, body_style, primary_damage, secondary_damage,
-                    seller_type, engine_layout, cylinders, loss_type, start_code, auction_state, auction_at,
+                    seller_type, seller_name, seller_classification_confidence, seller_needs_review, seller_classification_evidence, seller_taxonomy_version,
+                    engine_layout, cylinders, loss_type, start_code, auction_state, auction_at,
                     lot_status, lot_sub_status, location_display, location_state, facility_id, odometer,
                     current_bid_usd, buy_now_usd, provider_estimate_from, provider_estimate_to, engine_size_liters,
                     horsepower, has_key, has_photos, media_has_360, is_buy_now, is_special_title, is_active,
@@ -2067,6 +2068,10 @@ public sealed partial class PostgresSnapshotStore(
 
                     coalesce(lots.damage, latest.payload #>> '{condition,primary_damage}'),
                     latest.payload #>> '{condition,secondary_damage}', __SELLER_TYPE_SQL__,
+                    nullif(btrim(latest.payload #>> '{seller,name}'), ''),
+                    case when latest.payload #>> '{seller,classification_confidence}' ~ '^[0-9]+([.][0-9]+)?$' then (latest.payload #>> '{seller,classification_confidence}')::numeric end,
+                    case lower(latest.payload #>> '{seller,needs_review}') when 'false' then false when 'true' then true else true end,
+                    latest.payload #>> '{seller,classification_evidence}', latest.payload #>> '{seller,taxonomy_version}',
                     latest.payload #>> '{vehicle_specs,engine,layout}', latest.payload #>> '{details,vehicle_description,Cylinders}',
                     latest.payload #>> '{condition,loss}', coalesce(latest.payload #>> '{condition,run_condition,value}', latest.payload #>> '{condition,run_condition,label}'),
                     lots.auction_state, lots.auction_at, lots.lot_status, lots.lot_sub_status, lots.location_display,
@@ -2113,7 +2118,10 @@ public sealed partial class PostgresSnapshotStore(
                     title_type = excluded.title_type, color = excluded.color, fuel_type = excluded.fuel_type,
                     transmission = excluded.transmission, drive_type = excluded.drive_type, body_style = excluded.body_style,
                     primary_damage = excluded.primary_damage, secondary_damage = excluded.secondary_damage,
-                    seller_type = excluded.seller_type, engine_layout = excluded.engine_layout, cylinders = excluded.cylinders,
+                    seller_type = excluded.seller_type, seller_name = excluded.seller_name,
+                    seller_classification_confidence = excluded.seller_classification_confidence,
+                    seller_needs_review = excluded.seller_needs_review, seller_classification_evidence = excluded.seller_classification_evidence,
+                    seller_taxonomy_version = excluded.seller_taxonomy_version, engine_layout = excluded.engine_layout, cylinders = excluded.cylinders,
                     loss_type = excluded.loss_type, start_code = excluded.start_code, auction_state = excluded.auction_state,
                     auction_at = excluded.auction_at, lot_status = excluded.lot_status, lot_sub_status = excluded.lot_sub_status,
                     location_display = excluded.location_display, location_state = excluded.location_state,
@@ -3070,6 +3078,11 @@ public sealed partial class PostgresSnapshotStore(
                     primary_damage text,
                     secondary_damage text,
                     seller_type text,
+                    seller_name text,
+                    seller_classification_confidence numeric,
+                    seller_needs_review boolean,
+                    seller_classification_evidence text,
+                    seller_taxonomy_version text,
                     engine_layout text,
                     cylinders text,
                     loss_type text,
@@ -3102,7 +3115,14 @@ public sealed partial class PostgresSnapshotStore(
                 create index if not exists ix_inventory_search_active_auction on inventory_search_current (auction_at, lot_key) where is_active;
                 create index if not exists ix_inventory_search_active_observed on inventory_search_current (observed_at desc, lot_key) where is_active;
                 create index if not exists ix_inventory_search_platform_auction on inventory_search_current (platform, auction_at, lot_key) where is_active;
+                alter table inventory_search_current add column if not exists seller_name text;
+                alter table inventory_search_current add column if not exists seller_classification_confidence numeric;
+                alter table inventory_search_current add column if not exists seller_needs_review boolean;
+                alter table inventory_search_current add column if not exists seller_classification_evidence text;
+                alter table inventory_search_current add column if not exists seller_taxonomy_version text;
+
                 create index if not exists ix_inventory_search_make_model on inventory_search_current (lower(make), lower(model), lot_key) where is_active;
+                create index if not exists ix_inventory_search_seller_name on inventory_search_current (lower(seller_name), lot_key) where is_active;
                 create index if not exists ix_inventory_search_year on inventory_search_current (year, lot_key) where is_active;
                 create index if not exists ix_inventory_search_bid on inventory_search_current (current_bid_usd, lot_key) where is_active;
                 create index if not exists ix_inventory_search_buy_now on inventory_search_current (buy_now_usd, lot_key) where is_active;

@@ -264,6 +264,18 @@ public sealed record AuctionSeller
 
     [JsonPropertyName("text_class")]
     public string? TextClass { get; init; }
+
+    [JsonPropertyName("classification_confidence")]
+    public decimal? ClassificationConfidence { get; init; }
+
+    [JsonPropertyName("needs_review")]
+    public bool? NeedsReview { get; init; }
+
+    [JsonPropertyName("classification_evidence")]
+    public string? ClassificationEvidence { get; init; }
+
+    [JsonPropertyName("taxonomy_version")]
+    public string? TaxonomyVersion { get; init; }
 }
 
 public sealed record MediaInfo

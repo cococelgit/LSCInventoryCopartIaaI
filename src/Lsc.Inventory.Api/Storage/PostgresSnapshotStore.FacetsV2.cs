@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 using Lsc.Inventory.Api.Normalization;
 using Npgsql;
 
@@ -174,6 +175,7 @@ public sealed partial class PostgresSnapshotStore
             .ToDictionary(group => group, _ => new List<InventoryFacetValue>(), StringComparer.OrdinalIgnoreCase);
         var numericRanges = new Dictionary<string, InventoryNumericFacetRange>(StringComparer.OrdinalIgnoreCase);
         var dateRanges = new Dictionary<string, InventoryDateFacetRange>(StringComparer.OrdinalIgnoreCase);
+        var sellerFacets = new List<InventorySellerFacetValue>();
 
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
@@ -187,6 +189,22 @@ public sealed partial class PostgresSnapshotStore
                 }
 
                 var group = reader.GetString(1);
+                if (string.Equals(kind, "seller", StringComparison.Ordinal))
+                {
+                    if (!reader.IsDBNull(2))
+                    {
+                        using var sellerJson = JsonDocument.Parse(reader.GetString(2));
+                        var root = sellerJson.RootElement;
+                        sellerFacets.Add(new InventorySellerFacetValue(
+                            root.GetProperty("category").GetString() ?? SellerTaxonomy.Unknown,
+                            root.GetProperty("sellerName").GetString() ?? "<NULL>",
+                            root.GetProperty("platform").GetString() ?? "unknown",
+                            reader.GetInt32(3),
+                            root.TryGetProperty("confidence", out var confidence) ? confidence.GetDecimal() : 0m,
+                            root.TryGetProperty("needsReview", out var needsReview) && needsReview.GetBoolean()));
+                    }
+                    continue;
+                }
                 if (string.Equals(kind, "facet", StringComparison.Ordinal))
                 {
                     if (!reader.IsDBNull(2) && facets.TryGetValue(group, out var values))
@@ -240,7 +258,12 @@ public sealed partial class PostgresSnapshotStore
                 numericRanges.GetValueOrDefault(InventoryFacetsV2Groups.EngineSize),
                 numericRanges.GetValueOrDefault(InventoryFacetsV2Groups.Horsepower),
                 numericRanges.GetValueOrDefault(InventoryFacetsV2Groups.PreGrade)),
-            warnings);
+            warnings,
+            sellerFacets
+                .OrderByDescending(value => value.Count)
+                .ThenBy(value => value.Category, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(value => value.SellerName, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
     }
 
     private bool TryGetFacetsV2Cache(string key, out InventoryFacetsV2Response response)
@@ -338,7 +361,23 @@ public sealed partial class PostgresSnapshotStore
                 valueExpressions.Add($"{spec.MaximumExpression} as {spec.MaximumAlias}");
         }
 
+        var includeSellerDetails = requested.Contains(InventoryFacetsV2Groups.SellerTypes, StringComparer.OrdinalIgnoreCase);
+        if (includeSellerDetails)
+        {
+            valueExpressions.Add("latest.platform as seller_platform_value");
+            valueExpressions.Add("latest.seller_name as seller_name_value");
+            valueExpressions.Add("latest.seller_type as seller_category_value");
+            valueExpressions.Add("coalesce(latest.seller_classification_confidence, 0.35) as seller_confidence_value");
+            valueExpressions.Add("coalesce(latest.seller_needs_review, true) as seller_needs_review_value");
+        }
+
         var matchExpressions = new List<string>();
+        if (request.SellerNames is { Count: > 0 })
+        {
+            AddParameter(command, "facet_seller_names", request.SellerNames.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim().ToLowerInvariant()).Distinct().ToArray());
+            matchExpressions.Add("lower(coalesce(seller_name_value, '')) = any(@facet_seller_names) as matches_seller_names");
+        }
+
         foreach (var spec in activeValueSpecs)
         {
             var selected = InventoryFacetsV2Selections.Get(request, spec.Group).ToArray();
@@ -354,6 +393,28 @@ public sealed partial class PostgresSnapshotStore
         {
             $"select 'meta'::text as result_kind, null::text as group_key, null::text as value, count(*)::int as vehicle_count, null::numeric as minimum_numeric, null::numeric as maximum_numeric, null::timestamptz as minimum_date, null::timestamptz as maximum_date from base where {allPredicate}"
         };
+
+        if (requested.Contains(InventoryFacetsV2Groups.SellerTypes, StringComparer.OrdinalIgnoreCase))
+        {
+            var sellerExceptPredicate = BuildFacetsV2Predicate(activeGroups.Where(candidate => !string.Equals(candidate, InventoryFacetsV2Groups.SellerTypes, StringComparison.OrdinalIgnoreCase)));
+            branches.Add($"""
+                select 'seller'::text, 'sellerDetails'::text,
+                       jsonb_build_object(
+                           'category', base.seller_category_value,
+                           'sellerName', coalesce(base.seller_name_value, '<NULL>'),
+                           'platform', coalesce(base.seller_platform_value, 'unknown'),
+                           'confidence', coalesce(base.seller_confidence_value, 0.0),
+                           'needsReview', coalesce(base.seller_needs_review_value, true)
+                       )::text,
+                       count(*)::int, null::numeric, null::numeric, null::timestamptz, null::timestamptz
+                from base
+                where {sellerExceptPredicate} and base.seller_name_value is not null
+                group by base.seller_category_value, base.seller_name_value, base.seller_platform_value, base.seller_confidence_value, base.seller_needs_review_value
+                order by count(*) desc, base.seller_category_value, base.seller_name_value
+                limit @facet_seller_detail_limit
+                """);
+            AddParameter(command, "facet_seller_detail_limit", FacetsV2ValueLimit * 20);
+        }
 
         foreach (var group in requested)
         {

@@ -480,6 +480,7 @@ app.MapGet("/api/v1/inventory/search", async (
     string[]? primaryDamages,
     string[]? secondaryDamages,
     string[]? sellerTypes,
+    string[]? sellerNames,
     string[]? engineLayouts,
     string[]? cylinders,
     int? yearFrom,
@@ -577,7 +578,8 @@ app.MapGet("/api/v1/inventory/search", async (
         excludeSpecialTitles == true,
         TitleCategories: Normalize(titleCategories),
         BuyNowFrom: buyNowFrom,
-        BuyNowTo: buyNowTo), cancellationToken);
+        BuyNowTo: buyNowTo,
+        SellerNames: Normalize(sellerNames)), cancellationToken);
     return Results.Ok(new PublicInventorySearchResponse(
         "lsc-inventory-postgres",
         result.GeneratedAt,
@@ -620,6 +622,7 @@ app.MapGet("/api/v1/inventory/facets-v2", async (
     string[]? primaryDamages,
     string[]? secondaryDamages,
     string[]? sellerTypes,
+    string[]? sellerNames,
     string[]? engineLayouts,
     string[]? cylinders,
     int? yearFrom,
@@ -723,7 +726,8 @@ app.MapGet("/api/v1/inventory/facets-v2", async (
             NormalizeFacetValues(scoringStatuses),
             NormalizeFacetValues(titleCategories),
             BuyNowFrom: buyNowFrom,
-            BuyNowTo: buyNowTo);
+            BuyNowTo: buyNowTo,
+            SellerNames: NormalizeFacetValues(sellerNames));
         var response = await store.GetInventoryFacetsV2Async(
             new InventoryFacetsV2Request(filters, NormalizeFacetValues(requestedFacets)),
             cancellationToken);

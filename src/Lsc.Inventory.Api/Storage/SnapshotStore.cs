@@ -220,7 +220,8 @@ public sealed record InventorySearchRequest(
     IReadOnlyCollection<string>? ScoringStatuses = null,
     IReadOnlyCollection<string>? TitleCategories = null,
     decimal? BuyNowFrom = null,
-    decimal? BuyNowTo = null);
+    decimal? BuyNowTo = null,
+    IReadOnlyCollection<string>? SellerNames = null);
 
 public sealed record InventorySearchProjectionStatus(
     bool Ready,
@@ -291,6 +292,14 @@ public sealed record InventoryFacetsV2Ranges(
     InventoryNumericFacetRange? Horsepower = null,
     InventoryNumericFacetRange? PreGrade = null);
 
+public sealed record InventorySellerFacetValue(
+    string Category,
+    string SellerName,
+    string Platform,
+    int Count,
+    decimal Confidence,
+    bool NeedsReview);
+
 public sealed record InventoryFacetsV2Response(
     int Total,
     DateTimeOffset AsOf,
@@ -299,7 +308,8 @@ public sealed record InventoryFacetsV2Response(
     string Cache,
     IReadOnlyDictionary<string, IReadOnlyList<InventoryFacetValue>> Facets,
     InventoryFacetsV2Ranges Ranges,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<InventorySellerFacetValue>? SellerFacets = null);
 
 public sealed record InventorySampleLot(
     string LotKey,

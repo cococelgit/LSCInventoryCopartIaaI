@@ -89,13 +89,21 @@ public static partial class CanonicalVehicleCleaner
     private static AuctionSeller NormalizeSeller(AuctionSeller? seller)
     {
         var rawType = Compact(seller?.RawType ?? seller?.Type);
+        var sellerClass = Compact(seller?.Class);
+        var sellerTextClass = Compact(seller?.TextClass);
+        var sellerName = Compact(seller?.Name);
+        var classification = SellerTaxonomy.ClassifyDetailed(rawType, sellerClass, sellerTextClass, sellerName);
         return new AuctionSeller
         {
-            Name = Compact(seller?.Name),
+            Name = sellerName,
             RawType = rawType,
-            Type = SellerTaxonomy.Normalize(rawType),
-            Class = Compact(seller?.Class),
-            TextClass = Compact(seller?.TextClass)
+            Type = classification.Category,
+            Class = sellerClass,
+            TextClass = sellerTextClass,
+            ClassificationConfidence = classification.Confidence,
+            NeedsReview = classification.NeedsReview,
+            ClassificationEvidence = classification.Evidence,
+            TaxonomyVersion = SellerTaxonomy.Version
         };
     }
     private static string? Lower(string? value) => Compact(value)?.ToLowerInvariant();
