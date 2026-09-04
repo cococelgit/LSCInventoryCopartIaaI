@@ -65,7 +65,7 @@ public static class SellerTaxonomy
 
     private static string? ClassifyKnown(string normalized)
     {
-        if (ContainsAny(normalized, "INSURANCE", "INSURER", "CASUALTY", "CLAIMS", "INDEMNITY", "UNDERWRIT")) return Insurance;
+        if (ContainsAny(normalized, "INSURANCE", "INSURER", "CASUALTY", "CLAIMS", "INDEMNITY", "UNDERWRIT", "GEICO", "ALLSTATE", "USAA", "PROGRESSIVE", "STATE FARM", "FARMERS", "BRISTOL WEST", "LIBERTY MUTUAL", "NATIONWIDE", "TRAVELERS", "KEMPER", "MERCURY", "SAFECO", "AMICA", "ESURANCE", "MAPFRE")) return Insurance;
         if (ContainsAny(normalized, "DEALER", "AUTO GROUP", "MOTOR GROUP")) return Dealer;
         if (ContainsAny(normalized, "RENTAL", "FLEET", "RENT A CAR")) return RentalFleet;
         if (ContainsAny(normalized, "REPOSSESSION", "REPO", "BANK", "CREDIT UNION", "LENDER")) return RepossessionBank;
