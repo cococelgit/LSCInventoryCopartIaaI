@@ -618,7 +618,12 @@ if (args.Contains("--seller-audit-report", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
     var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
-    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await store.GetSellerAuditReportAsync(CancellationToken.None)));
+    var report = await store.GetSellerAuditReportAsync(CancellationToken.None);
+    Console.WriteLine($"SELLER_AUDIT_TOTAL|{report.TotalVehicles}|{report.SaleDateFrom:O}");
+    foreach (var row in report.Rows)
+    {
+        Console.WriteLine($"SELLER_AUDIT_ROW|{row.Platform}|{row.SellerName}|{row.SellerType}|{row.SellerClass}|{row.SellerTextClass}|{row.VehicleCount}");
+    }
     return;
 }
 
