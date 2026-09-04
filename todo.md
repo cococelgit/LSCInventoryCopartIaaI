@@ -321,3 +321,10 @@
 
 - [ ] Remove duplicate `CopartExcel__MediaEnrichmentBatchSize` from the isolated Copart workflow and validate unique environment variables.
 - [ ] Relaunch the controlled future-only Copart Body Style and image backfill after the workflow fix.
+
+## Diagnóstico PostgreSQL posterior a migración — 2026-09-04
+
+- [ ] Capturar configuración segura de PostgreSQL, Private Endpoint, DNS privado y revisión activa del Inventory API.
+- [ ] Probar `/healthz` y un endpoint de inventario respaldado por PostgreSQL sin exponer tokens.
+- [ ] Consultar Log Analytics para identificar errores Npgsql/DNS/red posteriores a la migración.
+- [ ] Confirmar causa raíz antes de habilitar acceso público o reiniciar recursos.
