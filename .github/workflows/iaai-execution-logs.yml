@@ -1,0 +1,56 @@
+name: IAAI Execution Logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      execution:
+        description: "Exact IAAI Container Apps execution name"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB_NAME: job-lsc-iaai-pilot-prod
+  WORKSPACE_ID: d3998ed7-22f3-4fcc-af4d-8645e6fa0960
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install extensions
+        run: |
+          az extension add --name containerapp --upgrade --only-show-errors
+          az extension add --name log-analytics --upgrade --only-show-errors
+      - name: Query exact execution logs
+        env:
+          EXECUTION: ${{ inputs.execution }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTION" =~ ^job-lsc-iaai-pilot-prod-[A-Za-z0-9]+$ ]]
+          query="search in (ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL) \"$EXECUTION\" | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s, \$table | order by TimeGenerated asc"
+          az monitor log-analytics query \
+            --workspace "$WORKSPACE_ID" \
+            --analytics-query "$query" \
+            --timespan PT2H \
+            -o json
+      - name: Verify job template invariants
+        run: |
+          az containerapp job show \
+            --name "$IAAI_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query '{trigger:properties.configuration.triggerType,image:properties.template.containers[0].image,command:properties.template.containers[0].command}' \
+            -o json
