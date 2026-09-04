@@ -76,7 +76,9 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
                     requests++;
                     calls++;
                     var response = await auctionsApiClient.GetLotAsync(lot, 1, searchById: false, includePricesHistory: false, cancellationToken);
-                    var rows = AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data).ToList();
+                    var rows = response.Data.ValueKind == System.Text.Json.JsonValueKind.Object && response.Data.TryGetProperty("lots", out var nestedLots) && nestedLots.ValueKind == System.Text.Json.JsonValueKind.Array
+                        ? new List<System.Text.Json.JsonElement> { response.Data }
+                        : AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data).ToList();
                     if (rows.Count == 0 && response.Data.ValueKind == System.Text.Json.JsonValueKind.Object)
                         rows.Add(response.Data);
                     var vehicle = AuctionsApiIncrementalSyncProcessor.MapRows(rows, "iaai", trustRequestedDomain: true)
