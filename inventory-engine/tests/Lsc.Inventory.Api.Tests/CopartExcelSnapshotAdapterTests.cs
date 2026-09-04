@@ -34,6 +34,21 @@ public sealed class CopartExcelSnapshotAdapterTests
     }
 
     [Fact]
+    public async Task Maps_seller_name_to_taxonomy_evidence_for_copart_grading()
+    {
+        var csv = BuildCsv(1).Replace("Good Seller", "State Farm Insurance", StringComparison.Ordinal);
+        var adapter = CreateAdapter();
+        var vehicle = Assert.Single(await ReadAllAsync(adapter, CreateSnapshot(csv)));
+
+        Assert.Equal("State Farm Insurance", vehicle.Seller!.Name);
+        Assert.Equal("insurance", vehicle.Seller.Type);
+        Assert.Equal("seller_taxonomy_v2", vehicle.Seller.TaxonomyVersion);
+        Assert.True(vehicle.Seller.ClassificationConfidence >= 0.75m);
+        Assert.Equal("insurance_name", vehicle.Seller.ClassificationEvidence);
+        Assert.Equal("insurance", vehicle.AdditionalData!["source_seller_category"].GetString());
+    }
+
+    [Fact]
     public async Task Maps_official_title_code_to_descriptions_without_changing_eligibility()
     {
         var csv = BuildCsv(1).Replace(",Salvage,none", ",AQ,none", StringComparison.Ordinal);

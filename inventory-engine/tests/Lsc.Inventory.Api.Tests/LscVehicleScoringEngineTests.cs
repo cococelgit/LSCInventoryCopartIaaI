@@ -66,7 +66,7 @@ public sealed class LscVehicleScoringEngineTests
         var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
 
         Assert.Equal("PRE_GRADED_WITH_FLAGS", result.Status);
-        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.Evaluated && factor.Points == 15m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.Evaluated && factor.Points == 25m);
         Assert.DoesNotContain("M04", result.ReasonCodes);
     }
 
@@ -99,6 +99,23 @@ public sealed class LscVehicleScoringEngineTests
         Assert.Null(result.PreGrade);
         Assert.Contains("D05", result.ReasonCodes);
         Assert.Equal(LscScoringPolicy.CopartPolicyVersion, result.PolicyVersion);
+    }
+
+    [Fact]
+    public void Copart_v3_normalizes_evaluable_factors_to_a_100_point_scale()
+    {
+        var vehicle = ValidVehicle() with { Platform = "copart" };
+        var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
+
+        Assert.Equal("lsc_pre_grade_v3", result.PolicyVersion);
+        Assert.Equal(100m, result.MaxPointsEvaluable);
+        Assert.Equal(100m, result.CoveragePercent);
+        Assert.Equal(82.7m, result.PreGrade);
+        Assert.Contains(result.Factors, factor => factor.Code == "F01" && factor.MaxPointsEvaluable == 20m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.MaxPointsEvaluable == 25m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F03" && factor.MaxPointsEvaluable == 25m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F04" && factor.MaxPointsEvaluable == 15m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F05" && factor.MaxPointsEvaluable == 15m);
     }
 
     [Fact]

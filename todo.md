@@ -345,3 +345,11 @@
 - [ ] Run a controlled Copart backfill limited to 100 vehicles.
 - [ ] Capture updated date before and after the 100-vehicle run and verify every updated record changes correctly.
 - [ ] Report Body Style, seller, Trim, grading, image, created/updated, and error metrics for the 100-vehicle run.
+
+## Copart grading: field coverage and mapping remediation
+
+- [ ] Deep-audit the Copart Excel header inventory against `AuctionVehicle`, PostgreSQL persistence, and all grading inputs.
+- [ ] Measure production/fixture coverage for seller taxonomy, run condition, damage, keys, title, odometer, trim, engine, cylinders, fuel, transmission, and body style.
+- [ ] Correct Copart mappings that reduce grading coverage or points, preserving raw values and source provenance.
+- [ ] Add regression tests proving each grading input is populated from the exact Copart column and survives canonical cleaning/persistence.
+- [ ] Recalculate/backfill active Copart scores under `lsc_pre_grade_v2` only after validating the mapping changes; do not alter IAAI.
