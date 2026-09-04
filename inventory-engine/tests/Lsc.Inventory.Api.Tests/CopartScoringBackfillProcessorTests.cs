@@ -31,6 +31,19 @@ public sealed class CopartScoringBackfillProcessorTests
     }
 
     [Fact]
+    public async Task Controlled_backfill_respects_sample_limit()
+    {
+        var store = new InMemorySnapshotStore();
+        await store.PersistAsync(ValidVehicle("copart", "70000010"), DateTimeOffset.Parse("2026-09-01T10:00:00Z"), CancellationToken.None);
+        await store.PersistAsync(ValidVehicle("copart", "70000011"), DateTimeOffset.Parse("2026-09-01T10:00:00Z"), CancellationToken.None);
+
+        var result = await CreateProcessor(store, limit: 1).RunAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.Scanned);
+        Assert.Equal(1, result.Scored);
+    }
+
+    [Fact]
     public async Task Repeated_backfill_is_idempotent_when_score_is_current()
     {
         var store = new InMemorySnapshotStore();
@@ -77,12 +90,13 @@ public sealed class CopartScoringBackfillProcessorTests
         Assert.Null(await store.GetScoreByLotAsync("70000004", CancellationToken.None));
     }
 
-    private static CopartScoringBackfillProcessor CreateProcessor(InMemorySnapshotStore store) => new(
+    private static CopartScoringBackfillProcessor CreateProcessor(InMemorySnapshotStore store, int limit = 0) => new(
         store,
         new OptionsWrapper<CopartExcelOptions>(new CopartExcelOptions
         {
             ScoringBackfillBatchSize = 25,
-            ScoringBackfillConcurrency = 2
+            ScoringBackfillConcurrency = 2,
+            ScoringBackfillLimit = limit
         }),
         NullLogger<CopartScoringBackfillProcessor>.Instance);
 
