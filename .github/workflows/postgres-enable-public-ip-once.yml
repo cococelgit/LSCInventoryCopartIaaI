@@ -82,8 +82,15 @@ jobs:
           else
             az postgres flexible-server firewall-rule create -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$FIREWALL_RULE" --start-ip-address "$APPROVED_IP" --end-ip-address "$APPROVED_IP" --only-show-errors >/dev/null
           fi
-          for rule in $(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')].name" -o tsv); do
-            az postgres flexible-server firewall-rule delete -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$rule" --yes --only-show-errors >/dev/null
+          for attempt in $(seq 1 12); do
+            unexpected_rules="$(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')].name" -o tsv)"
+            echo "FIREWALL_CLEANUP_ATTEMPT=$attempt UNEXPECTED_RULES=${unexpected_rules:-none}"
+            if [[ -z "$unexpected_rules" ]]; then break; fi
+            while IFS= read -r rule; do
+              [[ -z "$rule" ]] && continue
+              az postgres flexible-server firewall-rule delete -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name "$rule" --yes --only-show-errors >/dev/null || true
+            done <<< "$unexpected_rules"
+            sleep 10
           done
 
       - name: Verify final state and protected resources
@@ -104,7 +111,9 @@ jobs:
           test "$(jq -r '.network.publicNetworkAccess // empty' <<<"$server_json")" = "Enabled"
           test "$(jq -r '.startIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
           test "$(jq -r '.endIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
-          test "$(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')] | length(@)" -o tsv)" = "0"
+          unexpected_after="$(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')] | length(@)" -o tsv)"
+          echo "UNEXPECTED_RULES_AFTER=$unexpected_after"
+          test "$unexpected_after" = "0"
           api_image_after="$(az containerapp show -g "$RESOURCE_GROUP" -n "$INVENTORY_API_APP" --query 'properties.template.containers[0].image' -o tsv)"
           iaai_hash_after="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$IAAI_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
           copart_auto_hash_after="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$COPART_AUTO_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
