@@ -11,12 +11,12 @@ public sealed class SearchProjectionWarmupWorker(
         try
         {
             var current = await store.GetSearchProjectionStatusAsync(stoppingToken);
-            if (current.Ready && current.SchemaVersion >= 2)
+            if (current.Ready && current.SchemaVersion >= 3)
             {
                 logger.LogInformation("Search projection already ready. Rows={Rows} SchemaVersion={SchemaVersion}", current.Rows, current.SchemaVersion);
                 return;
             }
-            if (current.Ready && current.SchemaVersion < 2)
+            if (current.Ready && current.SchemaVersion < 3)
                 logger.LogInformation("Search projection schema is stale. Rebuilding for Seller facets. CurrentSchemaVersion={SchemaVersion}", current.SchemaVersion);
             var status = await store.RebuildSearchProjectionAsync(stoppingToken);
             logger.LogInformation(
