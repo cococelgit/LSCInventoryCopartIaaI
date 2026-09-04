@@ -79,6 +79,7 @@ builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapt
 builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
 builder.Services.AddScoped<ICopartMediaEnrichmentProcessor, CopartMediaEnrichmentProcessor>();
+builder.Services.AddScoped<ICopartMedia404DiagnosticProcessor, CopartMedia404DiagnosticProcessor>();
 builder.Services.AddScoped<ICopartTitleBackfillProcessor, CopartTitleBackfillProcessor>();
 builder.Services.AddScoped<ICopartFutureBodyStyleBackfillProcessor, CopartFutureBodyStyleBackfillProcessor>();
 builder.Services.AddScoped<ICopartAuctionHistoryBackfillProcessor, CopartAuctionHistoryBackfillProcessor>();
@@ -572,6 +573,15 @@ if (args.Contains("--copart-media-enrich", StringComparer.OrdinalIgnoreCase))
     await using var scope = app.Services.CreateAsyncScope();
     var processor = scope.ServiceProvider.GetRequiredService<ICopartMediaEnrichmentProcessor>();
     Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await processor.RunAsync(CancellationToken.None)));
+    return;
+}
+
+if (args.Contains("--copart-media-404-report", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<ICopartMedia404DiagnosticProcessor>();
+    var maximum = builder.Configuration.GetValue<int?>("CopartExcel:MediaEnrichmentBatchSize") ?? 100;
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await processor.RunAsync(maximum, CancellationToken.None)));
     return;
 }
 
