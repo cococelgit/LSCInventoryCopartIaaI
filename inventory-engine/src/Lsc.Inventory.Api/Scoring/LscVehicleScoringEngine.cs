@@ -11,13 +11,13 @@ public static class LscScoringPolicy
     public const string IAAIPolicyVersion = "lsc_pre_grade_v1";
     // Compatibility default for existing non-Copart callers; Copart resolves explicitly to v3.
     public const string Version = IAAIPolicyVersion;
-    public const string CopartPolicyVersion = "lsc_pre_grade_v3";
+    public const string CopartPolicyVersion = "lsc_pre_grade_v3_60";
     public const decimal PreGradeMaximumPoints = 60m;
-    public const decimal CopartPreGradeMaximumPoints = 100m;
+    public const decimal CopartPreGradeMaximumPoints = 60m;
     public const decimal MinimumCoveragePercent = 70m;
 
-    // IAAI v1 retains the strict manual-review gate. Copart v3 exposes a normalized 0-100 score
-    // with explicit coverage and flags for uncertainty, rather than treating missing source fields as a verdict.
+    // Both platforms use the same 60-point numeric factor scale. Copart retains its
+    // platform-specific audit version and advisory-flag behavior for source uncertainty.
     public static readonly IReadOnlySet<string> ManualReviewFlagCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "M02", // Copart title code without approved equivalence.
@@ -123,14 +123,13 @@ public static class LscVehicleScoringEngine
             EvaluateInformationQuality(vehicle, missing)
         };
 
-        if (isCopartV3)
-            factors = ScaleCopartV3Factors(factors);
-
+        // Copart uses the same 60-point factor scale as IAAI. The platform-specific
+        // policy version remains distinct for auditability, but no 0-100 rescaling applies.
         var penalties = EvaluatePenalties(vehicle, eligibility, factors, missing);
         var factorPoints = factors.Sum(factor => factor.Points);
         var penaltyPoints = penalties.Sum(penalty => penalty.Points);
         var maxPointsEvaluable = factors.Sum(factor => factor.MaxPointsEvaluable);
-        var coverageMaximum = isCopartV3 ? LscScoringPolicy.CopartPreGradeMaximumPoints : LscScoringPolicy.PreGradeMaximumPoints;
+        var coverageMaximum = LscScoringPolicy.PreGradeMaximumPoints;
         var coverage = RoundPercent(maxPointsEvaluable, coverageMaximum);
         var confidence = Math.Max(0m, coverage - penalties.Where(penalty => penalty.Code == "P04").Sum(penalty => Math.Abs(penalty.Points)));
         var isVisible = coverage >= LscScoringPolicy.MinimumCoveragePercent;
@@ -191,27 +190,6 @@ public static class LscVehicleScoringEngine
             string.Join(',', eligibility.Flags.Select(flag => flag.Code).OrderBy(code => code, StringComparer.Ordinal))
         };
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\u001F', fields)))).ToLowerInvariant();
-    }
-
-    private static List<LscScoringFactor> ScaleCopartV3Factors(IEnumerable<LscScoringFactor> factors)
-    {
-        var weights = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["F01"] = 20m, // Seller and traceability
-            ["F02"] = 25m, // Declared mechanical condition
-            ["F03"] = 25m, // Declared damage
-            ["F04"] = 15m, // Title/documentation
-            ["F05"] = 15m  // Information quality
-        };
-
-        return factors.Select(factor =>
-        {
-            if (!weights.TryGetValue(factor.Code, out var targetMaximum) || !factor.Evaluated || factor.MaxPointsEvaluable <= 0m)
-                return factor with { Points = 0m, MaxPointsEvaluable = 0m };
-
-            var scaledPoints = Math.Round(factor.Points / factor.MaxPointsEvaluable * targetMaximum, 1, MidpointRounding.AwayFromZero);
-            return factor with { Points = scaledPoints, MaxPointsEvaluable = targetMaximum };
-        }).ToList();
     }
 
     private static LscVehicleScoringResult Blocked(

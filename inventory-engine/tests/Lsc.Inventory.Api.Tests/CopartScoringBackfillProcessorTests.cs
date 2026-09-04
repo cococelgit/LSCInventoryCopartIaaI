@@ -27,7 +27,7 @@ public sealed class CopartScoringBackfillProcessorTests
         Assert.Equal(0, result.Failed);
         Assert.Equal(0, result.Remaining);
         Assert.NotNull(score);
-        Assert.Equal("lsc_pre_grade_v3", score!.PolicyVersion);
+        Assert.Equal("lsc_pre_grade_v3_60", score!.PolicyVersion);
     }
 
     [Fact]
