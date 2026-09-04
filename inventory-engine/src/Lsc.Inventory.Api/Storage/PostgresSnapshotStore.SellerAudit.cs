@@ -10,31 +10,36 @@ public sealed partial class PostgresSnapshotStore
         var saleDateFrom = DateTimeOffset.UtcNow;
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+        command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
         command.CommandText = """
-            with current_versions as (
-                select distinct on (lots.lot_key)
-                       lots.platform,
-                       lots.auction_at,
-                       versions.payload
-                from auction_lots lots
-                join auction_lot_versions versions on versions.lot_key = lots.lot_key
-                where lower(lots.platform) in ('copart', 'iaai')
-                  and (lots.auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
-                order by lots.lot_key, versions.observed_at desc, versions.id desc
+            with eligible_lots as materialized (
+                select lot_key, platform
+                from auction_lots
+                where lower(platform) in ('copart', 'iaai')
+                  and (auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
+            ), current_versions as (
+                select eligible.platform, current_version.payload
+                from eligible_lots eligible
+                join lateral (
+                    select payload
+                    from auction_lot_versions
+                    where lot_key = eligible.lot_key
+                    order by observed_at desc, id desc
+                    limit 1
+                ) current_version on true
             )
             select lower(platform),
                    coalesce(nullif(trim(payload #>> '{seller,name}'), ''), '<NULL>'),
                    coalesce(nullif(trim(payload #>> '{seller,type}'), ''), '<NULL>'),
                    coalesce(nullif(trim(payload #>> '{seller,class}'), ''), '<NULL>'),
-                   coalesce(nullif(trim(payload #>> '{seller,text_class}'), ''), '<NULL>'),
+                   coalesce(nullif(trim(payload #>> '{seller,text_class}'), ''), nullif(trim(payload #>> '{seller,textClass}'), ''), '<NULL>'),
                    count(*)::bigint
             from current_versions
             group by lower(platform),
                      coalesce(nullif(trim(payload #>> '{seller,name}'), ''), '<NULL>'),
                      coalesce(nullif(trim(payload #>> '{seller,type}'), ''), '<NULL>'),
                      coalesce(nullif(trim(payload #>> '{seller,class}'), ''), '<NULL>'),
-                     coalesce(nullif(trim(payload #>> '{seller,text_class}'), ''), '<NULL>')
+                     coalesce(nullif(trim(payload #>> '{seller,text_class}'), ''), nullif(trim(payload #>> '{seller,textClass}'), ''), '<NULL>')
             order by lower(platform), count(*) desc,
                      coalesce(nullif(trim(payload #>> '{seller,name}'), ''), '<NULL>');
             """;
