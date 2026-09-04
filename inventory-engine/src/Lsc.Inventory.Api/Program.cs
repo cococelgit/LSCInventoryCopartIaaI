@@ -614,6 +614,14 @@ if (args.Contains("--copart-scoring-report", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--seller-audit-report", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(await store.GetSellerAuditReportAsync(CancellationToken.None)));
+    return;
+}
+
 if (args.Contains("--copart-scoring-backfill", StringComparer.OrdinalIgnoreCase))
 {
     try

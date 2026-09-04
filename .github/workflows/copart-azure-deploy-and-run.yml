@@ -23,6 +23,7 @@ on:
           - auction_history_report
           - scoring_backfill
           - scoring_report
+          - seller_audit_report
           - recover
 
 permissions:
@@ -106,6 +107,7 @@ jobs:
             auction_history_report) job_args=("--copart-auction-history-report"); allow_interrupted_retry=false ;;
             scoring_backfill) job_args=("--copart-scoring-backfill"); allow_interrupted_retry=false ;;
             scoring_report) job_args=("--copart-scoring-report"); allow_interrupted_retry=false ;;
+            seller_audit_report) job_args=("--seller-audit-report"); allow_interrupted_retry=false ;;
             recover) job_args=("--copart-excel-run"); allow_interrupted_retry=true ;;
             *) echo "Unsupported run mode." >&2; exit 2 ;;
           esac
@@ -167,7 +169,7 @@ jobs:
           echo "COPART_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
 
       - name: Capture live Copart diagnostic output
-        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' || inputs.run_mode == 'future_body_style_backfill' || inputs.run_mode == 'lot_media_diagnostics' || inputs.run_mode == 'title_backfill' || inputs.run_mode == 'auction_history_backfill' || inputs.run_mode == 'auction_history_report' || inputs.run_mode == 'scoring_backfill' || inputs.run_mode == 'scoring_report' }}
+        if: ${{ inputs.run_mode == 'diagnostics' || inputs.run_mode == 'publication_report' || inputs.run_mode == 'storage_diagnostics' || inputs.run_mode == 'media_probe' || inputs.run_mode == 'media_enrich' || inputs.run_mode == 'future_body_style_backfill' || inputs.run_mode == 'lot_media_diagnostics' || inputs.run_mode == 'title_backfill' || inputs.run_mode == 'auction_history_backfill' || inputs.run_mode == 'auction_history_report' || inputs.run_mode == 'scoring_backfill' || inputs.run_mode == 'scoring_report' || inputs.run_mode == 'seller_audit_report' }}
         shell: bash
         run: |
           set -euo pipefail
