@@ -337,7 +337,10 @@ public sealed class InventorySyncProcessor(
             RawType = Prefer(preferredSeller.RawType, fallbackSeller.RawType),
             Class = Prefer(preferredSeller.Class, fallbackSeller.Class),
             TextClass = Prefer(preferredSeller.TextClass, fallbackSeller.TextClass),
-            TaxonomyVersion = Prefer(preferredSeller.TaxonomyVersion, fallbackSeller.TaxonomyVersion)
+            TaxonomyVersion = Prefer(preferredSeller.TaxonomyVersion, fallbackSeller.TaxonomyVersion),
+            ClassificationConfidence = preferredSeller.ClassificationConfidence ?? fallbackSeller.ClassificationConfidence,
+            NeedsReview = preferredSeller.NeedsReview ?? fallbackSeller.NeedsReview,
+            ClassificationEvidence = Prefer(preferredSeller.ClassificationEvidence, fallbackSeller.ClassificationEvidence)
         };
     }
 

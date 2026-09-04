@@ -34,5 +34,16 @@ public sealed class SellerTaxonomyTests
         Assert.Equal("Insurance", cleaned.Seller?.RawType);
         Assert.Equal(SellerTaxonomy.Insurance, cleaned.Seller?.Type);
         Assert.Equal(SellerTaxonomy.Version, cleaned.Seller?.TaxonomyVersion);
+        Assert.Equal(1.0m, cleaned.Seller?.ClassificationConfidence);
+        Assert.False(cleaned.Seller?.NeedsReview);
+
+        var probable = CanonicalVehicleCleaner.Clean(new AuctionVehicle
+        {
+            Platform = "copart",
+            Seller = new AuctionSeller { Name = "Global Insurance Services" }
+        });
+        Assert.Equal(SellerTaxonomy.Insurance, probable.Seller?.Type);
+        Assert.Equal(0.75m, probable.Seller?.ClassificationConfidence);
+        Assert.True(probable.Seller?.NeedsReview);
     }
 }

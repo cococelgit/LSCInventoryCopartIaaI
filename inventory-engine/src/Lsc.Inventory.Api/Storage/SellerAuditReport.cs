@@ -6,6 +6,9 @@ public sealed record SellerAuditRow(
     string SellerType,
     string SellerClass,
     string SellerTextClass,
+    string SellerCategory,
+    decimal ClassificationConfidence,
+    bool NeedsReview,
     long VehicleCount);
 
 public sealed record SellerAuditReport(

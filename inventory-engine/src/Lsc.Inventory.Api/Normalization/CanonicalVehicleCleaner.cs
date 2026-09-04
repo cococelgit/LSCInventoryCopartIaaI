@@ -93,14 +93,18 @@ public static partial class CanonicalVehicleCleaner
         var rawType = Compact(seller.RawType ?? seller.Type);
         var rawClass = Compact(seller.Class);
         var rawTextClass = Compact(seller.TextClass);
+        var classification = SellerTaxonomy.ClassifyDetailed(rawType, rawClass, rawTextClass, seller.Name);
         return seller with
         {
             Name = Compact(seller.Name),
             RawType = rawType,
             Class = rawClass,
             TextClass = rawTextClass,
-            Type = SellerTaxonomy.Classify(rawType, rawClass, rawTextClass, seller.Name),
-            TaxonomyVersion = SellerTaxonomy.Version
+            Type = classification.Category,
+            TaxonomyVersion = SellerTaxonomy.Version,
+            ClassificationConfidence = classification.Confidence,
+            NeedsReview = classification.NeedsReview,
+            ClassificationEvidence = classification.Evidence
         };
     }
 

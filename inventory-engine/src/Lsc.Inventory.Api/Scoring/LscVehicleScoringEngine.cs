@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
+using Lsc.Inventory.Api.Normalization;
 
 namespace Lsc.Inventory.Api.Scoring;
 
@@ -169,6 +170,10 @@ public static class LscVehicleScoringEngine
             Normalize(vehicle.Vin),
             Normalize(vehicle.Seller?.Name),
             Normalize(vehicle.Seller?.Type),
+            Normalize(vehicle.Seller?.RawType),
+            Normalize(vehicle.Seller?.ClassificationConfidence?.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            vehicle.Seller?.NeedsReview?.ToString() ?? string.Empty,
+            Normalize(vehicle.Seller?.ClassificationEvidence),
             Normalize(vehicle.Condition?.RunCondition?.Value ?? vehicle.Condition?.RunCondition?.Label),
             Normalize(vehicle.Condition?.PrimaryDamage ?? vehicle.Damage),
             Normalize(vehicle.Condition?.SecondaryDamage),
@@ -217,23 +222,37 @@ public static class LscVehicleScoringEngine
     private static LscScoringFactor EvaluateSeller(AuctionVehicle vehicle, ISet<string> missing)
     {
         var sellerType = Normalize(vehicle.Seller?.Type);
-        if (string.IsNullOrEmpty(sellerType) || sellerType is "UNKNOWN" or "N A" or "NA")
+        var declaredCategory = !string.IsNullOrWhiteSpace(sellerType) && sellerType is not "UNKNOWN" and not "UNCLASSIFIED" and not "N A" and not "NA";
+        var confidence = vehicle.Seller?.ClassificationConfidence ?? (declaredCategory ? 1.0m : 0m);
+        var needsReview = vehicle.Seller?.NeedsReview == true;
+        if (string.IsNullOrEmpty(sellerType) || sellerType is "UNKNOWN" or "UNCLASSIFIED" or "N A" or "NA" || confidence < SellerTaxonomy.InclusionThreshold)
         {
             missing.Add("seller.taxonomy");
             return Factor("F01", "Vendedor y trazabilidad", 0m, 0m, false,
-                "El vendedor no tiene una clasificación LSC aprobada; no recibe bonificación ni penalización.", ["seller.type", "seller.name"]);
+                "El vendedor no tiene evidencia suficiente para asignar una categoría operativa; queda visible para revisión.", ["seller.type", "seller.name", "seller.classification_confidence"]);
         }
 
         var points = sellerType switch
         {
-            var value when value.Contains("INSURANCE", StringComparison.Ordinal) => 12m,
-            var value when value.Contains("DEALER", StringComparison.Ordinal) => 10m,
-            var value when value.Contains("RENTAL", StringComparison.Ordinal) || value.Contains("FLEET", StringComparison.Ordinal) => 9m,
-            var value when value.Contains("FINANCE", StringComparison.Ordinal) || value.Contains("LEASE", StringComparison.Ordinal) => 7m,
-            _ => 6m
+            "INSURANCE" => 12m,
+            "DEALER" => 10m,
+            "RENTAL_FLEET" => 9m,
+            "FINANCE" => 7m,
+            "REPOSSESSION_BANK" => 6m,
+            "GOVERNMENT" => 6m,
+            "OTHER" => 4m,
+            _ => 0m
         };
+        if (points == 0m)
+        {
+            missing.Add("seller.taxonomy");
+            return Factor("F01", "Vendedor y trazabilidad", 0m, 0m, false,
+                "La categoría no tiene una regla de scoring aprobada; queda visible para revisión.", ["seller.type", "seller.name"]);
+        }
+
+        var reviewText = needsReview ? " La asignación es provisional y requiere verificación del asesor." : string.Empty;
         return Factor("F01", "Vendedor y trazabilidad", points, 15m, true,
-            "Puntuación preliminar basada solo en el tipo declarado por la subasta; la taxonomía LSC puede sustituirla.", ["seller.type"]);
+            $"Categoría LSC {sellerType} con confianza {confidence:P0}.{reviewText}", ["seller.type", "seller.name", "seller.classification_confidence", "seller.classification_evidence"]);
     }
 
     private static LscScoringFactor EvaluateMechanicalCondition(AuctionVehicle vehicle, ISet<string> missing)

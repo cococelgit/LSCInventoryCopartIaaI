@@ -1,4 +1,5 @@
 using Npgsql;
+using Lsc.Inventory.Api.Normalization;
 
 namespace Lsc.Inventory.Api.Storage;
 
@@ -48,12 +49,21 @@ public sealed partial class PostgresSnapshotStore
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
+            var platform = reader.GetString(0);
+            var sellerName = NullMarker(reader.GetString(1));
+            var sellerType = NullMarker(reader.GetString(2));
+            var sellerClass = NullMarker(reader.GetString(3));
+            var sellerTextClass = NullMarker(reader.GetString(4));
+            var classification = SellerTaxonomy.ClassifyDetailed(sellerType, sellerClass, sellerTextClass, sellerName);
             rows.Add(new SellerAuditRow(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetString(4),
+                platform,
+                sellerName ?? "<NULL>",
+                sellerType ?? "<NULL>",
+                sellerClass ?? "<NULL>",
+                sellerTextClass ?? "<NULL>",
+                classification.Category,
+                classification.Confidence,
+                classification.NeedsReview,
                 reader.GetInt64(5)));
         }
 
@@ -63,4 +73,6 @@ public sealed partial class PostgresSnapshotStore
             rows.Sum(row => row.VehicleCount),
             rows);
     }
+
+    private static string? NullMarker(string value) => value == "<NULL>" ? null : value;
 }
