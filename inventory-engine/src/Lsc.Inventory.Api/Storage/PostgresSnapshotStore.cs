@@ -635,11 +635,12 @@ public sealed partial class PostgresSnapshotStore(
         var limit = Math.Clamp(maximum, 1, 100000);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        // This maintenance query inspects the latest JSONB version per future lot.
-        // Allow the bounded candidate read more time than normal persistence writes.
+        // This maintenance query inspects the latest JSONB version per lot and the
+        // latest version that contains a usable Body Style. The current payload is
+        // preserved; only the canonical Body Style is overlaid below.
         command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 180);
         command.CommandText = """
-            select lots.lot_key, lots.observed_at, versions.payload::text
+            select lots.lot_key, lots.observed_at, current_version.payload::text, body_source.body_style
             from auction_lots lots
             join lateral (
                 select payload
@@ -647,25 +648,32 @@ public sealed partial class PostgresSnapshotStore(
                 where lot_key = lots.lot_key
                 order by observed_at desc, id desc
                 limit 1
-            ) versions on true
+            ) current_version on true
+            join lateral (
+                select coalesce(
+                           payload #>> '{vehicle_specs,body_style}',
+                           payload #>> '{vehicle_specs,bodyStyle}',
+                           payload #>> '{_raw_source,Body Style}',
+                           payload #>> '{_raw_source,Body Type}',
+                           payload #>> '{source_body_style}',
+                           payload #>> '{additional_data,source_body_style}',
+                           '') as body_style
+                from auction_lot_versions
+                where lot_key = lots.lot_key
+                  and coalesce(
+                           payload #>> '{vehicle_specs,body_style}',
+                           payload #>> '{vehicle_specs,bodyStyle}',
+                           payload #>> '{_raw_source,Body Style}',
+                           payload #>> '{_raw_source,Body Type}',
+                           payload #>> '{source_body_style}',
+                           payload #>> '{additional_data,source_body_style}',
+                           '') <> ''
+                order by observed_at desc, id desc
+                limit 1
+            ) body_source on true
             where lots.platform = 'copart'
               and (lots.auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
-              and coalesce(
-                    versions.payload #>> '{vehicle_specs,body_style}',
-                    versions.payload #>> '{vehicle_specs,bodyStyle}',
-                    versions.payload #>> '{_raw_source,Body Style}',
-                    versions.payload #>> '{_raw_source,Body Type}',
-                    versions.payload #>> '{source_body_style}',
-                    versions.payload #>> '{additional_data,source_body_style}',
-                    '') <> ''
-              and coalesce(lots.vehicle_type, '') <> coalesce(
-                    versions.payload #>> '{vehicle_specs,body_style}',
-                    versions.payload #>> '{vehicle_specs,bodyStyle}',
-                    versions.payload #>> '{_raw_source,Body Style}',
-                    versions.payload #>> '{_raw_source,Body Type}',
-                    versions.payload #>> '{source_body_style}',
-                    versions.payload #>> '{additional_data,source_body_style}',
-                    '')
+              and coalesce(lots.vehicle_type, '') <> body_source.body_style
             order by lots.auction_at asc, lots.lot_key
             limit @limit;
             """;
@@ -678,7 +686,19 @@ public sealed partial class PostgresSnapshotStore(
             var identity = reader.GetString(0);
             var observedAt = reader.GetFieldValue<DateTimeOffset>(1);
             var rawJson = reader.GetString(2);
+            var bodyStyle = reader.GetString(3);
             var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (vehicle is not null && !string.IsNullOrWhiteSpace(bodyStyle))
+            {
+                var canonicalBodyStyle = bodyStyle.Trim();
+                vehicle = vehicle with
+                {
+                    VehicleType = canonicalBodyStyle,
+                    VehicleSpecs = vehicle.VehicleSpecs is null
+                        ? new VehicleSpecs { BodyStyle = canonicalBodyStyle }
+                        : vehicle.VehicleSpecs with { BodyStyle = canonicalBodyStyle }
+                };
+            }
             if (vehicle is not null) result.Add(new StoredVehicleSnapshot(identity, observedAt, vehicle, rawJson));
         }
         return result;
