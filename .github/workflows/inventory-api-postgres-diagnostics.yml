@@ -1,0 +1,156 @@
+name: Inventory API PostgreSQL Diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: inventory-api-postgres-diagnostics
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  POSTGRES_SERVER: psql-lsc-inventory-cu
+  INVENTORY_API_APP: ca-lsc-inventory-api-prod
+  PRIVATE_ENDPOINT_NAME: pe-psql-lsc-inventory-cu
+  PRIVATE_DNS_ZONE: privatelink.postgres.database.azure.com
+
+jobs:
+  diagnose:
+    name: Diagnose Inventory API PostgreSQL connectivity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure CLI extensions
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture PostgreSQL, Private Endpoint, DNS, and API configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+
+          az postgres flexible-server show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$POSTGRES_SERVER" \
+            --query '{name:name,state:state,fqdn:fullyQualifiedDomainName,network:network,authConfig:authConfig}' \
+            -o json > diagnostics/postgres.json
+
+          az network private-endpoint show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$PRIVATE_ENDPOINT_NAME" \
+            -o json > diagnostics/private-endpoint.json
+
+          nic_id="$(jq -r '.networkInterfaces[0].id // empty' diagnostics/private-endpoint.json)"
+          test -n "$nic_id"
+          az network nic show --ids "$nic_id" \
+            --query '{name:name,provisioningState:provisioningState,ipConfigurations:ipConfigurations[].{privateIPAddress:privateIPAddress,subnet:subnet.id}}' \
+            -o json > diagnostics/private-endpoint-nic.json
+
+          az network private-endpoint dns-zone-group list \
+            --resource-group "$RESOURCE_GROUP" \
+            --endpoint-name "$PRIVATE_ENDPOINT_NAME" \
+            -o json > diagnostics/private-dns-zone-groups.json
+
+          az network private-dns record-set a list \
+            --resource-group "$RESOURCE_GROUP" \
+            --zone-name "$PRIVATE_DNS_ZONE" \
+            -o json > diagnostics/private-dns-a-records.json
+
+          az network private-dns link vnet list \
+            --resource-group "$RESOURCE_GROUP" \
+            --zone-name "$PRIVATE_DNS_ZONE" \
+            -o json > diagnostics/private-dns-links.json
+
+          az containerapp show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$INVENTORY_API_APP" \
+            -o json > diagnostics/inventory-api.json
+
+          jq '{name:.name,provisioningState:.properties.provisioningState,latestRevisionName:.properties.latestRevisionName,latestReadyRevisionName:.properties.latestReadyRevisionName,environmentId:.properties.environmentId,ingressFqdn:.properties.configuration.ingress.fqdn,image:.properties.template.containers[0].image,postgresEnv:[.properties.template.containers[0].env[] | select(.name=="Persistence__Provider" or .name=="Persistence__PostgreSqlHost" or .name=="Persistence__Database") | {name,value}]}' \
+            diagnostics/inventory-api.json > diagnostics/inventory-api-safe.json
+          rm -f diagnostics/inventory-api.json
+
+          az containerapp revision list \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$INVENTORY_API_APP" \
+            --query '[].{name:name,active:properties.active,provisioningState:properties.provisioningState,healthState:properties.healthState,replicas:properties.replicas,createdTime:properties.createdTime}' \
+            -o json > diagnostics/inventory-api-revisions.json
+
+          cat diagnostics/postgres.json
+          cat diagnostics/private-endpoint-nic.json
+          cat diagnostics/private-dns-a-records.json
+          cat diagnostics/inventory-api-safe.json
+          cat diagnostics/inventory-api-revisions.json
+
+      - name: Test API health and database-backed endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_fqdn="$(jq -r '.ingressFqdn' diagnostics/inventory-api-safe.json)"
+          token_secret_ref="$(az containerapp show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$INVENTORY_API_APP" \
+            --query "properties.template.containers[0].env[?name=='InventoryApi__Token'].secretRef | [0]" -o tsv)"
+          inventory_token="$(az containerapp secret list \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$INVENTORY_API_APP" \
+            --show-values \
+            --query "[?name=='$token_secret_ref'].value | [0]" -o tsv)"
+          test -n "$api_fqdn"
+          test -n "$inventory_token"
+
+          health_code="$(curl --silent --show-error --output diagnostics/health-response.json --write-out '%{http_code}' "https://${api_fqdn}/healthz")"
+          db_code="$(curl --silent --show-error --max-time 70 --output diagnostics/database-response.json --write-out '%{http_code}' --header "Authorization: Bearer $inventory_token" "https://${api_fqdn}/api/v1/inventory/recent?take=1" || true)"
+          unset inventory_token
+
+          printf '{"healthHttpCode":"%s","databaseHttpCode":"%s"}\n' "$health_code" "$db_code" > diagnostics/http-status.json
+          echo "HEALTH_HTTP_CODE=$health_code"
+          echo "DATABASE_HTTP_CODE=$db_code"
+          test "$health_code" = "200"
+
+      - name: Query recent Inventory API logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment_id="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$INVENTORY_API_APP" --query 'properties.environmentId' -o tsv)"
+          environment_name="${environment_id##*/}"
+          workspace_id="$(az containerapp env show --resource-group "$RESOURCE_GROUP" --name "$environment_name" --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' -o tsv)"
+          test -n "$workspace_id"
+
+          query="union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL | where TimeGenerated > ago(90m) | where ContainerAppName_s == '$INVENTORY_API_APP' | project TimeGenerated, ContainerAppName_s, RevisionName_s, Log_s, Reason_s, Type | order by TimeGenerated desc | take 1000"
+          az monitor log-analytics query \
+            --workspace "$workspace_id" \
+            --analytics-query "$query" \
+            -o json > diagnostics/inventory-api-logs.json || true
+
+          jq '[.[] | select(((.Log_s // "") | test("Postgres|Npgsql|database|socket|DNS|timeout|exception|failed|error"; "i")) or ((.Reason_s // "") | test("failed|error|unhealthy"; "i")))]' \
+            diagnostics/inventory-api-logs.json > diagnostics/inventory-api-db-errors.json 2>/dev/null || printf '[]\n' > diagnostics/inventory-api-db-errors.json
+          cat diagnostics/inventory-api-db-errors.json
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventory-api-postgres-diagnostics-${{ github.run_id }}
+          path: diagnostics
+          if-no-files-found: warn
+          retention-days: 30
