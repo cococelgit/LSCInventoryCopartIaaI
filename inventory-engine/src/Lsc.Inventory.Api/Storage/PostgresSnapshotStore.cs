@@ -635,13 +635,23 @@ public sealed partial class PostgresSnapshotStore(
         var limit = Math.Clamp(maximum, 1, 100000);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        // This maintenance query inspects the latest JSONB version per lot and the
-        // latest version that contains a usable Body Style. The current payload is
-        // preserved; only the canonical Body Style is overlaid below.
+        // Restrict the expensive JSONB/history lookup to a bounded set of
+        // Copart lots whose stored type is a raw short code. Then recover the
+        // latest usable Body Style from any version for those lots.
         command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 180);
         command.CommandText = """
+            with eligible_lots as (
+                select lot_key, observed_at, auction_at
+                from auction_lots
+                where platform = 'copart'
+                  and (auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
+                  and trim(coalesce(vehicle_type, '')) <> ''
+                  and trim(vehicle_type) ~ '^[A-Za-z]{1,3}$'
+                order by auction_at asc, lot_key
+                limit @limit
+            )
             select lots.lot_key, lots.observed_at, current_version.payload::text, body_source.body_style
-            from auction_lots lots
+            from eligible_lots lots
             join lateral (
                 select payload
                 from auction_lot_versions
@@ -670,12 +680,7 @@ public sealed partial class PostgresSnapshotStore(
                            '') <> ''
                 order by observed_at desc, id desc
                 limit 1
-            ) body_source on true
-            where lots.platform = 'copart'
-              and (lots.auction_at at time zone 'America/New_York')::date >= (now() at time zone 'America/New_York')::date
-              and coalesce(lots.vehicle_type, '') <> body_source.body_style
-            order by lots.auction_at asc, lots.lot_key
-            limit @limit;
+            ) body_source on true;
             """;
         AddParameter(command, "limit", limit);
         var result = new List<StoredVehicleSnapshot>(limit);
