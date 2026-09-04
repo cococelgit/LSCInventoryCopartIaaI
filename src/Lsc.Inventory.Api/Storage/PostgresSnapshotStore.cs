@@ -2083,7 +2083,7 @@ public sealed partial class PostgresSnapshotStore(
                     case lower(latest.payload #>> '{condition,has_key}') when 'true' then true when 'false' then false end,
                     coalesce(lots.media_photos_count, 0) > 0,
                     lots.media_has_360,
-                    lots.buy_now_usd > 0,
+                    coalesce(lots.buy_now_usd, 0) > 0,
                     title_facet.category = 'SPECIAL',
                     coalesce(lifecycle.is_active, true), latest.observed_at, latest.payload,
                     concat_ws(' ', lots.lot_key, lots.lot_number, lots.vin, lots.title, lots.make, lots.model,
