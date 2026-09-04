@@ -1,0 +1,76 @@
+name: AuctionsAPI Lot Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      lot:
+        description: "IAAI lot number or IAAI internal ID"
+        required: true
+        type: string
+      search_by_id:
+        description: "Use 1 when the value is the IAAI internal ID"
+        required: true
+        default: "1"
+        type: string
+      domain:
+        description: "AuctionsAPI domain ID: 1=IAAI"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE_URL: https://auctionsapi.com/api
+    steps:
+      - name: Validate input
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.domain }}" == "1" ]]
+          [[ "${{ inputs.search_by_id }}" == "0" || "${{ inputs.search_by_id }}" == "1" ]]
+          [[ "${{ inputs.lot }}" =~ ^[A-Za-z0-9_-]+$ ]]
+      - name: Call directed AuctionsAPI endpoint
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+          LOT: ${{ inputs.lot }}
+          DOMAIN: ${{ inputs.domain }}
+          SEARCH_BY_ID: ${{ inputs.search_by_id }}
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          url="$BASE_URL/search-lot/$LOT/$DOMAIN?search_by_id=$SEARCH_BY_ID"
+          tmp="$(mktemp)"
+          status="$(curl --fail-with-body --silent --show-error --location \
+            --connect-timeout 10 --max-time 45 \
+            -H "x-api-key: $AUCTIONS_API_KEY" \
+            -H "accept: application/json" \
+            -o "$tmp" -w '%{http_code}' "$url" || true)"
+          echo "HTTP_STATUS=$status"
+          python3 - "$tmp" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          raw = open(path, encoding="utf-8").read()
+          print("RESPONSE_BYTES=" + str(len(raw.encode())))
+          try:
+              value = json.loads(raw)
+              print("RESPONSE_TYPE=" + type(value).__name__)
+              if isinstance(value, dict):
+                  print("TOP_LEVEL_KEYS=" + ",".join(sorted(value.keys())))
+                  data = value.get("data", value)
+                  print("DATA_TYPE=" + type(data).__name__)
+                  if isinstance(data, dict):
+                      print("DATA_KEYS=" + ",".join(sorted(data.keys())))
+                  elif isinstance(data, list):
+                      print("DATA_LENGTH=" + str(len(data)))
+              else:
+                  print("DATA_LENGTH=" + str(len(value)) if isinstance(value, list) else "DATA_SCALAR=true")
+          except json.JSONDecodeError:
+              print("RESPONSE_JSON=false")
+              print(raw[:500])
+          PY
+          test "$status" = "200"
