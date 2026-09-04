@@ -32,6 +32,7 @@ public sealed record CopartExcelProcessingResult(
 public interface ICopartExcelSnapshotProcessor
 {
     Task<CopartExcelProcessingResult> RunLatestAsync(CancellationToken cancellationToken);
+    Task<CopartExcelProcessingResult> RunLatestFutureOnlyAsync(CancellationToken cancellationToken);
     Task<CopartExcelProcessingResult> ProcessAsync(CopartSnapshotEnvelope snapshot, CancellationToken cancellationToken);
 }
 
@@ -51,7 +52,17 @@ public sealed class CopartExcelSnapshotProcessor(
             return await SkippedForProcessingLeaseAsync(cancellationToken);
 
         await using var snapshotLease = await snapshotSource.OpenLatestAsync(cancellationToken);
-        return await ProcessCoreAsync(snapshotLease.Snapshot, cancellationToken);
+        return await ProcessCoreAsync(snapshotLease.Snapshot, cancellationToken, futureOnly: false);
+    }
+
+    public async Task<CopartExcelProcessingResult> RunLatestFutureOnlyAsync(CancellationToken cancellationToken)
+    {
+        await using var processingLease = await snapshotStore.TryAcquireCopartProcessingLeaseAsync(cancellationToken);
+        if (processingLease is null)
+            return await SkippedForProcessingLeaseAsync(cancellationToken);
+
+        await using var snapshotLease = await snapshotSource.OpenLatestAsync(cancellationToken);
+        return await ProcessCoreAsync(snapshotLease.Snapshot, cancellationToken, futureOnly: true);
     }
 
     public async Task<CopartExcelProcessingResult> ProcessAsync(CopartSnapshotEnvelope snapshot, CancellationToken cancellationToken)
@@ -60,10 +71,10 @@ public sealed class CopartExcelSnapshotProcessor(
         if (processingLease is null)
             return await SkippedForProcessingLeaseAsync(cancellationToken);
 
-        return await ProcessCoreAsync(snapshot, cancellationToken);
+        return await ProcessCoreAsync(snapshot, cancellationToken, futureOnly: false);
     }
 
-    private async Task<CopartExcelProcessingResult> ProcessCoreAsync(CopartSnapshotEnvelope snapshot, CancellationToken cancellationToken)
+    private async Task<CopartExcelProcessingResult> ProcessCoreAsync(CopartSnapshotEnvelope snapshot, CancellationToken cancellationToken, bool futureOnly)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var validation = await adapter.ValidateAsync(snapshot, cancellationToken);
@@ -122,8 +133,14 @@ public sealed class CopartExcelSnapshotProcessor(
 
         try
         {
+            var cutoffDate = futureOnly ? GetTomorrowLocalDate() : (DateOnly?)null;
             await foreach (var row in adapter.ReadAcceptedSnapshotAsync(snapshot, cancellationToken))
             {
+                if (cutoffDate is not null && !IsOnOrAfterLocalDate(row.Auction?.AuctionAt, cutoffDate.Value))
+                {
+                    state.FutureDateSkipped++;
+                    continue;
+                }
                 batch.Add(row);
                 if (batch.Count >= _options.ProcessingBatchSize)
                 {
@@ -144,11 +161,11 @@ public sealed class CopartExcelSnapshotProcessor(
                 logger.LogInformation("Copart snapshot {FileName} completed final batch {BatchNumber}; observed {Observed}, accepted {Accepted}, discarded {Discarded}, watermark candidates {WatermarkCandidates}, skipped {WatermarkSkipped}, fallback {WatermarkFallback}, errors {Errors}, duration {DurationMs} ms.", snapshot.FileName, batchNumber, state.Observed, state.Accepted, state.Discarded, state.WatermarkCandidates, state.WatermarkSkipped, state.WatermarkFallback, state.Errors, Stopwatch.GetElapsedTime(batchStartedAt).TotalMilliseconds);
             }
 
-            var isComplete = state.Errors == 0 && state.Failures.Count == 0 && state.Observed == validation.RowCount;
-            if (isComplete)
+            var isComplete = state.Errors == 0 && state.Failures.Count == 0 && (futureOnly || state.Observed == validation.RowCount);
+            if (isComplete && !futureOnly)
                 reconciliation = await snapshotStore.ReconcileSourceAsync(InventorySourcePolicy.CopartExcelSource, observedLotKeys, true, snapshot.DownloadedAt, cancellationToken);
             else
-                logger.LogWarning("Copart snapshot {FileName} will not reconcile because it was not fully processed: observed {Observed} of {Expected}, errors {Errors}.", snapshot.FileName, state.Observed, validation.RowCount, state.Errors);
+                logger.LogWarning("Copart snapshot {FileName} will not reconcile because it was not fully processed or is future-only: observed {Observed} of {Expected}, future-date skipped {FutureDateSkipped}, errors {Errors}.", snapshot.FileName, state.Observed, validation.RowCount, state.FutureDateSkipped, state.Errors);
 
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteCopartSnapshotAsync(registration.RunId!.Value,
@@ -371,9 +388,23 @@ public sealed class CopartExcelSnapshotProcessor(
         bool WatermarkSkipped,
         bool WatermarkFallback);
 
+    private DateOnly GetTomorrowLocalDate()
+    {
+        var timeZone = TimeZoneInfo.FindSystemTimeZoneById(_options.BackfillTimeZoneId);
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, timeZone).DateTime).AddDays(1);
+    }
+
+    private static bool IsOnOrAfterLocalDate(DateTimeOffset? auctionAt, DateOnly cutoffDate)
+    {
+        if (auctionAt is null) return false;
+        var date = DateOnly.FromDateTime(auctionAt.Value.DateTime);
+        return date >= cutoffDate;
+    }
+
     private sealed class ProcessingState
     {
         public int Observed { get; set; }
+        public int FutureDateSkipped { get; set; }
         public int Accepted { get; set; }
         public int Discarded { get; set; }
         public int Quarantined { get; set; }

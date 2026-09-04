@@ -55,6 +55,7 @@ public interface IInventorySnapshotStore
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
     Task<InventoryPage> GetPageAsync(InventoryBrowseQuery query, CancellationToken cancellationToken);
     Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken);
+    Task<CopartInventoryResetResult> ResetCopartInventoryAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
 }
 
 public sealed record InventorySyncRunStart(
@@ -65,6 +66,18 @@ public sealed record InventorySyncRunStart(
     int PageSize,
     DateTimeOffset StartedAt,
     Guid? RunId = null);
+
+public sealed record CopartInventoryResetResult(
+    string Platform,
+    int LotsDeleted,
+    int VersionsDeleted,
+    int LifecycleRowsDeleted,
+    int EligibilityRowsDeleted,
+    int WatermarksDeleted,
+    int ObservationsDeleted,
+    int AuctionAttemptsDeleted,
+    int MotivationSignalsDeleted,
+    DateTimeOffset CompletedAt);
 
 public sealed record InventorySyncRunCompletion(
     DateTimeOffset FinishedAt,

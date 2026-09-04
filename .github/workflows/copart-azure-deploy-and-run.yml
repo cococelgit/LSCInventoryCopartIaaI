@@ -16,6 +16,7 @@ on:
           - media_probe
           - media_enrich
           - future_body_style_backfill
+          - reset_and_fresh_future
           - lot_media_diagnostics
           - title_backfill
           - auction_history_backfill
@@ -98,6 +99,7 @@ jobs:
             media_probe) job_args=("--copart-media-probe"); allow_interrupted_retry=false ;;
             media_enrich) job_args=("--copart-media-enrich"); allow_interrupted_retry=false ;;
             future_body_style_backfill) job_args=("--copart-future-body-style-backfill"); allow_interrupted_retry=false ;;
+            reset_and_fresh_future) job_args=("--copart-reset-and-fresh-future"); allow_interrupted_retry=false ;;
             lot_media_diagnostics) job_args=("--copart-lot-media-diagnostics=48826366"); allow_interrupted_retry=false ;;
             title_backfill) job_args=("--copart-title-backfill"); allow_interrupted_retry=false ;;
             auction_history_backfill) job_args=("--copart-auction-history-backfill"); allow_interrupted_retry=false ;;

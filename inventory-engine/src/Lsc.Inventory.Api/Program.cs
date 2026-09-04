@@ -533,6 +533,28 @@ if (args.Contains("--media-diagnostic", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--copart-reset", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    var result = await store.ResetCopartInventoryAsync(CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
+if (args.Contains("--copart-reset-and-fresh-future", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    var reset = await store.ResetCopartInventoryAsync(CancellationToken.None);
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { stage = "reset", result = reset }));
+    var processor = scope.ServiceProvider.GetRequiredService<ICopartExcelSnapshotProcessor>();
+    var load = await processor.RunLatestFutureOnlyAsync(CancellationToken.None);
+    Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { stage = "fresh-future-load", result = load }));
+    if (!load.Processed || load.Errors > 0) Environment.ExitCode = 1;
+    return;
+}
+
 if (args.Contains("--copart-media-probe", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

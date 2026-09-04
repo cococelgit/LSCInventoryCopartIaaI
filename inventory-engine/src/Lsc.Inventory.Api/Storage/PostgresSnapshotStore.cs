@@ -2232,6 +2232,72 @@ public sealed partial class PostgresSnapshotStore(
         return new InventoryPage(page, pageSize, total, Math.Max(1, (int)Math.Ceiling(total / (double)pageSize)), vehicles);
     }
 
+    public async Task<CopartInventoryResetResult> ResetCopartInventoryAsync(CancellationToken cancellationToken)
+    {
+        const string platform = InventorySourcePolicy.CopartExcelSource;
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await EnsureCopartSchemaAsync(cancellationToken);
+        await EnsureEligibilitySchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await using (var seed = connection.CreateCommand())
+            {
+                seed.Transaction = transaction;
+                seed.CommandTimeout = _persistence.CommandTimeoutSeconds;
+                seed.CommandText = "create temporary table copart_reset_lots on commit drop as select lot_key from auction_lots where platform = @platform;";
+                AddParameter(seed, "platform", platform);
+                await seed.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            async Task<int> CountAsync(string table) {
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+                command.CommandText = $"select count(*)::int from {table} where lot_key in (select lot_key from copart_reset_lots);";
+                return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+            }
+
+            async Task<int> DeleteAsync(string table) {
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+                command.CommandText = $"delete from {table} where lot_key in (select lot_key from copart_reset_lots);";
+                return await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            var lots = await CountAsync("auction_lots");
+            var versions = await CountAsync("auction_lot_versions");
+            var lifecycle = await CountAsync("inventory_lot_lifecycle");
+            var eligibility = await CountAsync("eligibility_decisions");
+            var watermarks = await CountAsync("copart_lot_watermarks");
+            var observations = await CountAsync("copart_lot_observations");
+            var attempts = await CountAsync("copart_auction_attempts");
+            var motivation = await CountAsync("copart_lot_motivation_signals");
+
+            await DeleteAsync("auction_lot_versions");
+            await DeleteAsync("inventory_lot_lifecycle");
+            await DeleteAsync("eligibility_decisions");
+            await DeleteAsync("copart_lot_watermarks");
+            await DeleteAsync("copart_lot_observations");
+            await DeleteAsync("copart_auction_attempts");
+            await DeleteAsync("copart_lot_motivation_signals");
+            await DeleteAsync("auction_lots");
+            await transaction.CommitAsync(cancellationToken);
+
+            return new CopartInventoryResetResult(platform, lots, versions, lifecycle, eligibility, watermarks, observations, attempts, motivation, DateTimeOffset.UtcNow);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
     public async Task<InventoryReconciliationResult> ReconcileSourceAsync(string platform, IReadOnlyCollection<string> observedLotKeys, bool isCompleteSnapshot, DateTimeOffset observedAt, CancellationToken cancellationToken)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();

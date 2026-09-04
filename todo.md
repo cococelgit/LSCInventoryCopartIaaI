@@ -325,3 +325,19 @@
 - [ ] Show Copart year, make, and model as the public headline instead of sale-title text such as Salvage Certificate or Vandalism.
 - [ ] Replace legacy Copart single-letter vehicle-type values in eligible records with textual Body Style values.
 - [ ] Verify Copart cards, VDP, type filters, and dynamic counts after the correction.
+
+- [ ] Define an explicit Copart-only cleanup scope that excludes all IAAI data and preserves an auditable deletion count.
+- [ ] Validate fresh Copart ingestion uses textual Body Style for vehicle type and preserves raw source fields.
+- [ ] Validate year, make, model, title/document separation, VIN and lot identity before publishing cards.
+- [ ] Validate LSC grading inputs, version, score distribution, and source parity before exposing new records.
+- [ ] Validate sale-date cutoff, future-only eligibility, source isolation, duplicate prevention, and lifecycle behavior.
+- [ ] Validate complete available media per lot, image quality/fallbacks, and a retry/quarantine path for missing images.
+- [ ] Add a dry-run report and post-load acceptance gate before deleting or publishing the fresh Copart inventory.
+
+- [ ] Confirm the exact Copart Excel seller columns and distinguish seller name from seller type/category.
+- [ ] Map Copart seller data into the canonical seller filter and preserve raw seller fields for auditability.
+- [ ] Make seller coverage a mandatory gate for the fresh Copart load and verify dynamic counts first in the filter order.
+
+- [ ] Execute the confirmed Copart-only reset after recording pre-delete Copart and IAAI counts.
+- [ ] Load a fresh Copart snapshot with Seller Name, Body Style, year/make/model, future sale dates, LSC grading, and media metrics.
+- [ ] Keep Copart scheduler paused until fresh-load acceptance gates pass, then verify portal and reactivate it.
