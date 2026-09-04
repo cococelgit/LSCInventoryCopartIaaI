@@ -223,6 +223,18 @@ public sealed record AuctionSeller
 
     [JsonPropertyName("type")]
     public string? Type { get; init; }
+
+    [JsonPropertyName("raw_type")]
+    public string? RawType { get; init; }
+
+    [JsonPropertyName("class")]
+    public string? Class { get; init; }
+
+    [JsonPropertyName("text_class")]
+    public string? TextClass { get; init; }
+
+    [JsonPropertyName("taxonomy_version")]
+    public string? TaxonomyVersion { get; init; }
 }
 
 public sealed record MediaInfo

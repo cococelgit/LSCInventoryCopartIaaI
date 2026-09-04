@@ -333,7 +333,11 @@ public sealed class InventorySyncProcessor(
         return preferredSeller with
         {
             Name = Prefer(preferredSeller.Name, fallbackSeller.Name),
-            Type = Prefer(preferredSeller.Type, fallbackSeller.Type)
+            Type = Prefer(preferredSeller.Type, fallbackSeller.Type),
+            RawType = Prefer(preferredSeller.RawType, fallbackSeller.RawType),
+            Class = Prefer(preferredSeller.Class, fallbackSeller.Class),
+            TextClass = Prefer(preferredSeller.TextClass, fallbackSeller.TextClass),
+            TaxonomyVersion = Prefer(preferredSeller.TaxonomyVersion, fallbackSeller.TaxonomyVersion)
         };
     }
 
