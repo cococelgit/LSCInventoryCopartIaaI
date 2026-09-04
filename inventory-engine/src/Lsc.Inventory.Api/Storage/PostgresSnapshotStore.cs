@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Azure;
 using Azure.Core;
 using Azure.Identity;
@@ -479,11 +480,10 @@ public sealed partial class PostgresSnapshotStore(
 
     private async Task<AuctionVehicle> ReuseResolvedCopartMediaAsync(string identity, AuctionVehicle vehicle, CancellationToken cancellationToken)
     {
-        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase) || vehicle.Media?.Photos?.Count is > 1)
+        if (!string.Equals(vehicle.Platform, "copart", StringComparison.OrdinalIgnoreCase))
             return vehicle;
-        var catalogUrl = ReadCopartCatalogUrl(vehicle);
-        if (catalogUrl is null) return vehicle;
 
+        var incomingMedia = MediaQuality.From(vehicle.Media);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
@@ -492,18 +492,51 @@ public sealed partial class PostgresSnapshotStore(
             from auction_lot_versions
             where lot_key = @lot_key
               and payload ? 'copart_media_resolution'
-              and payload #>> '{_raw_source,Image URL}' = @catalog_url
-              and coalesce(jsonb_array_length(payload #> '{media,thumbs}'), 0) > 1
-            order by created_at desc
-            limit 1;
+              and coalesce(jsonb_array_length(payload #> '{media,thumbs}'), 0) > 0
+            order by created_at desc, id desc
+            limit 25;
             """;
         AddParameter(command, "lot_key", identity);
-        AddParameter(command, "catalog_url", catalogUrl);
-        var rawJson = await command.ExecuteScalarAsync(cancellationToken) as string;
-        if (string.IsNullOrWhiteSpace(rawJson)) return vehicle;
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
-        var resolved = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
-        return resolved?.Media?.Photos?.Count is > 1 ? vehicle with { Media = resolved.Media } : vehicle;
+        AuctionVehicle? bestResolved = null;
+        MediaQuality bestQuality = incomingMedia;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var rawJson = reader.GetString(0);
+            var resolved = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            if (resolved?.Media is null) continue;
+            var quality = MediaQuality.From(resolved.Media);
+            if (!quality.IsBetterThan(bestQuality)) continue;
+            bestResolved = resolved;
+            bestQuality = quality;
+        }
+
+        return bestResolved is null ? vehicle : vehicle with { Media = bestResolved.Media };
+    }
+
+    private readonly record struct MediaQuality(int RealPhotos, int HdPhotos, int TotalPhotos)
+    {
+        public static MediaQuality From(MediaInfo? media)
+        {
+            if (media is null) return new MediaQuality(0, 0, 0);
+            var photos = (media.Photos ?? Array.Empty<string>())
+                .Where(photo => !string.IsNullOrWhiteSpace(photo))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var hd = photos.Count(IsHighDefinitionMediaUrl);
+            return new MediaQuality(photos.Length, hd, media.ThumbnailsCount ?? photos.Length);
+        }
+
+        public bool IsBetterThan(MediaQuality other) =>
+            RealPhotos > other.RealPhotos ||
+            (RealPhotos == other.RealPhotos && HdPhotos > other.HdPhotos) ||
+            (RealPhotos == other.RealPhotos && HdPhotos == other.HdPhotos && TotalPhotos > other.TotalPhotos);
+
+        private static bool IsHighDefinitionMediaUrl(string url) =>
+            url.Contains("width=", StringComparison.OrdinalIgnoreCase) &&
+            Regex.IsMatch(url, @"(?:width=)(?:1[6-9][0-9]{2}|[2-9][0-9]{3,})", RegexOptions.IgnoreCase) ||
+            Regex.IsMatch(url, @"(?:/hd/|/high/|_hd\.|-hd\.|highres|hires)", RegexOptions.IgnoreCase);
     }
 
     private static string? ReadCopartCatalogUrl(AuctionVehicle vehicle)
