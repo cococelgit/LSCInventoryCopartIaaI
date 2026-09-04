@@ -2249,16 +2249,16 @@ public sealed partial class PostgresSnapshotStore(
             {
                 seed.Transaction = transaction;
                 seed.CommandTimeout = _persistence.CommandTimeoutSeconds;
-                seed.CommandText = "create temporary table copart_reset_lots on commit drop as select lot_key from auction_lots where platform = @platform;";
+                seed.CommandText = "create temporary table copart_reset_lots (lot_key text primary key) on commit drop; insert into copart_reset_lots (lot_key) select lot_key from auction_lots where platform = @platform;";
                 AddParameter(seed, "platform", platform);
                 await seed.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            async Task<int> CountAsync(string table) {
+            async Task<int> CountLotsAsync() {
                 await using var command = connection.CreateCommand();
                 command.Transaction = transaction;
                 command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-                command.CommandText = $"select count(*)::int from {table} where lot_key in (select lot_key from copart_reset_lots);";
+                command.CommandText = "select count(*)::int from copart_reset_lots;";
                 return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
             }
 
@@ -2270,23 +2270,16 @@ public sealed partial class PostgresSnapshotStore(
                 return await command.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            var lots = await CountAsync("auction_lots");
-            var versions = await CountAsync("auction_lot_versions");
-            var lifecycle = await CountAsync("inventory_lot_lifecycle");
-            var eligibility = await CountAsync("eligibility_decisions");
-            var watermarks = await CountAsync("copart_lot_watermarks");
-            var observations = await CountAsync("copart_lot_observations");
-            var attempts = await CountAsync("copart_auction_attempts");
-            var motivation = await CountAsync("copart_lot_motivation_signals");
-
-            await DeleteAsync("auction_lot_versions");
-            await DeleteAsync("inventory_lot_lifecycle");
-            await DeleteAsync("eligibility_decisions");
-            await DeleteAsync("copart_lot_watermarks");
-            await DeleteAsync("copart_lot_observations");
-            await DeleteAsync("copart_auction_attempts");
-            await DeleteAsync("copart_lot_motivation_signals");
-            await DeleteAsync("auction_lots");
+            var lots = await CountLotsAsync();
+            var versions = await DeleteAsync("auction_lot_versions");
+            var lifecycle = await DeleteAsync("inventory_lot_lifecycle");
+            var eligibility = await DeleteAsync("eligibility_decisions");
+            var watermarks = await DeleteAsync("copart_lot_watermarks");
+            var observations = await DeleteAsync("copart_lot_observations");
+            var attempts = await DeleteAsync("copart_auction_attempts");
+            var motivation = await DeleteAsync("copart_lot_motivation_signals");
+            var deletedLots = await DeleteAsync("auction_lots");
+            if (deletedLots != lots) throw new InvalidOperationException($"Copart reset count mismatch: expected {lots} lots, deleted {deletedLots}.");
             await transaction.CommitAsync(cancellationToken);
 
             return new CopartInventoryResetResult(platform, lots, versions, lifecycle, eligibility, watermarks, observations, attempts, motivation, DateTimeOffset.UtcNow);
