@@ -1,0 +1,124 @@
+name: PostgreSQL Enable Approved Public IP Once
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type ENABLE_POSTGRES_PUBLIC_IP to authorize"
+        required: true
+        type: string
+      approved_ip:
+        description: "Single approved public IPv4 address"
+        required: true
+        default: "48.221.10.88"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: postgres-public-ip-once-prod
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  POSTGRES_SERVER: psql-lsc-inventory-cu
+  APPROVED_IP: 48.221.10.88
+  FIREWALL_RULE: allow-osniel-readonly-48-221-10-88
+  INVENTORY_API_APP: ca-lsc-inventory-api-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_AUTO_JOB: job-lsc-copart-auto-prod
+  COPART_MANUAL_JOB: job-lsc-copart-excel-prod
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate authorization
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "ENABLE_POSTGRES_PUBLIC_IP"
+          test "${{ inputs.approved_ip }}" = "$APPROVED_IP"
+          [[ "$APPROVED_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Capture protected baseline
+        id: baseline
+        run: |
+          set -euo pipefail
+          server_json="$(az postgres flexible-server show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" -o json)"
+          test "$(jq -r '.state // .userVisibleState // empty' <<<"$server_json")" = "Ready"
+          api_image="$(az containerapp show -g "$RESOURCE_GROUP" -n "$INVENTORY_API_APP" --query 'properties.template.containers[0].image' -o tsv)"
+          iaai_hash="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$IAAI_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          copart_auto_hash="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$COPART_AUTO_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          copart_manual_hash="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$COPART_MANUAL_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          {
+            echo "api_image=$api_image"
+            echo "iaai_hash=$iaai_hash"
+            echo "copart_auto_hash=$copart_auto_hash"
+            echo "copart_manual_hash=$copart_manual_hash"
+          } >> "$GITHUB_OUTPUT"
+          echo "BEFORE_PUBLIC_ACCESS=$(jq -r '.network.publicNetworkAccess // empty' <<<"$server_json")"
+          echo "API_IMAGE=$api_image"
+          echo "NO_JOB_EXECUTION_STARTED=true"
+
+      - name: Enable public access and enforce one IP rule
+        run: |
+          set -euo pipefail
+          az postgres flexible-server update -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --public-network-access Enabled --only-show-errors >/dev/null
+          if az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" >/dev/null 2>&1; then
+            az postgres flexible-server firewall-rule update -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" --start-ip-address "$APPROVED_IP" --end-ip-address "$APPROVED_IP" --only-show-errors >/dev/null
+          else
+            az postgres flexible-server firewall-rule create -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" --start-ip-address "$APPROVED_IP" --end-ip-address "$APPROVED_IP" --only-show-errors >/dev/null
+          fi
+          for rule in $(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')].name" -o tsv); do
+            az postgres flexible-server firewall-rule delete -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$rule" --yes --only-show-errors >/dev/null
+          done
+
+      - name: Verify final state and protected resources
+        run: |
+          set -euo pipefail
+          server_json="$(az postgres flexible-server show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" -o json)"
+          test "$(jq -r '.network.publicNetworkAccess // empty' <<<"$server_json")" = "Enabled"
+          rule_json="$(az postgres flexible-server firewall-rule show -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --rule-name "$FIREWALL_RULE" -o json)"
+          test "$(jq -r '.startIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
+          test "$(jq -r '.endIpAddress' <<<"$rule_json")" = "$APPROVED_IP"
+          test "$(az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" --query "[?!(name=='$FIREWALL_RULE' && startIpAddress=='$APPROVED_IP' && endIpAddress=='$APPROVED_IP')] | length(@)" -o tsv)" = "0"
+          api_image_after="$(az containerapp show -g "$RESOURCE_GROUP" -n "$INVENTORY_API_APP" --query 'properties.template.containers[0].image' -o tsv)"
+          iaai_hash_after="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$IAAI_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          copart_auto_hash_after="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$COPART_AUTO_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          copart_manual_hash_after="$(az containerapp job show -g "$RESOURCE_GROUP" -n "$COPART_MANUAL_JOB" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          test "$api_image_after" = "${{ steps.baseline.outputs.api_image }}"
+          test "$iaai_hash_after" = "${{ steps.baseline.outputs.iaai_hash }}"
+          test "$copart_auto_hash_after" = "${{ steps.baseline.outputs.copart_auto_hash }}"
+          test "$copart_manual_hash_after" = "${{ steps.baseline.outputs.copart_manual_hash }}"
+          echo "POSTGRES_PUBLIC_ACCESS=Enabled"
+          echo "FIREWALL_RULE=$FIREWALL_RULE"
+          echo "APPROVED_IP=$APPROVED_IP/32"
+          echo "API_IMAGE_UNCHANGED=true"
+          echo "IAAI_JOB_UNCHANGED=true"
+          echo "COPART_AUTO_JOB_UNCHANGED=true"
+          echo "COPART_MANUAL_JOB_UNCHANGED=true"
+          echo "NO_JOB_EXECUTION_STARTED=true"
+          mkdir -p evidence
+          jq '{id,name,state,network,authConfig,fullyQualifiedDomainName}' <<<"$server_json" > evidence/postgres-after.json
+          az postgres flexible-server firewall-rule list -g "$RESOURCE_GROUP" -n "$POSTGRES_SERVER" -o json > evidence/firewall-after.json
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-public-ip-evidence-${{ github.run_id }}
+          path: evidence
+          if-no-files-found: ignore
