@@ -1070,8 +1070,10 @@ if (args.Contains("--copart-excel-run", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
-if (args.Contains("--iaai-auctionsapi-backfill", StringComparer.OrdinalIgnoreCase))
+if (args.Contains("--iaai-auctionsapi-backfill", StringComparer.OrdinalIgnoreCase)
+    || args.Contains("--iaai-auctionsapi-backfill-dry-run", StringComparer.OrdinalIgnoreCase))
 {
+    var dryRun = args.Contains("--iaai-auctionsapi-backfill-dry-run", StringComparer.OrdinalIgnoreCase);
     var maximumIndex = Array.FindIndex(args, argument => string.Equals(argument, "--maximum", StringComparison.OrdinalIgnoreCase));
     var maximum = maximumIndex >= 0 && maximumIndex + 1 < args.Length && int.TryParse(args[maximumIndex + 1], out var parsedMaximum)
         ? Math.Clamp(parsedMaximum, 1, 10_000)
@@ -1081,9 +1083,9 @@ if (args.Contains("--iaai-auctionsapi-backfill", StringComparer.OrdinalIgnoreCas
     var cutoff = new DateTimeOffset(localToday, eastern.GetUtcOffset(new DateTimeOffset(localToday, eastern.BaseUtcOffset))).ToUniversalTime();
     await using var scope = app.Services.CreateAsyncScope();
     var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiIaaIConditionBackfillProcessor>();
-    var result = await processor.RunAsync(maximum, cutoff, CancellationToken.None);
+    var result = await processor.RunAsync(maximum, cutoff, CancellationToken.None, dryRun);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
-    if (result.Failed > 0 || result.Updated + result.NoEvidence < result.Candidates)
+    if (result.Failed > 0 || (!result.DryRun && result.Updated + result.NoEvidence < result.Candidates))
         Environment.ExitCode = 1;
     return;
 }

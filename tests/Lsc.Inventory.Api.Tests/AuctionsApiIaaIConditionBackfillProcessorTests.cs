@@ -13,6 +13,45 @@ namespace Lsc.Inventory.Api.Tests;
 public sealed class AuctionsApiIaaIConditionBackfillProcessorTests
 {
     [Fact]
+    public async Task Dry_run_allows_writes_disabled_and_does_not_persist_or_consume_Apibara()
+    {
+        var store = new InMemorySnapshotStore();
+        await store.PersistAsync(new AuctionVehicle
+        {
+            Platform = "iaai",
+            LotNumber = "12345678",
+            Vin = "1HGCM82633A004352",
+            Year = 2020,
+            Make = "Toyota",
+            Model = "Camry",
+            Auction = new AuctionInfo { AuctionAt = DateTimeOffset.UtcNow.AddDays(2), LotStatus = "Open" },
+            Condition = new VehicleCondition { PrimaryDamage = "Front End" },
+            SaleDocument = new SaleDocument { Name = "CERTIFICATE OF TITLE", IsPending = false },
+            Media = new MediaInfo { Photos = ["https://vis.iaai.com/resizer?imageKeys=test&width=640"] }
+        }, DateTimeOffset.UtcNow, CancellationToken.None);
+
+        var auctions = new FakeAuctionsApiClient();
+        var apibara = new FakeApibaraClient();
+        var processor = new AuctionsApiIaaIConditionBackfillProcessor(
+            auctions,
+            apibara,
+            store,
+            new CanonicalInventoryIngestionPipeline(store),
+            Microsoft.Extensions.Options.Options.Create(new AuctionsApiOptions { Enabled = true, AllowWrites = false, ApiKey = "test", PageSize = 1000 }),
+            NullLogger<AuctionsApiIaaIConditionBackfillProcessor>.Instance);
+
+        var result = await processor.RunAsync(10, DateTimeOffset.UtcNow.AddDays(-1), CancellationToken.None, dryRun: true);
+
+        Assert.True(result.DryRun);
+        Assert.Equal(1, result.Candidates);
+        Assert.Equal(1, result.AuctionsApiMatched);
+        Assert.Equal(0, result.Updated);
+        Assert.Equal(0, result.ApibaraFallbacks);
+        Assert.Equal(0, apibara.DetailRequests);
+        Assert.Empty((await store.GetExecutionHistoryAsync(new InventoryExecutionHistoryRequest(1, 10, "iaai"), CancellationToken.None)).Items);
+    }
+
+    [Fact]
     public async Task Uses_AuctionsApi_first_and_does_not_consume_Apibara_when_primary_matches()
     {
         var store = new InMemorySnapshotStore();

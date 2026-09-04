@@ -16,11 +16,12 @@ public sealed record AuctionsApiIaaIBackfillResult(
     int NoEvidence,
     int Failed,
     int RequestsIssued,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures,
+    bool DryRun);
 
 public interface IAuctionsApiIaaIConditionBackfillProcessor
 {
-    Task<AuctionsApiIaaIBackfillResult> RunAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken);
+    Task<AuctionsApiIaaIBackfillResult> RunAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken, bool dryRun = false);
 }
 
 /// <summary>
@@ -39,20 +40,22 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
 {
     private readonly AuctionsApiOptions _options = options.Value;
 
-    public async Task<AuctionsApiIaaIBackfillResult> RunAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken)
+    public async Task<AuctionsApiIaaIBackfillResult> RunAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken, bool dryRun = false)
     {
         if (!_options.IsConfigured)
             throw new InvalidOperationException("AuctionsAPI is not configured for IAAI backfill.");
-        if (!_options.AllowWrites)
+        if (!dryRun && !_options.AllowWrites)
             throw new InvalidOperationException("AuctionsAPI canonical writes are disabled for IAAI backfill.");
 
         var candidates = await snapshotStore.GetIaaIConditionBackfillCandidatesAsync(maximum, cutoff, cancellationToken);
         var byLot = candidates
             .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Vehicle.LotNumber))
             .ToDictionary(candidate => candidate.Vehicle.LotNumber!, StringComparer.OrdinalIgnoreCase);
-        var runId = await snapshotStore.StartSyncRunAsync(
-            new InventorySyncRunStart("auctions_api_backfill", "iaai", "condition", maximum, _options.PageSize, DateTimeOffset.UtcNow),
-            cancellationToken);
+        var runId = dryRun
+            ? Guid.Empty
+            : await snapshotStore.StartSyncRunAsync(
+                new InventorySyncRunStart("auctions_api_backfill", "iaai", "condition", maximum, _options.PageSize, DateTimeOffset.UtcNow),
+                cancellationToken);
 
         var failures = new List<string>();
         var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -78,7 +81,7 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
                     if (string.IsNullOrWhiteSpace(vehicle.LotNumber) || !byLot.TryGetValue(vehicle.LotNumber, out var existing))
                         continue;
                     if (!matched.Add(vehicle.LotNumber)) continue;
-                    var result = await PersistMappedAsync(vehicle, existing, runId, cancellationToken);
+                    var result = await PersistMappedAsync(vehicle, existing, runId, cancellationToken, dryRun);
                     updated += result.Updated;
                     noEvidence += result.NoEvidence;
                     failed += result.Failed;
@@ -89,14 +92,14 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
                 page = response.NextPage.Value;
             }
 
-            foreach (var missingLot in byLot.Keys.Except(matched, StringComparer.OrdinalIgnoreCase))
+            foreach (var missingLot in dryRun ? Enumerable.Empty<string>() : byLot.Keys.Except(matched, StringComparer.OrdinalIgnoreCase))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     requests++;
                     var detail = await apibaraClient.GetVehicleAsync(missingLot, cancellationToken);
-                    var result = await PersistMappedAsync(detail.Data with { SourceProvider = "apibara" }, byLot[missingLot], runId, cancellationToken);
+                    var result = await PersistMappedAsync(detail.Data with { SourceProvider = "apibara" }, byLot[missingLot], runId, cancellationToken, dryRun);
                     updated += result.Updated;
                     noEvidence += result.NoEvidence;
                     failed += result.Failed;
@@ -110,14 +113,20 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
                 }
             }
 
-            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
-                DateTimeOffset.UtcNow, candidates.Count, requests, failures, updated, 0, 0, 0, failed, pages, true), CancellationToken.None);
-            return new(runId, candidates.Count, matched.Count, byLot.Count - matched.Count, updated, noEvidence, failed, requests, failures.Take(20).ToArray());
+            if (!dryRun)
+            {
+                await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
+                    DateTimeOffset.UtcNow, candidates.Count, requests, failures, updated, 0, 0, 0, failed, pages, true), CancellationToken.None);
+            }
+            return new(runId, candidates.Count, matched.Count, dryRun ? 0 : byLot.Count - matched.Count, updated, dryRun ? byLot.Count - matched.Count : noEvidence, failed, requests, failures.Take(20).ToArray(), dryRun);
         }
         catch (OperationCanceledException)
         {
-            await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
-                DateTimeOffset.UtcNow, candidates.Count, requests, ["cancelled"], updated, 0, 0, 0, failed + 1, pages, false, null, true), CancellationToken.None);
+            if (!dryRun)
+            {
+                await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(
+                    DateTimeOffset.UtcNow, candidates.Count, requests, ["cancelled"], updated, 0, 0, 0, failed + 1, pages, false, null, true), CancellationToken.None);
+            }
             throw;
         }
     }
@@ -126,9 +135,11 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
         AuctionVehicle providerVehicle,
         StoredVehicleSnapshot existing,
         Guid runId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool dryRun)
     {
         var preferred = providerVehicle with { SourceProvider = providerVehicle.SourceProvider ?? "auctionsapi" };
+        if (dryRun) return new(0, 0, 0, []);
         var merged = AuctionVehicleMerger.Merge(preferred, existing.Vehicle);
         var ingestion = await canonicalPipeline.ProcessAsync(preferred, DateTimeOffset.UtcNow, cancellationToken, runId, merged, persist: true);
         if (!ingestion.Loaded)
