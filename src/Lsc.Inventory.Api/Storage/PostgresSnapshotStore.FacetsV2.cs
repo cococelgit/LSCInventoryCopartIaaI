@@ -398,7 +398,7 @@ public sealed partial class PostgresSnapshotStore
         {
             var sellerExceptPredicate = BuildFacetsV2Predicate(activeGroups.Where(candidate => !string.Equals(candidate, InventoryFacetsV2Groups.SellerTypes, StringComparison.OrdinalIgnoreCase)));
             branches.Add($"""
-                select 'seller'::text, 'sellerDetails'::text,
+                (select 'seller'::text, 'sellerDetails'::text,
                        jsonb_build_object(
                            'category', base.seller_category_value,
                            'sellerName', coalesce(base.seller_name_value, '<NULL>'),
@@ -411,7 +411,7 @@ public sealed partial class PostgresSnapshotStore
                 where {sellerExceptPredicate} and base.seller_name_value is not null
                 group by base.seller_category_value, base.seller_name_value, base.seller_platform_value, base.seller_confidence_value, base.seller_needs_review_value
                 order by count(*) desc, base.seller_category_value, base.seller_name_value
-                limit @facet_seller_detail_limit
+                limit @facet_seller_detail_limit)
                 """);
             AddParameter(command, "facet_seller_detail_limit", FacetsV2ValueLimit * 20);
         }
