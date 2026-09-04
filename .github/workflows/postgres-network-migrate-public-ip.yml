@@ -316,7 +316,7 @@ jobs:
             --retry 12 --retry-delay 5 --retry-all-errors \
             --output "$api_response" --write-out '%{http_code}' \
             --header "Authorization: Bearer $inventory_token" \
-            "https://${api_fqdn}/api/v1/inventory/recent?take=1")"
+            "https://${api_fqdn}/api/v1/inventory/summary")"
           unset inventory_token
           echo "PRIVATE_DATABASE_QUERY_HTTP_CODE=$http_code"
           test "$http_code" = "200"
