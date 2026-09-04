@@ -84,10 +84,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          job_id="$(az containerapp job show --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query id -o tsv)"
+          arm_url="https://management.azure.com${job_id}?api-version=2024-03-01"
           if [ '${{ inputs.action }}' = pause ]; then
-            az containerapp job update --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" --trigger-type Manual --only-show-errors
+            az rest --method patch --url "$arm_url" --body '{"properties":{"configuration":{"triggerType":"Manual"}}}' --only-show-errors
           else
-            az containerapp job update --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" --trigger-type Schedule --cron-expression "$COPART_CRON_BEFORE" --only-show-errors
+            body="$(jq -n --arg cron "$COPART_CRON_BEFORE" '{properties:{configuration:{triggerType:"Schedule",scheduleTriggerConfig:{cronExpression:$cron}}}}')"
+            az rest --method patch --url "$arm_url" --body "$body" --only-show-errors
           fi
 
       - name: Verify schedule-only change and protected API
