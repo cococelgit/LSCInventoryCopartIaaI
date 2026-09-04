@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
+using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Scoring;
+using Lsc.Inventory.Api.Sources;
 using Npgsql;
 
 namespace Lsc.Inventory.Api.Storage;
@@ -86,7 +88,12 @@ public sealed partial class PostgresSnapshotStore
             {
                 var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true });
                 if (vehicle is not null)
-                    candidates.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
+                {
+                    // Candidate selection and persistence must hash the same recovered canonical vehicle.
+                    // Recovery only reads fields already preserved in the raw Copart row.
+                    var recovered = CanonicalVehicleCleaner.Clean(CopartRawFieldRecovery.Recover(vehicle));
+                    candidates.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), recovered, rawJson));
+                }
             }
             catch (Exception exception) when (exception is JsonException or NotSupportedException)
             {

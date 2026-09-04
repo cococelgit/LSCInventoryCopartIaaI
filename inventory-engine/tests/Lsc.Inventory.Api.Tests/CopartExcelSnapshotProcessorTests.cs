@@ -169,7 +169,7 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.True(result.IsComplete);
         Assert.Equal(1, result.Accepted);
         Assert.NotNull(score);
-        Assert.Equal("lsc_pre_grade_v2", score!.PolicyVersion);
+        Assert.Equal("lsc_pre_grade_v3", score!.PolicyVersion);
         Assert.Equal("PRE_GRADED", score.Status);
         Assert.Equal(1, result.InlineScoring!.Created);
         Assert.Equal(1, result.InlineScoring.ScoredInline);
@@ -215,7 +215,7 @@ public sealed class CopartExcelSnapshotProcessorTests
         Assert.Equal("PRE_GRADED_WITH_FLAGS", score!.Status);
         Assert.NotNull(score.PreGrade);
         Assert.Contains("M04", score.ReasonCodes);
-        Assert.Equal("lsc_pre_grade_v2", score.PolicyVersion);
+        Assert.Equal("lsc_pre_grade_v3", score.PolicyVersion);
         Assert.Equal(1, result.InlineScoring!.ScoredInline);
     }
 

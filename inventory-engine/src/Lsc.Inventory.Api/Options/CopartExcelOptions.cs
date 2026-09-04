@@ -77,4 +77,8 @@ public sealed class CopartExcelOptions
 
     [Range(1, 16)]
     public int ScoringBackfillConcurrency { get; init; } = 8;
+
+    /// <summary>Optional hard cap for a controlled Copart scoring sample; zero means no cap.</summary>
+    [Range(0, 1000000)]
+    public int ScoringBackfillLimit { get; init; }
 }

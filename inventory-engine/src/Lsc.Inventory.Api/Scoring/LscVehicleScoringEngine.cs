@@ -9,14 +9,15 @@ namespace Lsc.Inventory.Api.Scoring;
 public static class LscScoringPolicy
 {
     public const string IAAIPolicyVersion = "lsc_pre_grade_v1";
-    // Compatibility default for existing non-Copart callers; Copart resolves explicitly to v2.
+    // Compatibility default for existing non-Copart callers; Copart resolves explicitly to v3.
     public const string Version = IAAIPolicyVersion;
-    public const string CopartPolicyVersion = "lsc_pre_grade_v2";
+    public const string CopartPolicyVersion = "lsc_pre_grade_v3";
     public const decimal PreGradeMaximumPoints = 60m;
+    public const decimal CopartPreGradeMaximumPoints = 100m;
     public const decimal MinimumCoveragePercent = 70m;
 
-    // IAAI v1 retains the strict manual-review gate. Copart v2 exposes a conservative numeric score
-    // with explicit flags for these uncertainties, rather than treating missing source fields as a verdict.
+    // IAAI v1 retains the strict manual-review gate. Copart v3 exposes a normalized 0-100 score
+    // with explicit coverage and flags for uncertainty, rather than treating missing source fields as a verdict.
     public static readonly IReadOnlySet<string> ManualReviewFlagCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "M02", // Copart title code without approved equivalence.
@@ -78,7 +79,7 @@ public static class LscVehicleScoringEngine
         var lotKey = BuildLotKey(vehicle);
         var platform = Normalize(vehicle.Platform);
         var policyVersion = LscScoringPolicy.ResolveVersion(platform);
-        var isCopartV2 = string.Equals(policyVersion, LscScoringPolicy.CopartPolicyVersion, StringComparison.Ordinal);
+        var isCopartV3 = string.Equals(policyVersion, LscScoringPolicy.CopartPolicyVersion, StringComparison.Ordinal);
         var inputHash = CreateInputHash(vehicle, eligibility);
         var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -104,7 +105,7 @@ public static class LscVehicleScoringEngine
             .Where(flag => LscScoringPolicy.ManualReviewFlagCodes.Contains(flag.Code))
             .Select(flag => flag.Code)
             .ToArray();
-        if (manualFlags.Length > 0 && !isCopartV2)
+        if (manualFlags.Length > 0 && !isCopartV3)
         {
             missing.Add("manual_review.resolution");
             return Blocked(lotKey, platform, StatusManualReview, manualFlags, missing, inputHash, now,
@@ -122,21 +123,25 @@ public static class LscVehicleScoringEngine
             EvaluateInformationQuality(vehicle, missing)
         };
 
+        if (isCopartV3)
+            factors = ScaleCopartV3Factors(factors);
+
         var penalties = EvaluatePenalties(vehicle, eligibility, factors, missing);
         var factorPoints = factors.Sum(factor => factor.Points);
         var penaltyPoints = penalties.Sum(penalty => penalty.Points);
         var maxPointsEvaluable = factors.Sum(factor => factor.MaxPointsEvaluable);
-        var coverage = RoundPercent(maxPointsEvaluable, LscScoringPolicy.PreGradeMaximumPoints);
+        var coverageMaximum = isCopartV3 ? LscScoringPolicy.CopartPreGradeMaximumPoints : LscScoringPolicy.PreGradeMaximumPoints;
+        var coverage = RoundPercent(maxPointsEvaluable, coverageMaximum);
         var confidence = Math.Max(0m, coverage - penalties.Where(penalty => penalty.Code == "P04").Sum(penalty => Math.Abs(penalty.Points)));
         var isVisible = coverage >= LscScoringPolicy.MinimumCoveragePercent;
         var hasAdvisoryFlags = eligibility.Flags.Count > 0;
-        decimal? preGrade = isCopartV2 || isVisible ? Math.Max(0m, factorPoints + penaltyPoints) : null;
-        var status = isCopartV2
+        decimal? preGrade = isCopartV3 || isVisible ? Math.Max(0m, factorPoints + penaltyPoints) : null;
+        var status = isCopartV3
             ? hasAdvisoryFlags || !isVisible ? StatusPreGradedWithFlags : StatusPreGraded
             : isVisible ? StatusPreGraded : StatusNeedsEnrichment;
         var reasons = factors.Where(factor => factor.Evaluated).Select(factor => factor.Code)
             .Concat(penalties.Select(penalty => penalty.Code))
-            .Concat(isCopartV2 ? eligibility.Flags.Select(flag => flag.Code) : [])
+            .Concat(isCopartV3 ? eligibility.Flags.Select(flag => flag.Code) : [])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(code => code, StringComparer.Ordinal)
             .ToArray();
@@ -186,6 +191,27 @@ public static class LscVehicleScoringEngine
             string.Join(',', eligibility.Flags.Select(flag => flag.Code).OrderBy(code => code, StringComparer.Ordinal))
         };
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\u001F', fields)))).ToLowerInvariant();
+    }
+
+    private static List<LscScoringFactor> ScaleCopartV3Factors(IEnumerable<LscScoringFactor> factors)
+    {
+        var weights = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["F01"] = 20m, // Seller and traceability
+            ["F02"] = 25m, // Declared mechanical condition
+            ["F03"] = 25m, // Declared damage
+            ["F04"] = 15m, // Title/documentation
+            ["F05"] = 15m  // Information quality
+        };
+
+        return factors.Select(factor =>
+        {
+            if (!weights.TryGetValue(factor.Code, out var targetMaximum) || !factor.Evaluated || factor.MaxPointsEvaluable <= 0m)
+                return factor with { Points = 0m, MaxPointsEvaluable = 0m };
+
+            var scaledPoints = Math.Round(factor.Points / factor.MaxPointsEvaluable * targetMaximum, 1, MidpointRounding.AwayFromZero);
+            return factor with { Points = scaledPoints, MaxPointsEvaluable = targetMaximum };
+        }).ToList();
     }
 
     private static LscVehicleScoringResult Blocked(

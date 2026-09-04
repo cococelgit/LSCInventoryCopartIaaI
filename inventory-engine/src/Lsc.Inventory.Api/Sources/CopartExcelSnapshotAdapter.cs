@@ -6,6 +6,7 @@ using CsvHelper;
 using CsvHelper.Configuration;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Options;
+using Lsc.Inventory.Api.Normalization;
 using Microsoft.Extensions.Options;
 
 namespace Lsc.Inventory.Api.Sources;
@@ -190,13 +191,16 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
             ["title_mapping_status"] = hasTitleMapping ? "mapped" : "unmapped",
             ["source_process_recommendation"] = hasTitleMapping ? (titleDefinition.SourceProcessRecommendation ? "yes" : "no") : null
         };
+        // Copart's Image URL is a catalog endpoint, not a public photo. Keep it only in RawSource
+        // so the media resolver can fetch the gallery; count only actual image URLs here.
         var thumbnail = SafeMediaUrl(Get(row, "Image Thumbnail"));
-        var image = SafeMediaUrl(Get(row, "Image URL"));
-        var photos = new[] { thumbnail, image }.Where(static value => value is not null).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
+        var photos = thumbnail is null ? Array.Empty<string>() : new[] { thumbnail };
         var primaryDamage = Get(row, "Damage Description");
         var secondaryDamage = Get(row, "Secondary Damage");
         var saleStatus = Get(row, "Sale Status");
         var runConditionRaw = Get(row, "Runs/Drives");
+        var sellerName = Get(row, "Seller Name");
+        var sellerClassification = SellerTaxonomy.ClassifyDetailed(null, null, null, sellerName);
         var sourceUpdatedAt = ParseSourceUpdatedAt(Get(row, "Last Updated Time"));
         var raw = JsonSerializer.SerializeToElement(row);
 
@@ -240,7 +244,15 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
                 State = Get(row, "Location state"),
                 Zip = Get(row, "Location ZIP")
             },
-            Seller = new AuctionSeller { Name = Get(row, "Seller Name"), Type = null },
+            Seller = new AuctionSeller
+            {
+                Name = sellerName,
+                Type = sellerClassification.Category,
+                TaxonomyVersion = SellerTaxonomy.Version,
+                ClassificationConfidence = sellerClassification.Confidence,
+                NeedsReview = sellerClassification.NeedsReview,
+                ClassificationEvidence = sellerClassification.Evidence
+            },
             OdometerInfo = new OdometerInfo { Miles = ParseDecimal(Get(row, "Odometer")), Status = Get(row, "Odometer Brand") },
             SaleDocument = new SaleDocument { Name = titleDescription, State = Get(row, "Sale Title State") },
             TitleNotes = JsonSerializer.SerializeToElement(titleNotes),
@@ -279,6 +291,15 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
                 ["source_title_description_es"] = JsonSerializer.SerializeToElement(hasTitleMapping ? titleDefinition.SpanishDescription : null),
                 ["source_vehicle_type"] = JsonSerializer.SerializeToElement(Get(row, "Vehicle Type")),
                 ["source_body_style"] = JsonSerializer.SerializeToElement(FirstPresent(Get(row, "Body Style"), Get(row, "Body Type"))),
+                ["source_seller_name_raw"] = JsonSerializer.SerializeToElement(sellerName),
+                ["source_seller_category"] = JsonSerializer.SerializeToElement(sellerClassification.Category),
+                ["source_seller_classification_confidence"] = JsonSerializer.SerializeToElement(sellerClassification.Confidence),
+                ["source_seller_classification_evidence"] = JsonSerializer.SerializeToElement(sellerClassification.Evidence),
+                ["source_damage_primary_raw"] = JsonSerializer.SerializeToElement(primaryDamage),
+                ["source_damage_secondary_raw"] = JsonSerializer.SerializeToElement(secondaryDamage),
+                ["source_run_condition_raw"] = JsonSerializer.SerializeToElement(runConditionRaw),
+                ["source_keys_raw"] = JsonSerializer.SerializeToElement(Get(row, "Has Keys-Yes or No")),
+                ["source_odometer_raw"] = JsonSerializer.SerializeToElement(Get(row, "Odometer")),
                 ["source_row_kind"] = JsonSerializer.SerializeToElement("copart-csv")
             }
         });
@@ -310,18 +331,31 @@ public sealed class CopartExcelSnapshotAdapter(IOptions<CopartExcelOptions> opti
 
     private static int? ParseInteger(string? value) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) ? result : null;
 
-    private static decimal? ParseDecimal(string? value) => decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var result) ? result : null;
+    private static decimal? ParseDecimal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var normalized = value.Trim().Replace(",", string.Empty, StringComparison.Ordinal);
+        var numeric = new string(normalized.Where(character => char.IsDigit(character) || character is '.' or '-').ToArray());
+        return decimal.TryParse(numeric, NumberStyles.Number, CultureInfo.InvariantCulture, out var result) ? result : null;
+    }
 
     // Copart uses zero to mean that no Buy-It-Now price is offered. A bid of zero remains valid elsewhere,
     // but a Buy Now offer exists only when Copart supplies a strictly positive amount.
     private static decimal? ParsePositiveDecimal(string? value) => ParseDecimal(value) is > 0m and var result ? result : null;
 
-    private static bool? ParseYesNo(string? value) => value?.Trim().ToUpperInvariant() switch
+    private static bool? ParseYesNo(string? value)
     {
-        "YES" or "Y" or "TRUE" => true,
-        "NO" or "N" or "FALSE" => false,
-        _ => null
-    };
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var normalized = string.Join(' ', value.Trim().ToUpperInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized switch
+        {
+            "YES" or "Y" or "TRUE" => true,
+            "NO" or "N" or "FALSE" => false,
+            _ when normalized.Contains("NO KEY", StringComparison.Ordinal) || normalized.Contains("WITHOUT KEY", StringComparison.Ordinal) => false,
+            _ when normalized.Contains("KEY", StringComparison.Ordinal) && normalized.Contains("YES", StringComparison.Ordinal) => true,
+            _ => null
+        };
+    }
 
     private static JsonElement? ToJson(string? value) => string.IsNullOrWhiteSpace(value) ? null : JsonSerializer.SerializeToElement(value);
 
