@@ -26,7 +26,7 @@ public static class SellerTaxonomy
 
     public static SellerClassification ClassifyDetailed(string? rawType, string? rawClass, string? rawTextClass, string? sellerName)
     {
-        string? unknownEvidence = null;
+        string? unknownEvidenceSource = null;
         (string? Value, string Source)[] evidences = [(rawType, "raw_type"), (rawClass, "class"), (rawTextClass, "text_class")];
         foreach (var evidence in evidences)
         {
@@ -34,7 +34,7 @@ public static class SellerTaxonomy
             if (result is null) continue;
             if (result.Category == Unknown)
             {
-                unknownEvidence ??= evidence.Source;
+                unknownEvidenceSource ??= evidence.Source;
                 continue;
             }
             return result with { Evidence = evidence.Source + ":" + result.Evidence };
@@ -42,11 +42,11 @@ public static class SellerTaxonomy
 
         var name = Normalize(sellerName);
         if (string.IsNullOrWhiteSpace(name))
-            return new SellerClassification(unknownEvidence ?? Unclassified, 0m, true, "missing_name");
+            return new SellerClassification(Unknown, 0m, true, unknownEvidenceSource is null ? "missing_name" : unknownEvidenceSource + ":unknown_value");
 
         var nameResult = ClassifyName(name);
         if (nameResult is not null) return nameResult;
-        return new SellerClassification(unknownEvidence ?? Other, unknownEvidence is null ? 0.35m : 0.25m, true, "name_unmatched");
+        return new SellerClassification(unknownEvidenceSource is null ? Other : Unknown, unknownEvidenceSource is null ? 0.35m : 0.25m, true, unknownEvidenceSource is null ? "name_unmatched" : unknownEvidenceSource + ":name_unmatched");
     }
 
     private static SellerClassification? ClassifyEvidence(string? value)

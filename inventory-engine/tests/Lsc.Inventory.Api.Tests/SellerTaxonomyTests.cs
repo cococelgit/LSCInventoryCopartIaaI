@@ -9,6 +9,7 @@ public sealed class SellerTaxonomyTests
     [Theory]
     [InlineData("insurance", null, null, "Any Seller", SellerTaxonomy.Insurance)]
     [InlineData("unknown", null, null, "Global Insurance Services", SellerTaxonomy.Insurance)]
+    [InlineData("unknown", "bg-282828", "text-primary", "unknown", SellerTaxonomy.Unknown)]
     [InlineData(null, "insurance", null, "Any Seller", SellerTaxonomy.Insurance)]
     [InlineData(null, null, null, "Global Insurance Services", SellerTaxonomy.Insurance)]
     [InlineData(null, null, null, "VOYAGER GLOBAL MOBILITY", SellerTaxonomy.Other)]
