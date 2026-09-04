@@ -1,5 +1,7 @@
 using Lsc.Inventory.Api.Storage;
+using Lsc.Inventory.Api.Options;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Lsc.Inventory.Api.Workers;
 
@@ -16,6 +18,7 @@ public sealed record AuctionsApiImportRequest(
 public sealed class AuctionsApiImportBackgroundWorker(
     IAuctionsApiImportJobStore jobStore,
     IServiceScopeFactory scopeFactory,
+    IOptions<AuctionsApiOptions> options,
     ILogger<AuctionsApiImportBackgroundWorker> logger) : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
@@ -23,6 +26,12 @@ public sealed class AuctionsApiImportBackgroundWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (!options.Value.IsConfigured)
+        {
+            logger.LogInformation("AuctionsAPI durable import worker is disabled by configuration.");
+            return;
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             AuctionsApiImportJob? job = null;
