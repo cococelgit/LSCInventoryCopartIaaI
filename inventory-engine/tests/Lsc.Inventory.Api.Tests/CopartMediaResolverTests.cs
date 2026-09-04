@@ -111,6 +111,26 @@ public sealed class CopartMediaResolverTests
     }
 
     [Fact]
+    public async Task Resolver_retries_https_and_queryless_catalog_after_incomplete_response()
+    {
+        const string complete = "{\"lotImages\":[{\"sequence\":1,\"link\":[{\"url\":\"https://cs.copart.com/v1/A/recovered.jpg\",\"isHdImage\":true}]}]}";
+        var handler = new StubHandler(request => handlerCall(request, complete));
+        var resolver = new CopartMediaResolver(new HttpClient(handler));
+
+        var result = await resolver.ResolveAsync(Source("http://inventoryv2.copart.io/v1/lotImages/1001?yardNumber=91"), CancellationToken.None);
+
+        Assert.True(result.Resolved);
+        Assert.Equal(1, result.GalleryImages);
+        Assert.Equal("https://cs.copart.com/v1/A/recovered.jpg", result.Vehicle.Media!.Photos![0]);
+        Assert.Equal(2, handler.Calls);
+
+        static HttpResponseMessage handlerCall(HttpRequestMessage request, string complete)
+        {
+            return request.RequestUri!.Query.Length == 0 ? JsonResponse(complete) : JsonResponse("{\"lotImages\":[]}");
+        }
+    }
+
+    [Fact]
     public async Task Resolver_returns_controlled_not_found_without_changing_media()
     {
         var resolver = new CopartMediaResolver(new HttpClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound))));
