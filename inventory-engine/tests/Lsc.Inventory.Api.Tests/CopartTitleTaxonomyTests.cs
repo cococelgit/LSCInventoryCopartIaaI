@@ -47,7 +47,8 @@ public sealed class CopartTitleTaxonomyTests
 
         Assert.False(sourceMapped.AdditionalData!.ContainsKey("title_category"));
         Assert.Equal("BS", Text(sourceMapped, "source_title_type_code"));
-        Assert.Equal("Salvage Certificate - Fire Damage", sourceMapped.Title);
+        Assert.Equal("Lote sin número", sourceMapped.Title);
+        Assert.Equal("Salvage Certificate - Fire Damage", sourceMapped.SaleDocument!.Name);
 
         var classified = CopartTitleMapper.ApplyTaxonomy(sourceMapped);
         Assert.Equal(TitleFacetCategory.Salvage, Text(classified, "title_category"));
@@ -61,7 +62,8 @@ public sealed class CopartTitleTaxonomyTests
         var twice = CopartTitleMapper.ApplyTaxonomy(once);
 
         Assert.Equal(JsonSerializer.Serialize(once), JsonSerializer.Serialize(twice));
-        Assert.Equal("Clean Title - Theft Recovery", twice.Title);
+        Assert.Equal("Lote sin número", twice.Title);
+        Assert.Equal("Clean Title - Theft Recovery", twice.SaleDocument!.Name);
         Assert.Equal("CT", Text(twice, "source_title_type_code"));
         Assert.Equal(TitleFacetCategory.Clean, Text(twice, "title_category"));
         Assert.Contains("Theft Recovery", twice.AdditionalData!["title_flags"].Deserialize<string[]>()!);

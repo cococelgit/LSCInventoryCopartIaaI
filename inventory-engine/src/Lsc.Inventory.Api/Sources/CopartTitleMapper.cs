@@ -21,10 +21,11 @@ public static class CopartTitleMapper
 
         var code = ReadCode(vehicle);
         var mapped = CopartTitleCatalog.TryGet(code, out var definition);
-        var title = mapped ? definition.EnglishDescription : code ?? vehicle.SaleDocument?.Name ?? vehicle.Title;
+        var saleTitle = mapped ? definition.EnglishDescription : code ?? vehicle.SaleDocument?.Name;
+        var title = BuildVehicleHeadline(vehicle);
         var notes = ReadObject(vehicle.TitleNotes);
         notes["sale_title_type_code"] = code;
-        notes["sale_title_description_en"] = title;
+        notes["sale_title_description_en"] = saleTitle;
         notes["sale_title_description_es"] = mapped ? definition.SpanishDescription : null;
         notes["title_mapping_version"] = CopartTitleCatalog.Version;
         notes["title_mapping_status"] = mapped ? "mapped" : "unmapped";
@@ -36,6 +37,7 @@ public static class CopartTitleMapper
         additional["source_title_type_code"] = JsonSerializer.SerializeToElement(code);
         additional["source_title_raw"] = JsonSerializer.SerializeToElement(code ?? vehicle.SaleDocument?.Name ?? vehicle.Title);
         additional["source_title_mapping"] = JsonSerializer.SerializeToElement(mapped ? "mapped" : "unmapped");
+        additional["public_headline_source"] = JsonSerializer.SerializeToElement("year_make_model");
         additional["source_title_mapping_version"] = JsonSerializer.SerializeToElement(CopartTitleCatalog.Version);
         additional["source_title_description_es"] = JsonSerializer.SerializeToElement(mapped ? definition.SpanishDescription : null);
 
@@ -43,8 +45,8 @@ public static class CopartTitleMapper
         {
             Title = title,
             SaleDocument = vehicle.SaleDocument is null
-                ? new SaleDocument { Name = title }
-                : vehicle.SaleDocument with { Name = title },
+                ? new SaleDocument { Name = saleTitle }
+                : vehicle.SaleDocument with { Name = saleTitle },
             TitleNotes = JsonSerializer.SerializeToElement(notes),
             AdditionalData = additional
         };
@@ -58,7 +60,7 @@ public static class CopartTitleMapper
     {
         if (!IsCopart(vehicle)) return vehicle;
 
-        var rawTitle = ReadCode(vehicle) ?? TitleFacetCategory.SourceTitle(vehicle);
+        var rawTitle = ReadCode(vehicle);
         var descriptor = TitleFacetCategory.Describe(InventorySourcePolicy.CopartExcelSource, rawTitle);
         var reviewStatus = descriptor.Category switch
         {
@@ -87,6 +89,17 @@ public static class CopartTitleMapper
             TitleNotes = JsonSerializer.SerializeToElement(notes),
             AdditionalData = additional
         };
+    }
+
+    private static string BuildVehicleHeadline(AuctionVehicle vehicle)
+    {
+        var parts = new[]
+        {
+            vehicle.Year?.ToString(),
+            vehicle.Make,
+            vehicle.Model
+        }.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).ToArray();
+        return parts.Length > 0 ? string.Join(" ", parts) : "Lote " + (vehicle.LotNumber ?? "sin número");
     }
 
     public static string? ReadCode(AuctionVehicle vehicle)

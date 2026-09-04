@@ -44,7 +44,7 @@ public sealed class CopartExcelSnapshotAdapterTests
         await foreach (var vehicle in adapter.ReadAcceptedSnapshotAsync(snapshot, CancellationToken.None)) vehicles.Add(vehicle);
 
         var mappedVehicle = Assert.Single(vehicles);
-        Assert.Equal("Clear Title", mappedVehicle.Title);
+        Assert.Equal("2025 Honda Accord LX", mappedVehicle.Title);
         Assert.Equal("Clear Title", mappedVehicle.SaleDocument!.Name);
         Assert.Equal("AQ", mappedVehicle.AdditionalData!["source_title_type_code"].GetString());
         Assert.Equal("mapped", mappedVehicle.AdditionalData["source_title_mapping"].GetString());
@@ -64,7 +64,7 @@ public sealed class CopartExcelSnapshotAdapterTests
 
         var unmappedVehicle = Assert.Single(vehicles);
         var evaluation = AuctionEligibilityEvaluator.Evaluate(unmappedVehicle, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
-        Assert.Equal("M02", unmappedVehicle.Title);
+        Assert.Equal("2025 Honda Accord LX", unmappedVehicle.Title);
         Assert.Equal("unmapped", unmappedVehicle.AdditionalData!["source_title_mapping"].GetString());
         Assert.False(unmappedVehicle.AdditionalData.ContainsKey("title_category"));
         Assert.True(evaluation.LoadToSystem);

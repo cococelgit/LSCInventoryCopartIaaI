@@ -84,15 +84,36 @@ public sealed class CopartFutureBodyStyleBackfillProcessor(
         {
             if (!string.Equals(candidate.Vehicle.Platform, InventorySourcePolicy.CopartExcelSource, StringComparison.OrdinalIgnoreCase))
                 return new(false, true, null);
-            var bodyStyle = candidate.Vehicle.VehicleSpecs?.BodyStyle;
+            var bodyStyle = ReadBodyStyle(candidate.Vehicle);
             if (string.IsNullOrWhiteSpace(bodyStyle)) return new(false, true, null);
-            var updatedVehicle = candidate.Vehicle with { VehicleType = bodyStyle.Trim() };
+            var updatedVehicle = candidate.Vehicle with
+            {
+                VehicleType = bodyStyle.Trim(),
+                VehicleSpecs = candidate.Vehicle.VehicleSpecs is null
+                    ? new VehicleSpecs { BodyStyle = bodyStyle.Trim() }
+                    : candidate.Vehicle.VehicleSpecs with { BodyStyle = bodyStyle.Trim() }
+            };
             return new(await snapshotStore.UpdateCopartVehicleTypeAsync(candidate.Identity, candidate.ObservedAt, updatedVehicle, cancellationToken), false, null);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             return new(false, false, $"{candidate.Identity}:{exception.GetType().Name}");
         }
+    }
+
+    private static string? ReadBodyStyle(AuctionVehicle vehicle)
+    {
+        var direct = vehicle.VehicleSpecs?.BodyStyle;
+        if (!string.IsNullOrWhiteSpace(direct)) return direct;
+        if (vehicle.RawSource is { ValueKind: System.Text.Json.JsonValueKind.Object } raw)
+        {
+            foreach (var key in new[] { "Body Style", "Body Type" })
+                if (raw.TryGetProperty(key, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()))
+                    return value.GetString();
+        }
+        if (vehicle.AdditionalData is not null && vehicle.AdditionalData.TryGetValue("source_body_style", out var source) && source.ValueKind == System.Text.Json.JsonValueKind.String)
+            return source.GetString();
+        return null;
     }
 
     private sealed record BackfillOutcome(bool Updated, bool Skipped, string? Failure);

@@ -38,7 +38,7 @@ public sealed class CopartTitleBackfillProcessorTests
         Assert.True(result.Processed);
         Assert.Equal(1, result.Mapped);
         Assert.Equal(0, result.Unmapped);
-        Assert.Equal("Clear Title", persisted.Vehicle.Title);
+        Assert.Equal("Lote 12345678", persisted.Vehicle.Title);
         Assert.Equal("mapped", persisted.Vehicle.AdditionalData!["source_title_mapping"].GetString());
         Assert.Equal("CLEAN", persisted.Vehicle.AdditionalData["title_category"].GetString());
         Assert.Equal(CopartTitleMapper.TaxonomyVersion, persisted.Vehicle.AdditionalData["title_taxonomy_version"].GetString());
