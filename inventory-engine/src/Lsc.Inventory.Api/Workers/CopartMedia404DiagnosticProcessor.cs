@@ -85,7 +85,13 @@ public sealed class CopartMedia404DiagnosticProcessor(
                 using var request = new HttpRequestMessage(HttpMethod.Get, variant);
                 request.Headers.Accept.ParseAdd("application/json");
                 using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                observations.Add($"{response.StatusCode}:{response.Content.Headers.ContentType?.MediaType ?? ""}:{variant}");
+                var shape = "";
+                if (response.IsSuccessStatusCode && response.Content.Headers.ContentType?.MediaType?.Contains("json", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    using var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+                    shape = DescribeJsonShape(document.RootElement);
+                }
+                observations.Add($"{response.StatusCode}:{response.Content.Headers.ContentType?.MediaType ?? ""}:{shape}:{variant}");
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -93,6 +99,20 @@ public sealed class CopartMedia404DiagnosticProcessor(
             }
         }
         return string.Join(" || ", observations);
+    }
+
+    private static string DescribeJsonShape(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return root.ValueKind.ToString();
+        var parts = new List<string>();
+        foreach (var property in root.EnumerateObject())
+        {
+            var value = property.Value;
+            parts.Add(value.ValueKind == JsonValueKind.Array
+                ? $"{property.Name}[]:{value.GetArrayLength()}"
+                : $"{property.Name}:{value.ValueKind}");
+        }
+        return string.Join(",", parts.OrderBy(item => item, StringComparer.Ordinal));
     }
 
     private static string? ReadCatalogUrl(JsonElement? rawSource)
