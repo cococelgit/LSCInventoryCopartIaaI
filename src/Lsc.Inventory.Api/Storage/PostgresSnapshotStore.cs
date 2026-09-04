@@ -2069,7 +2069,14 @@ public sealed partial class PostgresSnapshotStore(
                     coalesce(lots.damage, latest.payload #>> '{condition,primary_damage}'),
                     latest.payload #>> '{condition,secondary_damage}', __SELLER_TYPE_SQL__,
                     coalesce(nullif(btrim(latest.payload #>> '{seller,name}'), ''), nullif(btrim(latest.payload #>> '{Seller,Name}'), '')),
-                    case when coalesce(latest.payload #>> '{seller,classification_confidence}', latest.payload #>> '{seller,classificationConfidence}', latest.payload #>> '{Seller,ClassificationConfidence}') ~ '^[0-9]+([.][0-9]+)?$' then coalesce(latest.payload #>> '{seller,classification_confidence}', latest.payload #>> '{seller,classificationConfidence}', latest.payload #>> '{Seller,ClassificationConfidence}')::numeric end,
+                    case
+                        when coalesce(latest.payload #>> '{seller,classification_confidence}', latest.payload #>> '{seller,classificationConfidence}', latest.payload #>> '{Seller,ClassificationConfidence}') ~ '^[0-9]+([.][0-9]+)?$'
+                            then coalesce(latest.payload #>> '{seller,classification_confidence}', latest.payload #>> '{seller,classificationConfidence}', latest.payload #>> '{Seller,ClassificationConfidence}')::numeric
+                        when coalesce(nullif(btrim(latest.payload #>> '{seller,type}'), ''), nullif(btrim(latest.payload #>> '{Seller,Type}'), ''), nullif(btrim(latest.payload #>> '{seller,text_class}'), ''), nullif(btrim(latest.payload #>> '{seller,textClass}'), ''), nullif(btrim(latest.payload #>> '{Seller,TextClass}'), ''), nullif(btrim(latest.payload #>> '{seller,class}'), ''), nullif(btrim(latest.payload #>> '{Seller,Class}'), '')) is not null
+                             and lower(coalesce(nullif(btrim(latest.payload #>> '{seller,type}'), ''), nullif(btrim(latest.payload #>> '{Seller,Type}'), ''), nullif(btrim(latest.payload #>> '{seller,text_class}'), ''), nullif(btrim(latest.payload #>> '{seller,textClass}'), ''), nullif(btrim(latest.payload #>> '{Seller,TextClass}'), ''), nullif(btrim(latest.payload #>> '{seller,class}'), ''), nullif(btrim(latest.payload #>> '{Seller,Class}'), '')) not in ('unknown', 'unclassified', 'unavailable') then 1.00
+                        when coalesce(nullif(btrim(latest.payload #>> '{seller,name}'), ''), nullif(btrim(latest.payload #>> '{Seller,Name}'), '')) is not null then 0.75
+                        else 0.00
+                    end,
                     case lower(coalesce(latest.payload #>> '{seller,needs_review}', latest.payload #>> '{seller,needsReview}', latest.payload #>> '{Seller,NeedsReview}')) when 'false' then false when 'true' then true else true end,
                     coalesce(latest.payload #>> '{seller,classification_evidence}', latest.payload #>> '{seller,classificationEvidence}', latest.payload #>> '{Seller,ClassificationEvidence}'),
                     coalesce(latest.payload #>> '{seller,taxonomy_version}', latest.payload #>> '{seller,taxonomyVersion}', latest.payload #>> '{Seller,TaxonomyVersion}'),
@@ -2158,7 +2165,7 @@ public sealed partial class PostgresSnapshotStore(
                     from inventory_search_current where is_active
                 )
                 update inventory_search_projection_state state
-                set is_ready = true, schema_version = 5, row_count = stats.rows, visible_row_count = stats.visible_rows, generated_at = stats.generated_at,
+                set is_ready = true, schema_version = 6, row_count = stats.rows, visible_row_count = stats.visible_rows, generated_at = stats.generated_at,
                     facets_refreshed_at = now(), updated_at = now()
                 from stats where state.projection_name = 'inventory-current-v1'
                 returning state.row_count, state.generated_at;
