@@ -1,0 +1,105 @@
+name: IAAI AuctionsAPI Backfill Dry Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      maximum:
+        description: "Maximum eligible IAAI lots to inspect"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: iaai-auctionsapi-backfill-dry-run
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB_NAME: job-lsc-iaai-pilot-prod
+
+jobs:
+  dry-run:
+    name: Run IAAI AuctionsAPI dry run without writes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Guard current job and start dry run
+        shell: bash
+        env:
+          MAXIMUM: ${{ inputs.maximum }}
+        run: |
+          set -euo pipefail
+          [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "maximum must be an integer from 1 to 9999" >&2; exit 1; }
+          trigger_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          image_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          echo "Trigger before: $trigger_before"
+          echo "Image before: $image_before"
+          execution="$(az containerapp job start \
+            --name "$IAAI_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --command dotnet Lsc.Inventory.Api.dll \
+            --args="--iaai-auctionsapi-backfill-dry-run --maximum $MAXIMUM" \
+            -o json)"
+          echo "$execution" | jq .
+          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+          test -n "$execution_name"
+          echo "IAAI_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
+          echo "IAAI_TRIGGER_BEFORE=$trigger_before" >> "$GITHUB_ENV"
+          echo "IAAI_IMAGE_BEFORE=$image_before" >> "$GITHUB_ENV"
+
+      - name: Wait for dry-run completion and collect logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1500))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            execution="$(az containerapp job execution show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$IAAI_EXECUTION_NAME" -o json)"
+            status="$(echo "$execution" | jq -r '.properties.status // .properties.runningState // "Unknown"')"
+            echo "Dry-run status: $status"
+            case "$status" in
+              Succeeded|Failed|Canceled)
+                echo "$execution" | jq .
+                replica_json="$(az containerapp job replica list --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$IAAI_EXECUTION_NAME" -o json || true)"
+                echo "$replica_json" | jq . || true
+                replica="$(echo "$replica_json" | jq -r '.[0].name // empty')"
+                container="$(echo "$replica_json" | jq -r '.[0].properties.containers[0].name // empty')"
+                if [ -n "$replica" ] && [ -n "$container" ]; then
+                  az containerapp job logs show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$IAAI_EXECUTION_NAME" --replica "$replica" --container "$container" --tail 300 --format text || true
+                fi
+                test "$status" = "Succeeded"
+                exit 0
+                ;;
+            esac
+            sleep 20
+          done
+          echo "Timed out waiting for dry run" >&2
+          exit 1
+
+      - name: Verify job configuration was not changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          trigger_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          image_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          test "$trigger_after" = "$IAAI_TRIGGER_BEFORE"
+          test "$image_after" = "$IAAI_IMAGE_BEFORE"
+          echo "IAAI_DRY_RUN_CONFIGURATION_UNCHANGED=true"
+          echo "TRIGGER=$trigger_after"
+          echo "IMAGE=$image_after"
