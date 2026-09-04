@@ -1,0 +1,121 @@
+name: Copart Build and Sync Jobs
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git ref to build; must be the reviewed Copart branch or main
+        required: false
+        default: fix/copart-grading-v3
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-build-and-sync-jobs
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  INVENTORY_API_APP_NAME: ca-lsc-inventory-api-prod
+  COPART_MANUAL_JOB_NAME: job-lsc-copart-excel-prod
+  COPART_AUTO_JOB_NAME: job-lsc-copart-auto-prod
+  IAAI_JOB_NAME: job-lsc-iaai-pilot-prod
+
+jobs:
+  build-and-sync:
+    name: Build and sync Copart job images only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed Copart ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture protected baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_image_before="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          iaai_hash_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          manual_before="$(az containerapp job show --name "$COPART_MANUAL_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          auto_before="$(az containerapp job show --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          manual_without_image_before="$(echo "$manual_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          auto_without_image_before="$(echo "$auto_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          auto_cron_before="$(echo "$auto_before" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
+          test -n "$api_image_before" && test "$api_image_before" != "None"
+          test -n "$iaai_hash_before"
+          test -n "$auto_cron_before" && test "$auto_cron_before" != "null" && test "$auto_cron_before" != "None"
+          echo "API_IMAGE_BEFORE=$api_image_before" >> "$GITHUB_ENV"
+          echo "IAAI_HASH_BEFORE=$iaai_hash_before" >> "$GITHUB_ENV"
+          echo "MANUAL_WITHOUT_IMAGE_BEFORE=$manual_without_image_before" >> "$GITHUB_ENV"
+          echo "AUTO_WITHOUT_IMAGE_BEFORE=$auto_without_image_before" >> "$GITHUB_ENV"
+          echo "AUTO_CRON_BEFORE=$auto_cron_before" >> "$GITHUB_ENV"
+          echo "Manual image before: $(echo "$manual_before" | jq -r '.properties.template.containers[0].image')"
+          echo "Auto image before: $(echo "$auto_before" | jq -r '.properties.template.containers[0].image')"
+          echo "Protected API image before: $api_image_before"
+          echo "Protected IAAI job hash before: $iaai_hash_before"
+
+      - name: Build immutable Copart image
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          image_tag="copart-${source_sha}"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file inventory-engine/Dockerfile inventory-engine
+          echo "PROMOTED_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
+          echo "Built image: $ACR_SERVER/$IMAGE_NAME:$image_tag"
+
+      - name: Update only the two Copart job images
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job update --name "$COPART_MANUAL_JOB_NAME" --resource-group "$RESOURCE_GROUP" --image "$PROMOTED_IMAGE" --only-show-errors
+          az containerapp job update --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" --image "$PROMOTED_IMAGE" --only-show-errors
+          echo "Updated only Copart job images. No execution was started."
+
+      - name: Verify only Copart images changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_image_after="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          iaai_hash_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json | jq 'del(.properties.provisioningState,.systemData)' | sha256sum | awk '{print $1}')"
+          manual_after="$(az containerapp job show --name "$COPART_MANUAL_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          auto_after="$(az containerapp job show --name "$COPART_AUTO_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          manual_image_after="$(echo "$manual_after" | jq -r '.properties.template.containers[0].image')"
+          auto_image_after="$(echo "$auto_after" | jq -r '.properties.template.containers[0].image')"
+          manual_without_image_after="$(echo "$manual_after" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          auto_without_image_after="$(echo "$auto_after" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          auto_cron_after="$(echo "$auto_after" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
+          test "$api_image_after" = "$API_IMAGE_BEFORE"
+          test "$iaai_hash_after" = "$IAAI_HASH_BEFORE"
+          test "$manual_image_after" = "$PROMOTED_IMAGE"
+          test "$auto_image_after" = "$PROMOTED_IMAGE"
+          test "$manual_without_image_after" = "$MANUAL_WITHOUT_IMAGE_BEFORE"
+          test "$auto_without_image_after" = "$AUTO_WITHOUT_IMAGE_BEFORE"
+          test "$auto_cron_after" = "$AUTO_CRON_BEFORE"
+          echo "API_IMAGE_UNCHANGED=$api_image_after"
+          echo "IAAI_JOB_UNCHANGED=$iaai_hash_after"
+          echo "COPART_MANUAL_IMAGE=$manual_image_after"
+          echo "COPART_AUTO_IMAGE=$auto_image_after"
+          echo "COPART_AUTO_CRON_UNCHANGED=$auto_cron_after"
+          echo "Verified: only Copart job images changed; no job execution was started."

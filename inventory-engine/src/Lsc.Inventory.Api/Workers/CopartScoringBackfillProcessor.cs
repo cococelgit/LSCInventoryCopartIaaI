@@ -26,6 +26,13 @@ public sealed class CopartScoringBackfillProcessor(
     public async Task<CopartScoringBackfillResult> RunAsync(CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.UtcNow;
+        await using var processingLease = await snapshotStore.TryAcquireCopartProcessingLeaseAsync(cancellationToken);
+        if (processingLease is null)
+        {
+            logger.LogWarning("Copart scoring backfill skipped because another Copart processor holds the distributed PostgreSQL lease.");
+            return new CopartScoringBackfillResult(0, 0, 0, 0, 0, 1, TimeSpan.Zero, new[] { "COPART_PROCESSING_LOCK_NOT_ACQUIRED" });
+        }
+
         var batchSize = Math.Clamp(_options.ScoringBackfillBatchSize, 1, 2_000);
         var concurrency = Math.Clamp(_options.ScoringBackfillConcurrency, 1, 16);
         var limit = _options.ScoringBackfillLimit > 0 ? _options.ScoringBackfillLimit : int.MaxValue;
