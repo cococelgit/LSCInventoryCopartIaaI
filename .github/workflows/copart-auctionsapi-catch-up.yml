@@ -1,0 +1,84 @@
+name: Copart AuctionsAPI Catch-up
+
+on:
+  workflow_dispatch:
+    inputs:
+      maximum:
+        description: Maximum pending Copart lots in this batch
+        required: true
+        default: "500"
+        type: string
+      dry_run:
+        description: Do not persist; inspect candidates and provider evidence only
+        required: true
+        default: true
+        type: boolean
+      allow_writes:
+        description: Explicitly authorize canonical writes for a real catch-up batch
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  JOB_NAME: job-lsc-copart-auto-prod
+  ACR_NAME: acrlscinvprodeus2
+  IMAGE_NAME: lsc-inventory-engine
+
+jobs:
+  catch-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate guarded inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.maximum }}" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "maximum must be 1..5000" >&2; exit 1; }
+          if [[ "${{ inputs.dry_run }}" != "true" && "${{ inputs.allow_writes }}" != "true" ]]; then
+            echo "Real catch-up requires allow_writes=true" >&2
+            exit 1
+          fi
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Start guarded catch-up execution
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          image="$ACR_NAME.azurecr.io/$IMAGE_NAME:copart-catch-up-${GITHUB_SHA}"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:copart-catch-up-${GITHUB_SHA}" --file Dockerfile .
+          job_json="$(az containerapp job show -n "$JOB_NAME" -g "$RESOURCE_GROUP" -o json)"
+          mode="catch-up-dry-run"
+          if [[ "${{ inputs.dry_run }}" == "false" ]]; then mode="catch-up"; fi
+          patch_body="$(echo "$job_json" | jq --arg image "$image" --arg key "$AUCTIONS_API_KEY" --arg mode "$mode" --arg maximum "${{ inputs.maximum }}" --arg writes "${{ inputs.allow_writes }}" '
+            .properties.template.containers[0] |= del(.imageType)
+            | .properties.template.containers[0].image = $image
+            | .properties.template.containers[0].command = ["/app/run-auctionsapi-dry-run.sh"]
+            | .properties.template.containers[0].args = ["copart", $mode, $maximum]
+            | .properties.template.containers[0].env = ((.properties.template.containers[0].env // []) | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__ApiKey",value:$key},{name:"AuctionsApi__Enabled",value:"true"},{name:"AuctionsApi__AllowWrites",value:$writes}])
+            | {properties:{template:{containers:[.properties.template.containers[0]]},configuration:.properties.configuration}}')"
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$JOB_NAME?api-version=2024-03-01"
+          az rest --method patch --uri "$uri" --body "$patch_body" --output none
+          az containerapp job start -n "$JOB_NAME" -g "$RESOURCE_GROUP" --only-show-errors
+      - name: Report safety state
+        if: always()
+        run: |
+          echo "Excel remains paused; catch-up workflow does not activate a schedule."
+          echo "Requested maximum=${{ inputs.maximum }} dry_run=${{ inputs.dry_run }} allow_writes=${{ inputs.allow_writes }}"

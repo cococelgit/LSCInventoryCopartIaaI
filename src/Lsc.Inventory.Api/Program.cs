@@ -122,6 +122,7 @@ builder.Services.AddScoped<IIaaINationalSyncProcessor, IaaINationalProviderRoute
 builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInventoryIngestionPipeline>();
 builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
 builder.Services.AddScoped<IAuctionsApiIaaIConditionBackfillProcessor, AuctionsApiIaaIConditionBackfillProcessor>();
+builder.Services.AddScoped<IAuctionsApiCopartCatchUpProcessor, AuctionsApiCopartCatchUpProcessor>();
 builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
 {
@@ -1087,6 +1088,26 @@ if (args.Contains("--copart-auctionsapi-run", StringComparer.OrdinalIgnoreCase)
         Environment.ExitCode = 1;
     }
 
+    return;
+}
+
+if (args.Contains("--copart-auctionsapi-catch-up", StringComparer.OrdinalIgnoreCase)
+    || args.Contains("--copart-auctionsapi-catch-up-dry-run", StringComparer.OrdinalIgnoreCase))
+{
+    var dryRun = args.Contains("--copart-auctionsapi-catch-up-dry-run", StringComparer.OrdinalIgnoreCase);
+    var maximumIndex = Array.FindIndex(args, argument => string.Equals(argument, "--maximum", StringComparison.OrdinalIgnoreCase));
+    var maximum = maximumIndex >= 0 && maximumIndex + 1 < args.Length && int.TryParse(args[maximumIndex + 1], out var parsedMaximum)
+        ? Math.Clamp(parsedMaximum, 1, 10_000)
+        : 500;
+    var eastern = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+    var localToday = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, eastern).Date;
+    var cutoff = new DateTimeOffset(localToday, eastern.GetUtcOffset(new DateTimeOffset(localToday, eastern.BaseUtcOffset))).ToUniversalTime();
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiCopartCatchUpProcessor>();
+    var result = await processor.RunAsync(maximum, cutoff, CancellationToken.None, dryRun);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    if (result.Failed > 0 || (!result.DryRun && result.Updated + result.NoEvidence + result.Failed < result.Candidates))
+        Environment.ExitCode = 1;
     return;
 }
 

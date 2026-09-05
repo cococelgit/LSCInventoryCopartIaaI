@@ -13,6 +13,8 @@ case "$platform" in
     case "$mode" in
       run) flag="--copart-auctionsapi-run" ;;
       dry-run) flag="--copart-auctionsapi-dry-run" ;;
+      catch-up) flag="--copart-auctionsapi-catch-up" ;;
+      catch-up-dry-run) flag="--copart-auctionsapi-catch-up-dry-run" ;;
       *) echo "Unsupported Copart mode: $mode" >&2; exit 2 ;;
     esac
     if [ -n "$maximum" ]; then

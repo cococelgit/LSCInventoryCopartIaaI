@@ -25,6 +25,7 @@ public interface IInventorySnapshotStore
     Task<InventoryLotPersistenceResult> PersistAsync(AuctionVehicle vehicle, DateTimeOffset observedAt, CancellationToken cancellationToken, Guid? runId = null);
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<IReadOnlyList<StoredVehicleSnapshot>> GetIaaIConditionBackfillCandidatesAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken) => throw new NotSupportedException();
+    Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartCatchUpCandidatesAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<InventorySearchPage> SearchAsync(InventorySearchRequest request, CancellationToken cancellationToken);
     Task<InventorySearchSummary> GetInventorySearchSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken);
     Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken);
