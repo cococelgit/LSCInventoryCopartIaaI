@@ -287,10 +287,10 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 ["has_key"] = Bool(lotRow, "keys_available", "key_available", "keys"),
                 ["run_condition"] = new Dictionary<string, object?>
                 {
-                    ["value"] = Scalar(lotRow, "condition.run_condition.value", "run_condition.value", "run_and_drive", "run_drive", "start_code")
-                        ?? Scalar(vehicleRow, "condition.run_condition.value", "run_condition.value", "run_and_drive", "run_drive", "start_code"),
-                    ["label"] = Scalar(lotRow, "condition.run_condition.label", "run_condition.label", "run_and_drive_label")
-                        ?? Scalar(vehicleRow, "condition.run_condition.label", "run_condition.label", "run_and_drive_label"),
+                    ["value"] = Scalar(lotRow, "condition.run_condition.value", "condition.run_and_drive.value", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.value", "run_and_drive", "run_and_drive_label", "run_drive", "runs_and_drives", "start_code")
+                        ?? Scalar(vehicleRow, "condition.run_condition.value", "condition.run_and_drive.value", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.value", "run_and_drive", "run_and_drive_label", "run_drive", "runs_and_drives", "start_code"),
+                    ["label"] = Scalar(lotRow, "condition.run_condition.label", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.label", "run_and_drive_label", "run_drive_label", "runs_and_drives_label")
+                        ?? Scalar(vehicleRow, "condition.run_condition.label", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.label", "run_and_drive_label", "run_drive_label", "runs_and_drives_label"),
                     ["class_hint"] = Scalar(lotRow, "condition.run_condition.class_hint", "run_condition.class_hint")
                         ?? Scalar(vehicleRow, "condition.run_condition.class_hint", "run_condition.class_hint"),
                 },
@@ -299,7 +299,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             {
                 ["name"] = Scalar(lotRow, "seller.name", "seller") ?? Scalar(vehicleRow, "seller.name", "seller"),
                 ["raw_type"] = Scalar(lotRow, "seller.raw_type", "seller_type") ?? Scalar(vehicleRow, "seller.raw_type", "seller_type"),
-                ["type"] = Scalar(lotRow, "seller.type", "seller_type") ?? Scalar(vehicleRow, "seller.type", "seller_type"),
+                ["type"] = SellerType(lotRow) ?? SellerType(vehicleRow),
                 ["class"] = Scalar(lotRow, "seller.class", "seller_class") ?? Scalar(vehicleRow, "seller.class", "seller_class"),
                 ["text_class"] = Scalar(lotRow, "seller.text_class", "seller_text_class") ?? Scalar(vehicleRow, "seller.text_class", "seller_text_class"),
             },
@@ -368,6 +368,16 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     }
 
     private static int? Number(JsonElement value, params string[] paths) => int.TryParse(Scalar(value, paths), out var number) ? number : null;
+    private static string? SellerType(JsonElement value)
+    {
+        var explicitType = Scalar(value, "seller.type", "seller_type");
+        if (!string.IsNullOrWhiteSpace(explicitType)) return explicitType;
+        if (Bool(value, "seller.is_insurance", "is_insurance") == true) return "Insurance";
+        if (Bool(value, "seller.is_credit_company", "is_credit_company") == true) return "Finance";
+        if (Bool(value, "seller.is_rental", "is_rental") == true) return "Rental";
+        return null;
+    }
+
     private static bool? Bool(JsonElement value, params string[] paths)
     {
         var raw = Scalar(value, paths)?.Trim();
