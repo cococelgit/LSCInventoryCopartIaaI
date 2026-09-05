@@ -101,7 +101,7 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --image "$image_ref" \
             --set-env-vars \
-              "AuctionsApi__ApiKey=secretref:auctions-api-key" \
+              "AuctionsApi__ApiKey=$AUCTIONS_API_KEY" \
               "AuctionsApi__Enabled=true" \
               "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
               "AuctionsApi__PageSize=1000" \
