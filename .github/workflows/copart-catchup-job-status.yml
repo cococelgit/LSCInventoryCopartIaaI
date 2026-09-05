@@ -1,0 +1,33 @@
+name: Check Copart Catch-up Job Status
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  CATCHUP_JOB: job-lsc-copart-catchup-prod
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Read catch-up Job status
+        shell: bash
+        run: |
+          set -euo pipefail
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$CATCHUP_JOB?api-version=2024-03-01"
+          result="$(az rest --method get --uri "$uri" -o json)"
+          echo "$result" | jq '{name:.name, provisioningState:.properties.provisioningState, triggerType:.properties.configuration.triggerType, scheduleTriggerConfig:.properties.configuration.scheduleTriggerConfig, command:.properties.template.containers[0].command, args:.properties.template.containers[0].args, allowWrites:([.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""), enabled:([.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // "")}'
