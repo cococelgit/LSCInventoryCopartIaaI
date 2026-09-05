@@ -21,6 +21,11 @@ on:
         options:
           - dry-run
           - run
+      maximum:
+        description: "Maximum Copart lots per incremental execution"
+        required: true
+        default: "500"
+        type: string
 
 permissions:
   contents: read
@@ -93,14 +98,17 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$AUCTIONS_API_KEY"
+          [[ "${{ inputs.maximum }}" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "maximum must be an integer from 1 to 5000" >&2; exit 1; }
           az containerapp job secret set \
             --name "$COPART_API_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
             --only-show-errors
           job_json="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
-          patch_body="$(echo "$job_json" | jq --arg image "$COPART_API_IMAGE" --arg api_key "$AUCTIONS_API_KEY" --arg allow_writes "${{ inputs.allow_auctions_writes }}" --arg activate_schedule "${{ inputs.activate_schedule }}" '
+          patch_body="$(echo "$job_json" | jq --arg image "$COPART_API_IMAGE" --arg api_key "$AUCTIONS_API_KEY" --arg allow_writes "${{ inputs.allow_auctions_writes }}" --arg activate_schedule "${{ inputs.activate_schedule }}" --arg mode "${{ inputs.mode }}" --arg maximum "${{ inputs.maximum }}" '
             .properties.template.containers[0] |= del(.imageType)
+            | .properties.template.containers[0].command = ["/app/run-auctionsapi-dry-run.sh"]
+            | .properties.template.containers[0].args = ["copart", $mode, $maximum]
             | .properties.template.containers[0].image = $image
             | .properties.template.containers[0].env = ((.properties.template.containers[0].env // [])
               | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__PageSize" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__RequestIntervalMilliseconds"))
@@ -143,4 +151,5 @@ jobs:
           echo "COPART_API_WRITES=${{ inputs.allow_auctions_writes }}"
           echo "COPART_API_ENABLED=$enabled_after"
           echo "COPART_API_KEY_PRESENT=$has_key_after"
+          echo "COPART_API_MAXIMUM=${{ inputs.maximum }}"
           echo "COPART_API_PROMOTION_COMPLETED=true"
