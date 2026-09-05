@@ -1,0 +1,75 @@
+name: AuctionsAPI Domain Contract Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: "AuctionsAPI domain ID: 1=IAAI, 3=Copart"
+        required: true
+        type: string
+      per_page:
+        description: "Number of provider rows to inspect"
+        required: true
+        default: "10"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  BASE_URL: https://auctionsapi.com/api
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate input
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.domain }}" == "1" || "${{ inputs.domain }}" == "3" ]]
+          [[ "${{ inputs.per_page }}" =~ ^[1-9][0-9]?$|^100$ ]]
+      - name: Call provider list endpoint and summarize fields
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+          DOMAIN: ${{ inputs.domain }}
+          PER_PAGE: ${{ inputs.per_page }}
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          url="$BASE_URL/cars?domain_id=$DOMAIN&page=1&per_page=$PER_PAGE"
+          tmp="$(mktemp)"
+          status="$(curl --fail-with-body --silent --show-error --location --connect-timeout 10 --max-time 45 \
+            -H "x-api-key: $AUCTIONS_API_KEY" -H "accept: application/json" \
+            -o "$tmp" -w '%{http_code}' "$url" || true)"
+          echo "HTTP_STATUS=$status"
+          python3 - "$tmp" <<'PY'
+          import json, sys
+          from collections import Counter
+          raw = open(sys.argv[1], encoding='utf-8').read()
+          print('RESPONSE_BYTES=' + str(len(raw.encode())))
+          value = json.loads(raw)
+          if not isinstance(value, dict):
+              print('RESPONSE_TYPE=' + type(value).__name__)
+              raise SystemExit(1)
+          print('TOP_LEVEL_KEYS=' + ','.join(sorted(value.keys())))
+          data = value.get('data', value)
+          print('DATA_TYPE=' + type(data).__name__)
+          rows = data if isinstance(data, list) else data.get('lots', data.get('cars', data.get('results', []))) if isinstance(data, dict) else []
+          print('ROW_COUNT=' + str(len(rows)))
+          if not rows:
+              print('ROW_KEYS=')
+              raise SystemExit(0)
+          key_counts = Counter()
+          nested_counts = Counter()
+          for row in rows:
+              if not isinstance(row, dict):
+                  continue
+              key_counts.update(row.keys())
+              for key in ('lots','vehicle','lot','condition','seller','images','media','damage','location','odometer','keys_available','key_available','run_and_drive','run_condition','airbags','trim','series','model_detail','body_style','vehicle_type','sale_date','title','manufacturer','model'):
+                  if key in row and row[key] not in (None, '', [], {}):
+                      nested_counts[key] += 1
+          print('ROW_KEYS=' + ','.join(sorted(key_counts)))
+          print('FIELD_PRESENCE=' + ','.join(f'{k}:{nested_counts[k]}/{len(rows)}' for k in sorted(nested_counts)))
+          PY
+          test "$status" = "200"
