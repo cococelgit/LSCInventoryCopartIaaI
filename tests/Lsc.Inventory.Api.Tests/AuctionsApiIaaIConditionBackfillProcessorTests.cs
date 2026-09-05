@@ -37,7 +37,7 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessorTests
             apibara,
             store,
             new CanonicalInventoryIngestionPipeline(store),
-            Microsoft.Extensions.Options.Options.Create(new AuctionsApiOptions { Enabled = true, AllowWrites = false, ApiKey = "test", PageSize = 1000 }),
+            Microsoft.Extensions.Options.Options.Create(new AuctionsApiOptions { Enabled = false, AllowWrites = false, ApiKey = "test", PageSize = 1000 }),
             NullLogger<AuctionsApiIaaIConditionBackfillProcessor>.Instance);
 
         var result = await processor.RunAsync(10, DateTimeOffset.UtcNow.AddDays(-1), CancellationToken.None, dryRun: true);

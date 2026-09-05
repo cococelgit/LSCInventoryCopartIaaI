@@ -42,7 +42,8 @@ public sealed class AuctionsApiIaaIConditionBackfillProcessor(
 
     public async Task<AuctionsApiIaaIBackfillResult> RunAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken, bool dryRun = false)
     {
-        if (!_options.IsConfigured)
+        var hasApiKey = !string.IsNullOrWhiteSpace(_options.ApiKey);
+        if (dryRun ? !hasApiKey : !_options.IsConfigured)
             throw new InvalidOperationException("AuctionsAPI is not configured for IAAI backfill.");
         if (!dryRun && !_options.AllowWrites)
             throw new InvalidOperationException("AuctionsAPI canonical writes are disabled for IAAI backfill.");
