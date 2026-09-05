@@ -147,7 +147,11 @@ public sealed record CopartScoringCoverageReport(
     string EligibilityDateUtc = "",
     long EligibleCurrentPolicyScores = 0,
     long EligibleScoresAbove60 = 0,
-    decimal? EligibleMaximumPreGrade = null);
+    decimal? EligibleMaximumPreGrade = null,
+    long Policy60ScoreRows = 0,
+    long Policy60SourceObservedMismatch = 0,
+    long Policy60OutsideEligibleDate = 0,
+    long Policy60InactiveOrMissingSnapshot = 0);
 
 public sealed record CopartScoringBackfillResult(
     int Scanned,

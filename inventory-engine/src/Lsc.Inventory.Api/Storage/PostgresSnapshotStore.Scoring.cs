@@ -202,9 +202,43 @@ public sealed partial class PostgresSnapshotStore
             eligibleMaximumPreGrade = reader.IsDBNull(2) ? null : reader.GetDecimal(2);
         }
 
+        long policy60ScoreRows;
+        long policy60SourceObservedMismatch;
+        long policy60OutsideEligibleDate;
+        long policy60InactiveOrMissingSnapshot;
+        await using (var scoreClassification = connection.CreateCommand())
+        {
+            scoreClassification.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            scoreClassification.CommandText = """
+                select
+                    count(*) filter (where score.policy_version = @policy_version)::bigint,
+                    count(*) filter (where score.policy_version = @policy_version
+                        and current.lot_key is not null
+                        and score.source_observed_at <> current.observed_at)::bigint,
+                    count(*) filter (where score.policy_version = @policy_version
+                        and current.lot_key is not null
+                        and lower(current.platform) = 'copart'
+                        and (current.payload->'auction'->>'auction_at' is null
+                             or left(current.payload->'auction'->>'auction_at', 10) < @cutoff_date))::bigint,
+                    count(*) filter (where score.policy_version = @policy_version
+                        and (current.lot_key is null or not current.is_active))::bigint
+                from inventory_vehicle_score_current score
+                left join inventory_search_current current on current.lot_key = score.lot_key;
+                """;
+            AddParameter(scoreClassification, "policy_version", LscScoringPolicy.CopartPolicyVersion);
+            AddParameter(scoreClassification, "cutoff_date", cutoffDate.ToString("yyyy-MM-dd"));
+            await using var reader = await scoreClassification.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            policy60ScoreRows = reader.GetInt64(0);
+            policy60SourceObservedMismatch = reader.GetInt64(1);
+            policy60OutsideEligibleDate = reader.GetInt64(2);
+            policy60InactiveOrMissingSnapshot = reader.GetInt64(3);
+        }
+
         return new CopartScoringCoverageReport(activeLots, currentScores, Math.Max(0, activeLots - currentScores), statuses,
             lotsWithAuctionFromToday, auctionToday, futureAuctions, withoutAuctionDate, cutoffDate.ToString("yyyy-MM-dd"),
-            eligibleCurrentPolicyScores, eligibleScoresAbove60, eligibleMaximumPreGrade);
+            eligibleCurrentPolicyScores, eligibleScoresAbove60, eligibleMaximumPreGrade,
+            policy60ScoreRows, policy60SourceObservedMismatch, policy60OutsideEligibleDate, policy60InactiveOrMissingSnapshot);
     }
 
     public async Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
