@@ -17,6 +17,8 @@ public interface IInventorySnapshotStore
     /// </summary>
     Task<IAsyncDisposable?> TryAcquireCopartProcessingLeaseAsync(CancellationToken cancellationToken);
     Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken);
+    /// <summary>Persists live backfill progress using the existing sync-run counters.</summary>
+    Task UpdateSyncRunProgressAsync(Guid runId, int vehiclesObserved, int requestsIssued, CancellationToken cancellationToken) => Task.CompletedTask;
     Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken);
     Task<CopartSnapshotRegistration> TryRegisterCopartSnapshotAsync(CopartSnapshotReceipt receipt, decimal minimumRowCountRatio, int baselineSnapshotCount, bool allowInterruptedSnapshotRetry, CancellationToken cancellationToken);
     Task CompleteCopartSnapshotAsync(Guid runId, CopartSnapshotCompletion completion, CancellationToken cancellationToken);

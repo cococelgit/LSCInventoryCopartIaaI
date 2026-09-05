@@ -1280,6 +1280,25 @@ public sealed partial class PostgresSnapshotStore(
         return runId;
     }
 
+    public async Task UpdateSyncRunProgressAsync(Guid runId, int vehiclesObserved, int requestsIssued, CancellationToken cancellationToken)
+    {
+        await EnsureSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            update inventory_sync_runs
+            set vehicles_observed = @vehicles_observed,
+                requests_issued = @requests_issued
+            where run_id = @run_id
+              and status = 'running';
+            """;
+        AddParameter(command, "run_id", runId);
+        AddParameter(command, "vehicles_observed", vehiclesObserved);
+        AddParameter(command, "requests_issued", requestsIssued);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);
