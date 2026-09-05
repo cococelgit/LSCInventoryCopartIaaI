@@ -8,7 +8,17 @@ case "${AuctionsApi__AllowWrites:-}" in true|TRUE|1|yes|YES) allow_writes=true ;
 echo "AuctionsAPI_CONFIG enabled=$enabled has_api_key=$has_key allow_writes=$allow_writes platform=$platform"
 case "$platform" in
   copart)
-    exec dotnet /app/Lsc.Inventory.Api.dll --copart-auctionsapi-dry-run
+    mode="${2:-dry-run}"
+    maximum="${3:-}"
+    case "$mode" in
+      run) flag="--copart-auctionsapi-run" ;;
+      dry-run) flag="--copart-auctionsapi-dry-run" ;;
+      *) echo "Unsupported Copart mode: $mode" >&2; exit 2 ;;
+    esac
+    if [ -n "$maximum" ]; then
+      exec dotnet /app/Lsc.Inventory.Api.dll "$flag" --maximum "$maximum"
+    fi
+    exec dotnet /app/Lsc.Inventory.Api.dll "$flag"
     ;;
   iaai)
     maximum="${2:-15}"

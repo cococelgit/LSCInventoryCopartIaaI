@@ -1074,9 +1074,13 @@ if (args.Contains("--copart-auctionsapi-run", StringComparer.OrdinalIgnoreCase)
     || args.Contains("--copart-auctionsapi-dry-run", StringComparer.OrdinalIgnoreCase))
 {
     var dryRun = args.Contains("--copart-auctionsapi-dry-run", StringComparer.OrdinalIgnoreCase);
+    var maximumIndex = Array.FindIndex(args, argument => string.Equals(argument, "--maximum", StringComparison.OrdinalIgnoreCase));
+    var maximum = maximumIndex >= 0 && maximumIndex + 1 < args.Length && int.TryParse(args[maximumIndex + 1], out var parsedMaximum)
+        ? Math.Clamp(parsedMaximum, 1, 5_000)
+        : (int?)null;
     await using var scope = app.Services.CreateAsyncScope();
     var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiIncrementalSyncProcessor>();
-    var result = await processor.RunAsync("copart", persist: !dryRun, CancellationToken.None);
+    var result = await processor.RunAsync("copart", persist: !dryRun, CancellationToken.None, maximum);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
     if (result.Failures.Count > 0)
     {

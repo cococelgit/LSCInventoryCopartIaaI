@@ -24,7 +24,7 @@ public sealed record AuctionsApiIncrementalSyncResult(
 
 public interface IAuctionsApiIncrementalSyncProcessor
 {
-    Task<AuctionsApiIncrementalSyncResult> RunAsync(string platform, bool persist, CancellationToken cancellationToken);
+    Task<AuctionsApiIncrementalSyncResult> RunAsync(string platform, bool persist, CancellationToken cancellationToken, int? maximumLots = null);
 }
 
 /// <summary>
@@ -41,7 +41,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AuctionsApiOptions _options = options.Value;
 
-    public async Task<AuctionsApiIncrementalSyncResult> RunAsync(string platform, bool persist, CancellationToken cancellationToken)
+    public async Task<AuctionsApiIncrementalSyncResult> RunAsync(string platform, bool persist, CancellationToken cancellationToken, int? maximumLots = null)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (normalizedPlatform is not ("copart" or "iaai")) throw new ArgumentOutOfRangeException(nameof(platform));
@@ -49,8 +49,9 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         if (persist && !_options.AllowWrites) throw new InvalidOperationException("AuctionsAPI canonical writes are disabled until the Owner explicitly approves activation.");
         if (!persist) logger.LogInformation("AuctionsAPI incremental run for {Platform} is shadow-only; no inventory writes will occur.", normalizedPlatform);
 
+        var requestedMaximum = maximumLots is null ? (int?)null : Math.Clamp(maximumLots.Value, 1, 5000);
         var startedAt = DateTimeOffset.UtcNow;
-        var runId = await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart("auctions_api", normalizedPlatform, persist ? "incremental-active" : "incremental-shadow", 2, _options.PageSize, startedAt), cancellationToken);
+        var runId = await snapshotStore.StartSyncRunAsync(new InventorySyncRunStart("auctions_api", normalizedPlatform, persist ? "incremental-active" : "incremental-shadow", requestedMaximum ?? 0, _options.PageSize, startedAt), cancellationToken);
         var leaseName = $"auctions-api-{normalizedPlatform}-incremental";
         var lease = await snapshotStore.TryAcquireLeaseAsync(leaseName, runId, startedAt, TimeSpan.FromMinutes(10), cancellationToken);
         if (!lease.Acquired)
@@ -79,6 +80,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             requests += activeWindow.Requests;
             foreach (var vehicle in MapRows(activeWindow.Rows, normalizedPlatform))
             {
+                if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
                 if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
                 {
                     failures.Add("changed:missing-lot");
@@ -107,18 +109,21 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 }
             }
 
-            var archivedWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: true, cancellationToken);
-            pages += archivedWindow.Pages;
-            requests += archivedWindow.Requests;
-            var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var vehicle in MapRows(archivedWindow.Rows, normalizedPlatform))
+            if (requestedMaximum is null)
             {
-                if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
-                archived++;
-                archivedKeys.Add($"{normalizedPlatform}:{vehicle.LotNumber.Trim()}");
+                var archivedWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: true, cancellationToken);
+                pages += archivedWindow.Pages;
+                requests += archivedWindow.Requests;
+                var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var vehicle in MapRows(archivedWindow.Rows, normalizedPlatform))
+                {
+                    if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
+                    archived++;
+                    archivedKeys.Add($"{normalizedPlatform}:{vehicle.LotNumber.Trim()}");
+                }
+                if (persist && archivedKeys.Count > 0)
+                    deactivated = await snapshotStore.DeactivateArchivedLotsAsync(normalizedPlatform, archivedKeys, DateTimeOffset.UtcNow, cancellationToken, runId);
             }
-            if (persist && archivedKeys.Count > 0)
-                deactivated = await snapshotStore.DeactivateArchivedLotsAsync(normalizedPlatform, archivedKeys, DateTimeOffset.UtcNow, cancellationToken, runId);
 
             var finishedAt = DateTimeOffset.UtcNow;
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, changed + archived, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), CancellationToken.None);
