@@ -63,7 +63,7 @@ jobs:
           key_counts = Counter()
           path_counts = Counter()
           status_counts = Counter()
-          target_keys = {'lot','lots','condition','seller','images','media','damage','location','odometer','keys_available','key_available','run_and_drive','run_condition','airbags','trim','series','model_detail','body_style','vehicle_type','sale_date','title','manufacturer','model','bid','buy_now','status','keys'}
+          target_keys = {'lot','lots','condition','seller','seller_name','sellerName','consignor','owner','images','media','damage','location','odometer','keys_available','key_available','run_and_drive','run_and_drive_label','run_drive','runs_and_drives','run_condition','start_code','condition_code','vehicle_condition','airbags','trim','series','model_detail','body_style','vehicle_type','sale_date','title','title_type','title_type_label','manufacturer','model','bid','buy_now','status','keys'}
           def walk(value, path=''):
               if isinstance(value, dict):
                   for key, child in value.items():
@@ -92,7 +92,7 @@ jobs:
                   status = str(raw_status)
               status = status.strip().upper() or 'MISSING'
               status_counts[status] += 1
-              for field in ('sale_date','seller','seller_type','airbags','keys_available','condition','images','odometer'):
+              for field in ('sale_date','seller','seller_name','seller_type','consignor','run_and_drive','run_drive','runs_and_drives','run_condition','start_code','vehicle_condition','airbags','keys_available','condition','images','odometer'):
                   if nonempty(lot.get(field)) or nonempty(parent.get(field)):
                       path_counts[f'by_status.{status}.{field}'] += 1
           print('UNIT_COUNT=' + str(len(units)))
