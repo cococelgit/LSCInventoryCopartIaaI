@@ -1,0 +1,99 @@
+name: Run Copart AuctionsAPI dry-run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-auctionsapi-dry-run
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  COPART_API_JOB_NAME: job-lsc-copart-auto-prod
+
+jobs:
+  dry-run:
+    name: Run Copart AuctionsAPI without writes
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Start one Copart AuctionsAPI dry-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          trigger="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          test -n "$image" && test "$image" != "None"
+          echo "IMAGE=$image"
+          echo "TRIGGER_BEFORE=$trigger"
+          execution="$(az containerapp job start \
+            --name "$COPART_API_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$image" \
+            --command=/app/run-auctionsapi-dry-run.sh \
+            --args=copart \
+            -o json)"
+          echo "$execution" | jq .
+          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+          test -n "$execution_name"
+          echo "COPART_API_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
+          echo "COPART_API_TRIGGER_BEFORE=$trigger" >> "$GITHUB_ENV"
+          echo "COPART_API_IMAGE_BEFORE=$image" >> "$GITHUB_ENV"
+
+      - name: Wait and collect execution logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1800))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            execution="$(az containerapp job execution show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$COPART_API_EXECUTION_NAME" -o json)"
+            status="$(echo "$execution" | jq -r '.properties.status // .properties.runningState // "Unknown"')"
+            echo "Copart API dry-run status: $status"
+            case "$status" in
+              Succeeded|Failed|Canceled)
+                echo "$execution" | jq .
+                replica_json="$(az containerapp job replica list --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$COPART_API_EXECUTION_NAME" -o json || true)"
+                replica="$(echo "$replica_json" | jq -r '.[0].name // empty')"
+                container="$(echo "$replica_json" | jq -r '.[0].properties.containers[0].name // empty')"
+                echo "$replica_json" | jq . || true
+                if [ -n "$replica" ] && [ -n "$container" ]; then
+                  az containerapp job logs show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$COPART_API_EXECUTION_NAME" --replica "$replica" --container "$container" --tail 400 --format text || true
+                fi
+                test "$status" = "Succeeded"
+                exit 0
+                ;;
+            esac
+            sleep 20
+          done
+          echo "Timed out waiting for Copart API dry-run" >&2
+          exit 1
+
+      - name: Verify job configuration was unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          trigger_after="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          image_after="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          test "$trigger_after" = "$COPART_API_TRIGGER_BEFORE"
+          test "$image_after" = "$COPART_API_IMAGE_BEFORE"
+          echo "COPART_API_DRY_RUN_CONFIGURATION_UNCHANGED=true"
+          echo "TRIGGER=$trigger_after"
+          echo "IMAGE=$image_after"
+          echo "WRITES=false"
