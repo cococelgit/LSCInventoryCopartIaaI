@@ -1,0 +1,38 @@
+name: Copart PostgreSQL Pending Count
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Query Copart inventory read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          psql "host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require" \
+            --tuples-only --no-align --field-separator='|' \
+            -c "WITH latest AS (SELECT DISTINCT ON (lot_key) lot_key, is_active, payload, platform, lot_number FROM inventory_search_current WHERE platform='copart' ORDER BY lot_key, observed_at DESC), normalized AS (SELECT latest.*, COALESCE(NULLIF(payload->>'sale_date',''), NULLIF(payload#>>'{auction,sale_date}',''), NULLIF(payload#>>'{auction,auction_at}','')) AS sale_date_text, COALESCE(NULLIF(payload->>'seller_name',''), NULLIF(payload#>>'{seller,name}',''), NULLIF(payload->>'seller','')) AS seller_text FROM latest) SELECT CURRENT_DATE, COUNT(*) FILTER (WHERE is_active), COUNT(*) FILTER (WHERE is_active AND sale_date_text IS NOT NULL AND sale_date_text::timestamptz::date >= CURRENT_DATE), COUNT(*) FILTER (WHERE is_active AND sale_date_text IS NULL), COUNT(*) FILTER (WHERE is_active AND score.pre_grade IS NULL), COUNT(*) FILTER (WHERE is_active AND seller_text IS NULL) FROM normalized LEFT JOIN inventory_vehicle_score_current score ON score.lot_key=normalized.lot_key;"
