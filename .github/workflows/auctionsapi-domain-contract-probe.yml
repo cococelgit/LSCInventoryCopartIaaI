@@ -85,7 +85,12 @@ jobs:
               units.extend([(row, lot) for lot in nested if isinstance(lot, dict)] or [(row, row)])
               walk(row)
           for parent, lot in units:
-              status = str(lot.get('status') or parent.get('status') or 'MISSING').strip().upper() or 'MISSING'
+              raw_status = lot.get('status') or parent.get('status') or 'MISSING'
+              if isinstance(raw_status, dict):
+                  status = str(raw_status.get('name') or raw_status.get('NAME') or raw_status.get('value') or raw_status.get('id') or 'MISSING')
+              else:
+                  status = str(raw_status)
+              status = status.strip().upper() or 'MISSING'
               status_counts[status] += 1
               for field in ('sale_date','seller','seller_type','airbags','keys_available','condition','images','odometer'):
                   if nonempty(lot.get(field)) or nonempty(parent.get(field)):
