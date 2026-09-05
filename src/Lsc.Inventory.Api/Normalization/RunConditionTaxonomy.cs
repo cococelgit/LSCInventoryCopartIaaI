@@ -15,6 +15,7 @@ public static class RunConditionTaxonomy
             .Replace("&", " AND ", StringComparison.Ordinal)
             .Replace("/", " AND ", StringComparison.Ordinal)
             .Replace("-", " ", StringComparison.Ordinal)
+            .Replace("_", " ", StringComparison.Ordinal)
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
         if (normalized.Contains("RUNS AND DRIVES", StringComparison.Ordinal)

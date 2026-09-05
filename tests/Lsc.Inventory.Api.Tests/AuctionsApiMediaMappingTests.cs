@@ -93,7 +93,7 @@ public sealed class AuctionsApiMediaMappingTests
               "sale_date":"2026-09-12T14:00:00Z",
               "status":{"name":"UPCOMING"},
               "seller":{"name":"Example Fleet","type":"Fleet","class":"fleet"},
-              "run_condition":{"value":"RUNS AND DRIVES","label":"Run & Drive"},
+              "condition":{"id":2,"name":"run_and_drives"},
               "lots":[{"lot":"10000004","domain":{"id":3},"images":["https://cdn.example.com/copart-parent.jpg"]}]
             }]
             """);
