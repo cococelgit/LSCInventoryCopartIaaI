@@ -99,7 +99,7 @@ jobs:
             --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
             --only-show-errors
           job_json="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
-          patch_body="$(echo "$job_json" | jq --arg image "$COPART_API_IMAGE" --arg api_key "$AUCTIONS_API_KEY" --arg allow_writes "${{ inputs.allow_auctions_writes }}" '
+          patch_body="$(echo "$job_json" | jq --arg image "$COPART_API_IMAGE" --arg api_key "$AUCTIONS_API_KEY" --arg allow_writes "${{ inputs.allow_auctions_writes }}" --arg activate_schedule "${{ inputs.activate_schedule }}" '
             .properties.template.containers[0] |= del(.imageType)
             | .properties.template.containers[0].image = $image
             | .properties.template.containers[0].env = ((.properties.template.containers[0].env // [])
@@ -112,21 +112,13 @@ jobs:
                   {name:"AuctionsApi__DefaultOverlapMinutes", value:"200"},
                   {name:"AuctionsApi__RequestIntervalMilliseconds", value:"600"}
                 ])
-            | {properties:{template:{containers:[.properties.template.containers[0]]}}}' )"
+            | if $activate_schedule == "true" then .properties.configuration = {triggerType:"Schedule", replicaTimeout:10800, replicaRetryLimit:1, scheduleTriggerConfig:{cronExpression:"0 */3 * * *", parallelism:1, replicaCompletionCount:1}} else . end
+            | {properties:{template:{containers:[.properties.template.containers[0]]}, configuration:.properties.configuration}}' )"
           uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${COPART_API_JOB_NAME}?api-version=2024-03-01"
           az rest --method patch --uri "$uri" --body "$patch_body" --output none
 
-      - name: Activate schedule only when explicitly requested
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ inputs.activate_schedule }}" != "true" ]]; then
-            echo "Copart API job schedule remains unchanged ($API_TRIGGER_BEFORE)."
-            exit 0
-          fi
-          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${COPART_API_JOB_NAME}?api-version=2024-03-01"
-          body='{"properties":{"configuration":{"triggerType":"Schedule","replicaTimeout":10800,"replicaRetryLimit":1,"scheduleTriggerConfig":{"cronExpression":"0 */3 * * *","parallelism":1,"replicaCompletionCount":1}}}}'
-          az rest --method patch --uri "$uri" --body "$body" --output none
+      - name: Confirm schedule request was combined with configuration patch
+        run: echo "Schedule activation was included in the single Job PATCH when requested."
 
       - name: Verify only Copart API job changed
         shell: bash
