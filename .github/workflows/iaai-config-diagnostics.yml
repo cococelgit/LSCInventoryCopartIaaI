@@ -1,0 +1,79 @@
+name: IAAI AuctionsAPI Configuration Diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB_NAME: job-lsc-iaai-pilot-prod
+
+jobs:
+  diagnose:
+    name: Diagnose IAAI AuctionsAPI booleans
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Start boolean-only diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          trigger="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          echo "JOB_TRIGGER=$trigger"
+          echo "JOB_IMAGE=$image"
+          execution="$(az containerapp job start \
+            --name "$IAAI_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$image" \
+            --command=/app/diagnose-iaai-config.sh \
+            -o json)"
+          echo "$execution" | jq .
+          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+          test -n "$execution_name"
+          echo "IAAI_DIAGNOSTIC_EXECUTION=$execution_name" >> "$GITHUB_ENV"
+      - name: Wait and collect boolean output
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 600))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            execution="$(az containerapp job execution show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$IAAI_DIAGNOSTIC_EXECUTION" -o json)"
+            status="$(echo "$execution" | jq -r '.properties.status // .properties.runningState // "Unknown"')"
+            echo "Diagnostic status: $status"
+            case "$status" in
+              Succeeded|Failed|Canceled)
+                echo "$execution" | jq '{status:.properties.status, runningStateDetails:.properties.runningStateDetails}'
+                replica_json="$(az containerapp job replica list --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$IAAI_DIAGNOSTIC_EXECUTION" -o json || true)"
+                replica="$(echo "$replica_json" | jq -r '.[0].name // empty')"
+                container="$(echo "$replica_json" | jq -r '.[0].properties.containers[0].name // empty')"
+                if [ -n "$replica" ] && [ -n "$container" ]; then
+                  az containerapp job logs show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$IAAI_DIAGNOSTIC_EXECUTION" --replica "$replica" --container "$container" --tail 50 --format text || true
+                fi
+                test "$status" = "Succeeded"
+                exit 0
+                ;;
+            esac
+            sleep 15
+          done
+          echo "Timed out waiting for diagnostic" >&2
+          exit 1
+      - name: Verify Job trigger was unchanged
+        run: |
+          trigger_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          echo "JOB_TRIGGER_AFTER=$trigger_after"
+          test "$trigger_after" = "Schedule"
