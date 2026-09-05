@@ -84,6 +84,11 @@ public sealed class CopartScoringBackfillProcessor(
                     }
                 }
 
+                await snapshotStore.UpdateSyncRunProgressAsync(runId, scanned, scanned, cancellationToken);
+                logger.LogInformation(
+                    "Copart scoring backfill heartbeat: {Scanned} scanned, {Scored} scored, {Unchanged} unchanged, {Ineligible} ineligible, {Failed} failed, batch_size {BatchSize}.",
+                    scanned, scored, scoreSkippedUnchanged, skippedIneligible, failed, batch.Count);
+
                 // Avoid a busy loop if candidates cannot be advanced due to a persistent failure.
                 if (progressed == 0 || batch.Count < requestedBatchSize) break;
             }
