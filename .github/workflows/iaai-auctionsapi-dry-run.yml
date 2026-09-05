@@ -55,8 +55,11 @@ jobs:
             --name "$IAAI_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --image "$image_before" \
-            --command /bin/sh -c \
-            --args "exec dotnet /app/Lsc.Inventory.Api.dll --iaai-auctionsapi-backfill-dry-run --maximum $MAXIMUM" \
+            --command=dotnet \
+            --args=Lsc.Inventory.Api.dll \
+            --args=--iaai-auctionsapi-backfill-dry-run \
+            --args=--maximum \
+            --args="$MAXIMUM" \
             -o json)"
           echo "$execution" | jq .
           execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
