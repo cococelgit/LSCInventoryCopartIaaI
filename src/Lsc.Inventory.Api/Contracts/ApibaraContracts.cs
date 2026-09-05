@@ -328,6 +328,7 @@ public sealed record VehicleSpecs
     public string? BodyStyle { get; init; }
 
     [JsonPropertyName("engine")]
+    [JsonConverter(typeof(VehicleEngineJsonConverter))]
     public VehicleEngine? Engine { get; init; }
 
     [JsonPropertyName("airbags")]

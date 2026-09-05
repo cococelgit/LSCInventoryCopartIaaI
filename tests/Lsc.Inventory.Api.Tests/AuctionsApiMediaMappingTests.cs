@@ -80,6 +80,27 @@ public sealed class AuctionsApiMediaMappingTests
     }
 
     [Fact]
+    public void MapRows_accepts_copart_engine_as_string_object_or_null()
+    {
+        using var document = JsonDocument.Parse("""
+            [
+              {"vin":"3TESTVIN123456789","year":2021,"manufacturer":{"name":"Ford"},"model":{"name":"Escape"},"lots":[{"lot":"10000001","domain":{"id":3},"vehicle_specs":{"engine":"2.0L Turbo"}}]},
+              {"vin":"4TESTVIN123456789","year":2022,"manufacturer":{"name":"Toyota"},"model":{"name":"Camry"},"lots":[{"lot":"10000002","domain":{"id":3},"vehicle_specs":{"engine":{"size_l":"3.5","hp":"290","layout":"V6"}}}]},
+              {"vin":"5TESTVIN123456789","year":2023,"manufacturer":{"name":"Honda"},"model":{"name":"Civic"},"lots":[{"lot":"10000003","domain":{"id":3},"vehicle_specs":{"engine":null}}]}
+            ]
+            """);
+
+        var mapped = AuctionsApiIncrementalSyncProcessor.MapRows(document.RootElement.EnumerateArray(), "copart").ToArray();
+
+        Assert.Equal(3, mapped.Length);
+        Assert.Equal("2.0L Turbo", mapped[0].VehicleSpecs?.Engine?.Raw);
+        Assert.Equal("3.5", mapped[1].VehicleSpecs?.Engine?.SizeLiters);
+        Assert.Equal(290m, mapped[1].VehicleSpecs?.Engine?.Horsepower);
+        Assert.Equal("V6", mapped[1].VehicleSpecs?.Engine?.Layout);
+        Assert.Null(mapped[2].VehicleSpecs?.Engine);
+    }
+
+    [Fact]
     public void MapRows_extracts_and_deduplicates_lot_image_object_urls()
     {
         using var document = JsonDocument.Parse("""

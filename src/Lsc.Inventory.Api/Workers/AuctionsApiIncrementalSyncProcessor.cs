@@ -267,6 +267,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             ["vehicle_specs"] = new Dictionary<string, object?>
             {
                 ["body_style"] = Scalar(vehicleRow, "body_style", "vehicle_type.name", "vehicle_type"),
+                ["engine"] = At(lotRow, "vehicle_specs.engine") ?? At(lotRow, "engine") ?? At(vehicleRow, "vehicle_specs.engine") ?? At(vehicleRow, "engine"),
                 ["airbags"] = Scalar(lotRow, "vehicle_specs.airbags", "airbags", "airbag"),
                 ["restraint_system"] = Scalar(lotRow, "vehicle_specs.restraint_system", "restraint_system", "restraint"),
             },
