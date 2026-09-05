@@ -74,7 +74,7 @@ jobs:
                 container="$(echo "$replica_json" | jq -r '.[0].properties.containers[0].name // empty')"
                 echo "$replica_json" | jq . || true
                 if [ -n "$replica" ] && [ -n "$container" ]; then
-                  az containerapp job logs show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$COPART_API_EXECUTION_NAME" --replica "$replica" --container "$container" --tail 400 --format text || true
+                  az containerapp job logs show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --execution "$COPART_API_EXECUTION_NAME" --replica "$replica" --container "$container" --tail 300 --format text || true
                 fi
                 test "$status" = "Succeeded"
                 exit 0
