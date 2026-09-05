@@ -10,7 +10,7 @@ public sealed class ApibaraOptions
     [Url]
     public string BaseUrl { get; init; } = "https://apibara.tech/api/v1/vehicle-auction/";
 
-    [Required]
+    /// <summary>Required only when an Apibara request is actually made.</summary>
     public string ApiKey { get; init; } = string.Empty;
 
     [Range(1, 20)]

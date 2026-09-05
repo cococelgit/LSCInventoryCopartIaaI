@@ -81,6 +81,11 @@ public sealed class ApibaraClient(
     private async Task<T> GetAsync<T>(string relativePath, Dictionary<string, string?>? query, CancellationToken cancellationToken)
         where T : class
     {
+        if (string.IsNullOrWhiteSpace(_options.ApiKey))
+        {
+            throw new InvalidOperationException("Apibara API key is required before making an Apibara request.");
+        }
+
         var path = query is null
             ? relativePath
             : QueryHelpers.AddQueryString(relativePath, query.Where(x => !string.IsNullOrWhiteSpace(x.Value)).ToDictionary());

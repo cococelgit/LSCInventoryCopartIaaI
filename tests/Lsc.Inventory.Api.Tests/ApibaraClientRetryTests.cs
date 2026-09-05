@@ -26,6 +26,26 @@ public sealed class ApibaraClientRetryTests
     }
 
     [Fact]
+    public async Task Missing_api_key_fails_before_sending_a_request()
+    {
+        var handler = new SequenceHandler(Response(HttpStatusCode.OK, "{}"));
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://apibara.test/") };
+        var options = Microsoft.Extensions.Options.Options.Create(new ApibaraOptions
+        {
+            ApiKey = string.Empty,
+            BaseUrl = "https://apibara.test/",
+            RetryMaxAttempts = 1
+        });
+        var client = new ApibaraClient(httpClient, options, new ProviderRequestLimiter(), NullLogger<ApibaraClient>.Instance);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.SearchVehiclesAsync(new VehicleSearchRequest("iaai", "Open"), CancellationToken.None));
+
+        Assert.Contains("API key is required", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, handler.Requests);
+    }
+
+    [Fact]
     public async Task Retries_transient_502_and_returns_the_successful_payload()
     {
         var handler = new SequenceHandler(
