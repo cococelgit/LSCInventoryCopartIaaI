@@ -40,7 +40,7 @@ jobs:
           source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
           body="$(echo "$source_json" | jq --arg name "$CATCHUP_JOB" --arg key "$AUCTIONS_API_KEY" '
             .location as $location
-            | .identity as $identity
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
             | .properties.configuration as $sourceConfiguration
             | .properties.template as $sourceTemplate
             | ($sourceTemplate.containers[0]
