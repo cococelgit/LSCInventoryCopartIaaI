@@ -1070,6 +1070,22 @@ if (args.Contains("--copart-excel-run", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--copart-auctionsapi-run", StringComparer.OrdinalIgnoreCase)
+    || args.Contains("--copart-auctionsapi-dry-run", StringComparer.OrdinalIgnoreCase))
+{
+    var dryRun = args.Contains("--copart-auctionsapi-dry-run", StringComparer.OrdinalIgnoreCase);
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiIncrementalSyncProcessor>();
+    var result = await processor.RunAsync("copart", persist: !dryRun, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    if (result.Failures.Count > 0)
+    {
+        Environment.ExitCode = 1;
+    }
+
+    return;
+}
+
 if (args.Contains("--iaai-auctionsapi-backfill", StringComparer.OrdinalIgnoreCase)
     || args.Contains("--iaai-auctionsapi-backfill-dry-run", StringComparer.OrdinalIgnoreCase))
 {

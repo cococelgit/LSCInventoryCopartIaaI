@@ -1,0 +1,148 @@
+name: Promote Copart AuctionsAPI job
+
+on:
+  workflow_dispatch:
+    inputs:
+      activate_schedule:
+        description: "Activate the Copart AuctionsAPI schedule after validation"
+        required: true
+        default: false
+        type: boolean
+      allow_auctions_writes:
+        description: "Allow canonical writes from Copart AuctionsAPI"
+        required: true
+        default: false
+        type: boolean
+      mode:
+        description: "Container mode for the Copart AuctionsAPI job"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - run
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-auctionsapi-job-promote
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  COPART_API_JOB_NAME: job-lsc-copart-auto-prod
+  COPART_EXCEL_JOB_NAME: job-lsc-copart-excel-prod
+
+jobs:
+  promote:
+    name: Build and configure Copart AuctionsAPI job
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout selected commit
+        uses: actions/checkout@v4
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture protected baselines
+        shell: bash
+        run: |
+          set -euo pipefail
+          excel_image_before="$(az containerapp job show --name "$COPART_EXCEL_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          api_job_before="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          api_image_before="$(echo "$api_job_before" | jq -r '.properties.template.containers[0].image')"
+          api_trigger_before="$(echo "$api_job_before" | jq -r '.properties.configuration.triggerType')"
+          api_without_image_before="$(echo "$api_job_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          test -n "$excel_image_before" && test "$excel_image_before" != "None"
+          test -n "$api_image_before" && test "$api_image_before" != "None"
+          echo "EXCEL_IMAGE_BEFORE=$excel_image_before" >> "$GITHUB_ENV"
+          echo "API_IMAGE_BEFORE=$api_image_before" >> "$GITHUB_ENV"
+          echo "API_TRIGGER_BEFORE=$api_trigger_before" >> "$GITHUB_ENV"
+          echo "API_WITHOUT_IMAGE_BEFORE=$api_without_image_before" >> "$GITHUB_ENV"
+          echo "Excel job remains protected: $excel_image_before"
+          echo "Copart API job image before: $api_image_before"
+          echo "Copart API job trigger before: $api_trigger_before"
+
+      - name: Build immutable Copart AuctionsAPI image
+        run: |
+          set -euo pipefail
+          image_tag="copart-auctionsapi-${GITHUB_SHA}"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file Dockerfile .
+          echo "COPART_API_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
+
+      - name: Configure Copart API job only
+        shell: bash
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          if [[ "${{ inputs.mode }}" == "dry-run" ]]; then
+            mode_arg="--copart-auctionsapi-dry-run"
+          else
+            mode_arg="--copart-auctionsapi-run"
+          fi
+          az containerapp job secret set \
+            --name "$COPART_API_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
+            --only-show-errors
+          az containerapp job update \
+            --name "$COPART_API_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$COPART_API_IMAGE" \
+            --command dotnet Lsc.Inventory.Api.dll \
+            --args "$mode_arg" \
+            --set-env-vars \
+              "AuctionsApi__ApiKey=$AUCTIONS_API_KEY" \
+              "AuctionsApi__Enabled=true" \
+              "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
+              "AuctionsApi__PageSize=1000" \
+              "AuctionsApi__DefaultOverlapMinutes=200" \
+              "AuctionsApi__RequestIntervalMilliseconds=600" \
+            --only-show-errors
+
+      - name: Activate schedule only when explicitly requested
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.activate_schedule }}" != "true" ]]; then
+            echo "Copart API job schedule remains unchanged ($API_TRIGGER_BEFORE)."
+            exit 0
+          fi
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${COPART_API_JOB_NAME}?api-version=2024-03-01"
+          body='{"properties":{"configuration":{"triggerType":"Schedule","replicaTimeout":10800,"replicaRetryLimit":1,"scheduleTriggerConfig":{"cronExpression":"0 */3 * * *","parallelism":1,"replicaCompletionCount":1}}}}'
+          az rest --method patch --uri "$uri" --body "$body" --output none
+
+      - name: Verify only Copart API job changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          excel_image_after="$(az containerapp job show --name "$COPART_EXCEL_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          api_after="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          api_image_after="$(echo "$api_after" | jq -r '.properties.template.containers[0].image')"
+          api_trigger_after="$(echo "$api_after" | jq -r '.properties.configuration.triggerType')"
+          test "$excel_image_after" = "$EXCEL_IMAGE_BEFORE"
+          test "$api_image_after" = "$COPART_API_IMAGE"
+          if [[ "${{ inputs.activate_schedule }}" == "true" ]]; then test "$api_trigger_after" = "Schedule"; else test "$api_trigger_after" = "$API_TRIGGER_BEFORE"; fi
+          echo "COPART_EXCEL_UNCHANGED=true"
+          echo "COPART_API_IMAGE=$api_image_after"
+          echo "COPART_API_TRIGGER=$api_trigger_after"
+          echo "COPART_API_WRITES=${{ inputs.allow_auctions_writes }}"
+          echo "COPART_API_PROMOTION_COMPLETED=true"

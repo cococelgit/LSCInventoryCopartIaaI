@@ -349,7 +349,18 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     }
 
     private static int? Number(JsonElement value, params string[] paths) => int.TryParse(Scalar(value, paths), out var number) ? number : null;
-    private static bool? Bool(JsonElement value, params string[] paths) => bool.TryParse(Scalar(value, paths), out var result) ? result : null;
+    private static bool? Bool(JsonElement value, params string[] paths)
+    {
+        var raw = Scalar(value, paths)?.Trim();
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        if (bool.TryParse(raw, out var parsed)) return parsed;
+        return raw.ToUpperInvariant() switch
+        {
+            "YES" or "Y" or "AVAILABLE" or "PRESENT" or "INTACT" => true,
+            "NO" or "N" or "NONE" or "MISSING" or "NOT AVAILABLE" => false,
+            _ => null
+        };
+    }
 
     private static string[] ImageUrls(params JsonElement[] rows)
     {
