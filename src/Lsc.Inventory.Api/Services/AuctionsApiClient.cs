@@ -59,8 +59,8 @@ public sealed class AuctionsApiClient(
 
     private async Task<AuctionsApiPage> GetPageAsync(string path, AuctionsApiWindowRequest request, CancellationToken cancellationToken, IReadOnlyDictionary<string, string?>? explicitQuery = null)
     {
-        if (!_options.IsConfigured)
-            throw new InvalidOperationException("AuctionsAPI is disabled. Enable it only for an approved shadow evaluation.");
+        if (string.IsNullOrWhiteSpace(_options.ApiKey))
+            throw new InvalidOperationException("AuctionsAPI API key is missing.");
         if (request.DomainId is not (1 or 3))
             throw new ArgumentOutOfRangeException(nameof(request.DomainId), "Only IAAI (1) and Copart (3) are allowed in this adapter.");
         if (request.Minutes is not null and (< 1 or > 4320))
