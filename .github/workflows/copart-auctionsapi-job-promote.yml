@@ -98,18 +98,22 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
             --only-show-errors
-          az containerapp job update \
-            --name "$COPART_API_JOB_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            --image "$COPART_API_IMAGE" \
-            --set-env-vars \
-              "AuctionsApi__ApiKey=$AUCTIONS_API_KEY" \
-              "AuctionsApi__Enabled=true" \
-              "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
-              "AuctionsApi__PageSize=1000" \
-              "AuctionsApi__DefaultOverlapMinutes=200" \
-              "AuctionsApi__RequestIntervalMilliseconds=600" \
-            --only-show-errors
+          job_json="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          patch_body="$(echo "$job_json" | jq --arg image "$COPART_API_IMAGE" --arg api_key "$AUCTIONS_API_KEY" --arg allow_writes "${{ inputs.allow_auctions_writes }}" '
+            .properties.template.containers[0].image = $image
+            | .properties.template.containers[0].env = ((.properties.template.containers[0].env // [])
+              | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__PageSize" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__RequestIntervalMilliseconds"))
+              + [
+                  {name:"AuctionsApi__ApiKey", value:$api_key},
+                  {name:"AuctionsApi__Enabled", value:"true"},
+                  {name:"AuctionsApi__AllowWrites", value:$allow_writes},
+                  {name:"AuctionsApi__PageSize", value:"1000"},
+                  {name:"AuctionsApi__DefaultOverlapMinutes", value:"200"},
+                  {name:"AuctionsApi__RequestIntervalMilliseconds", value:"600"}
+                ])
+            | {properties:{template:{containers:[.properties.template.containers[0]]}}}' )"
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${COPART_API_JOB_NAME}?api-version=2024-03-01"
+          az rest --method patch --uri "$uri" --body "$patch_body" --output none
 
       - name: Activate schedule only when explicitly requested
         shell: bash
@@ -131,11 +135,19 @@ jobs:
           api_after="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
           api_image_after="$(echo "$api_after" | jq -r '.properties.template.containers[0].image')"
           api_trigger_after="$(echo "$api_after" | jq -r '.properties.configuration.triggerType')"
+          enabled_after="$(echo "$api_after" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')"
+          allow_writes_after="$(echo "$api_after" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')"
+          has_key_after="$(echo "$api_after" | jq -r 'any(.properties.template.containers[0].env[]?; .name=="AuctionsApi__ApiKey" and ((.value // "") != "" or (.secretRef // "") != ""))')"
           test "$excel_image_after" = "$EXCEL_IMAGE_BEFORE"
           test "$api_image_after" = "$COPART_API_IMAGE"
+          test "$enabled_after" = "true"
+          test "$allow_writes_after" = "${{ inputs.allow_auctions_writes }}"
+          test "$has_key_after" = "true"
           if [[ "${{ inputs.activate_schedule }}" == "true" ]]; then test "$api_trigger_after" = "Schedule"; else test "$api_trigger_after" = "$API_TRIGGER_BEFORE"; fi
           echo "COPART_EXCEL_UNCHANGED=true"
           echo "COPART_API_IMAGE=$api_image_after"
           echo "COPART_API_TRIGGER=$api_trigger_after"
           echo "COPART_API_WRITES=${{ inputs.allow_auctions_writes }}"
+          echo "COPART_API_ENABLED=$enabled_after"
+          echo "COPART_API_KEY_PRESENT=$has_key_after"
           echo "COPART_API_PROMOTION_COMPLETED=true"
