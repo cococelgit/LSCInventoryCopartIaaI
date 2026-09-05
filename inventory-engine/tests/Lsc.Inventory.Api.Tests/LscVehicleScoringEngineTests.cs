@@ -66,7 +66,7 @@ public sealed class LscVehicleScoringEngineTests
         var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
 
         Assert.Equal("PRE_GRADED_WITH_FLAGS", result.Status);
-        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.Evaluated && factor.Points == 25m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.Evaluated && factor.Points == 15m);
         Assert.DoesNotContain("M04", result.ReasonCodes);
     }
 
@@ -102,20 +102,21 @@ public sealed class LscVehicleScoringEngineTests
     }
 
     [Fact]
-    public void Copart_v3_normalizes_evaluable_factors_to_a_100_point_scale()
+    public void Copart_v3_uses_the_same_60_point_factor_scale_as_iaai()
     {
         var vehicle = ValidVehicle() with { Platform = "copart" };
         var result = LscVehicleScoringEngine.Evaluate(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, EvaluationTime), EvaluationTime);
 
-        Assert.Equal("lsc_pre_grade_v3", result.PolicyVersion);
-        Assert.Equal(100m, result.MaxPointsEvaluable);
+        Assert.Equal("lsc_pre_grade_v3_60", result.PolicyVersion);
+        Assert.Equal(60m, result.MaxPointsEvaluable);
         Assert.Equal(100m, result.CoveragePercent);
-        Assert.Equal(82.7m, result.PreGrade);
-        Assert.Contains(result.Factors, factor => factor.Code == "F01" && factor.MaxPointsEvaluable == 20m);
-        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.MaxPointsEvaluable == 25m);
-        Assert.Contains(result.Factors, factor => factor.Code == "F03" && factor.MaxPointsEvaluable == 25m);
-        Assert.Contains(result.Factors, factor => factor.Code == "F04" && factor.MaxPointsEvaluable == 15m);
-        Assert.Contains(result.Factors, factor => factor.Code == "F05" && factor.MaxPointsEvaluable == 15m);
+        Assert.Equal(49m, result.PreGrade);
+        Assert.Contains(result.Factors, factor => factor.Code == "F01" && factor.MaxPointsEvaluable == 15m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F02" && factor.MaxPointsEvaluable == 15m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F03" && factor.MaxPointsEvaluable == 15m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F04" && factor.MaxPointsEvaluable == 10m);
+        Assert.Contains(result.Factors, factor => factor.Code == "F05" && factor.MaxPointsEvaluable == 5m);
+        Assert.InRange(result.PreGrade!.Value, 0m, 60m);
     }
 
     [Fact]
