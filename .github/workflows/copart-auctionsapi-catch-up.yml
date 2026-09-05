@@ -65,7 +65,7 @@ jobs:
           image="$ACR_NAME.azurecr.io/$IMAGE_NAME:copart-catch-up-${GITHUB_SHA}"
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:copart-catch-up-${GITHUB_SHA}" --file Dockerfile .
           job_json="$(az containerapp job show -n "$JOB_NAME" -g "$RESOURCE_GROUP" -o json)"
-          restore_body="$(echo "$job_json" | jq '.properties.template.containers[0] |= del(.imageType) | .properties.configuration |= del(.identitySettings) | {properties:{template:{containers:[.properties.template.containers[0]]},configuration:.properties.configuration}}')"
+          restore_body="$(echo "$job_json" | jq --arg key "$AUCTIONS_API_KEY" '.properties.template.containers[0] |= (del(.imageType) | .command=["/app/run-auctionsapi-dry-run.sh"] | .args=["copart","run","500"] | .env=((.env // []) | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__ApiKey",value:$key},{name:"AuctionsApi__Enabled",value:"true"},{name:"AuctionsApi__AllowWrites",value:"true"}])) | .properties.configuration |= (del(.identitySettings) | .triggerType="Schedule" | .schedule="0 */3 * * *") | {properties:{template:{containers:[.properties.template.containers[0]]},configuration:.properties.configuration}}')"
           restore_template() { az rest --method patch --uri "$uri" --body "$restore_body" --output none || true; }
           trap restore_template EXIT
           mode="catch-up-dry-run"
