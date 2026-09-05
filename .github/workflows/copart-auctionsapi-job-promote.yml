@@ -93,11 +93,6 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$AUCTIONS_API_KEY"
-          if [[ "${{ inputs.mode }}" == "dry-run" ]]; then
-            mode_arg="--copart-auctionsapi-dry-run"
-          else
-            mode_arg="--copart-auctionsapi-run"
-          fi
           az containerapp job secret set \
             --name "$COPART_API_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
@@ -107,8 +102,6 @@ jobs:
             --name "$COPART_API_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --image "$COPART_API_IMAGE" \
-            --command dotnet Lsc.Inventory.Api.dll \
-            --args "$mode_arg" \
             --set-env-vars \
               "AuctionsApi__ApiKey=$AUCTIONS_API_KEY" \
               "AuctionsApi__Enabled=true" \

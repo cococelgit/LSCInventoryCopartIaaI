@@ -13,8 +13,9 @@ ENV ASPNETCORE_URLS=http://+:8080 \
 RUN adduser --disabled-password --gecos "" --uid 10001 appuser
 COPY --from=build /app/publish .
 COPY docker/run-iaai-dry-run.sh /app/run-iaai-dry-run.sh
+COPY docker/run-auctionsapi-dry-run.sh /app/run-auctionsapi-dry-run.sh
 COPY docker/diagnose-iaai-config.sh /app/diagnose-iaai-config.sh
-RUN chmod 0555 /app/run-iaai-dry-run.sh /app/diagnose-iaai-config.sh
+RUN chmod 0555 /app/run-iaai-dry-run.sh /app/run-auctionsapi-dry-run.sh /app/diagnose-iaai-config.sh
 USER appuser
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Lsc.Inventory.Api.dll"]
