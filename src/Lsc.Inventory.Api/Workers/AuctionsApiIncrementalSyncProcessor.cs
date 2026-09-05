@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Services;
 using Lsc.Inventory.Api.Storage;
@@ -287,10 +288,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 ["has_key"] = Bool(lotRow, "keys_available", "key_available", "keys"),
                 ["run_condition"] = new Dictionary<string, object?>
                 {
-                    ["value"] = Scalar(lotRow, "condition.run_condition.value", "condition.run_and_drive.value", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.value", "run_and_drive", "run_and_drive_label", "run_drive", "runs_and_drives", "start_code")
-                        ?? Scalar(vehicleRow, "condition.run_condition.value", "condition.run_and_drive.value", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.value", "run_and_drive", "run_and_drive_label", "run_drive", "runs_and_drives", "start_code"),
-                    ["label"] = Scalar(lotRow, "condition.run_condition.label", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.label", "run_and_drive_label", "run_drive_label", "runs_and_drives_label")
-                        ?? Scalar(vehicleRow, "condition.run_condition.label", "condition.run_and_drive.label", "condition.name", "condition", "run_condition.label", "run_and_drive_label", "run_drive_label", "runs_and_drives_label"),
+                    ["value"] = RunCondition(lotRow) ?? RunCondition(vehicleRow),
+                    ["label"] = RunCondition(lotRow) ?? RunCondition(vehicleRow),
                     ["class_hint"] = Scalar(lotRow, "condition.run_condition.class_hint", "run_condition.class_hint")
                         ?? Scalar(vehicleRow, "condition.run_condition.class_hint", "run_condition.class_hint"),
                 },
@@ -368,6 +367,29 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     }
 
     private static int? Number(JsonElement value, params string[] paths) => int.TryParse(Scalar(value, paths), out var number) ? number : null;
+    private static string? RunCondition(JsonElement value)
+    {
+        var raw = Scalar(value,
+            "condition.run_condition.value",
+            "condition.run_and_drive.value",
+            "condition.run_and_drive.label",
+            "condition.name",
+            "condition",
+            "run_condition.value",
+            "run_and_drive",
+            "run_and_drive_label",
+            "run_drive",
+            "runs_and_drives",
+            "start_code");
+        return RunConditionTaxonomy.Normalize(raw) switch
+        {
+            RunConditionTaxonomy.RunsAndDrives => "RUNS AND DRIVES",
+            RunConditionTaxonomy.Starts => "STARTS",
+            RunConditionTaxonomy.Stationary => "STATIONARY",
+            _ => raw,
+        };
+    }
+
     private static string? SellerType(JsonElement value)
     {
         var explicitType = Scalar(value, "seller.type", "seller_type");
