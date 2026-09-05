@@ -174,8 +174,37 @@ public sealed partial class PostgresSnapshotStore
             futureAuctions = reader.GetInt64(2);
             withoutAuctionDate = reader.GetInt64(3);
         }
+        long eligibleCurrentPolicyScores;
+        long eligibleScoresAbove60;
+        decimal? eligibleMaximumPreGrade;
+        await using (var eligibleScores = connection.CreateCommand())
+        {
+            eligibleScores.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            eligibleScores.CommandText = """
+                select
+                    count(*) filter (where score.lot_key is not null
+                        and score.policy_version = @policy_version
+                        and score.source_observed_at = current.observed_at)::bigint,
+                    count(*) filter (where score.pre_grade > 60)::bigint,
+                    max(score.pre_grade)
+                from inventory_search_current current
+                left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
+                where current.is_active
+                  and lower(current.platform) = 'copart'
+                  and left(current.payload->'auction'->>'auction_at', 10) >= @cutoff_date;
+                """;
+            AddParameter(eligibleScores, "policy_version", LscScoringPolicy.CopartPolicyVersion);
+            AddParameter(eligibleScores, "cutoff_date", cutoffDate.ToString("yyyy-MM-dd"));
+            await using var reader = await eligibleScores.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            eligibleCurrentPolicyScores = reader.GetInt64(0);
+            eligibleScoresAbove60 = reader.GetInt64(1);
+            eligibleMaximumPreGrade = reader.IsDBNull(2) ? null : reader.GetDecimal(2);
+        }
+
         return new CopartScoringCoverageReport(activeLots, currentScores, Math.Max(0, activeLots - currentScores), statuses,
-            lotsWithAuctionFromToday, auctionToday, futureAuctions, withoutAuctionDate, cutoffDate.ToString("yyyy-MM-dd"));
+            lotsWithAuctionFromToday, auctionToday, futureAuctions, withoutAuctionDate, cutoffDate.ToString("yyyy-MM-dd"),
+            eligibleCurrentPolicyScores, eligibleScoresAbove60, eligibleMaximumPreGrade);
     }
 
     public async Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken)
