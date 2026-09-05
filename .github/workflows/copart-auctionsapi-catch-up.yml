@@ -65,7 +65,7 @@ jobs:
           image="$ACR_NAME.azurecr.io/$IMAGE_NAME:copart-catch-up-${GITHUB_SHA}"
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:copart-catch-up-${GITHUB_SHA}" --file Dockerfile .
           job_json="$(az containerapp job show -n "$JOB_NAME" -g "$RESOURCE_GROUP" -o json)"
-          restore_body="$(echo "$job_json" | jq '.properties.template.containers[0] |= del(.imageType) | {properties:{template:{containers:[.properties.template.containers[0]]},configuration:.properties.configuration}}')"
+          restore_body="$(echo "$job_json" | jq '.properties.template.containers[0] |= del(.imageType) | .properties.configuration |= del(.identitySettings) | {properties:{template:{containers:[.properties.template.containers[0]]},configuration:.properties.configuration}}')"
           restore_template() { az rest --method patch --uri "$uri" --body "$restore_body" --output none || true; }
           trap restore_template EXIT
           mode="catch-up-dry-run"
