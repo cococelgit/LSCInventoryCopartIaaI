@@ -263,13 +263,14 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             ["fuel_type"] = Scalar(vehicleRow, "fuel.name", "fuel"),
             ["transmission"] = Scalar(vehicleRow, "transmission.name", "transmission"),
             ["drive_type"] = Scalar(vehicleRow, "drive_wheel.name", "drive_wheel"),
-            ["title"] = Scalar(lotRow, "title", "detailed_title") ?? Scalar(vehicleRow, "title"),
+            ["title"] = Scalar(lotRow, "title", "detailed_title", "sale_title_type_label", "title_type", "title_type_label")
+                ?? Scalar(vehicleRow, "title", "detailed_title", "sale_title_type_label", "title_type", "title_type_label"),
             ["vehicle_specs"] = new Dictionary<string, object?>
             {
                 ["body_style"] = Scalar(vehicleRow, "body_style", "vehicle_type.name", "vehicle_type"),
                 ["engine"] = At(lotRow, "vehicle_specs.engine") ?? At(lotRow, "engine") ?? At(vehicleRow, "vehicle_specs.engine") ?? At(vehicleRow, "engine"),
-                ["airbags"] = Scalar(lotRow, "vehicle_specs.airbags", "airbags", "airbag"),
-                ["restraint_system"] = Scalar(lotRow, "vehicle_specs.restraint_system", "restraint_system", "restraint"),
+                ["airbags"] = Scalar(lotRow, "vehicle_specs.airbags", "airbags", "airbag") ?? Scalar(vehicleRow, "vehicle_specs.airbags", "airbags", "airbag"),
+                ["restraint_system"] = Scalar(lotRow, "vehicle_specs.restraint_system", "restraint_system", "restraint") ?? Scalar(vehicleRow, "vehicle_specs.restraint_system", "restraint_system", "restraint"),
             },
             ["condition"] = new Dictionary<string, object?>
             {
@@ -278,18 +279,21 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 ["has_key"] = Bool(lotRow, "keys_available", "key_available", "keys"),
                 ["run_condition"] = new Dictionary<string, object?>
                 {
-                    ["value"] = Scalar(lotRow, "condition.run_condition.value", "run_condition.value", "run_and_drive", "run_drive", "start_code"),
-                    ["label"] = Scalar(lotRow, "condition.run_condition.label", "run_condition.label", "run_and_drive_label"),
-                    ["class_hint"] = Scalar(lotRow, "condition.run_condition.class_hint", "run_condition.class_hint"),
+                    ["value"] = Scalar(lotRow, "condition.run_condition.value", "run_condition.value", "run_and_drive", "run_drive", "start_code")
+                        ?? Scalar(vehicleRow, "condition.run_condition.value", "run_condition.value", "run_and_drive", "run_drive", "start_code"),
+                    ["label"] = Scalar(lotRow, "condition.run_condition.label", "run_condition.label", "run_and_drive_label")
+                        ?? Scalar(vehicleRow, "condition.run_condition.label", "run_condition.label", "run_and_drive_label"),
+                    ["class_hint"] = Scalar(lotRow, "condition.run_condition.class_hint", "run_condition.class_hint")
+                        ?? Scalar(vehicleRow, "condition.run_condition.class_hint", "run_condition.class_hint"),
                 },
             },
             ["seller"] = new Dictionary<string, object?>
             {
-                ["name"] = Scalar(lotRow, "seller.name", "seller"),
-                ["raw_type"] = Scalar(lotRow, "seller.raw_type", "seller_type"),
-                ["type"] = Scalar(lotRow, "seller.type", "seller_type"),
-                ["class"] = Scalar(lotRow, "seller.class", "seller_class"),
-                ["text_class"] = Scalar(lotRow, "seller.text_class", "seller_text_class"),
+                ["name"] = Scalar(lotRow, "seller.name", "seller") ?? Scalar(vehicleRow, "seller.name", "seller"),
+                ["raw_type"] = Scalar(lotRow, "seller.raw_type", "seller_type") ?? Scalar(vehicleRow, "seller.raw_type", "seller_type"),
+                ["type"] = Scalar(lotRow, "seller.type", "seller_type") ?? Scalar(vehicleRow, "seller.type", "seller_type"),
+                ["class"] = Scalar(lotRow, "seller.class", "seller_class") ?? Scalar(vehicleRow, "seller.class", "seller_class"),
+                ["text_class"] = Scalar(lotRow, "seller.text_class", "seller_text_class") ?? Scalar(vehicleRow, "seller.text_class", "seller_text_class"),
             },
             ["odometer"] = new Dictionary<string, object?>
             {
@@ -298,14 +302,15 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             },
             ["sale_document"] = new Dictionary<string, object?>
             {
-                ["name"] = Scalar(lotRow, "title", "detailed_title"),
+                ["name"] = Scalar(lotRow, "title", "detailed_title", "sale_title_type_label", "title_type", "title_type_label")
+                    ?? Scalar(vehicleRow, "title", "detailed_title", "sale_title_type_label", "title_type", "title_type_label"),
                 ["is_pending"] = false,
             },
             ["auction"] = new Dictionary<string, object?>
             {
-                ["auction_at"] = Scalar(lotRow, "sale_date"),
-                ["lot_status"] = Scalar(lotRow, "status"),
-                ["is_timed"] = Bool(lotRow, "is_timed_auction"),
+                ["auction_at"] = Scalar(lotRow, "sale_date") ?? Scalar(vehicleRow, "sale_date"),
+                ["lot_status"] = Scalar(lotRow, "status") ?? Scalar(vehicleRow, "status"),
+                ["is_timed"] = Bool(lotRow, "is_timed_auction") ?? Bool(vehicleRow, "is_timed_auction"),
             },
             ["pricing"] = new Dictionary<string, object?>
             {

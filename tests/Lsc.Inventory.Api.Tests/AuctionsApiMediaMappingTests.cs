@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Workers;
 using Xunit;
 
@@ -77,6 +78,37 @@ public sealed class AuctionsApiMediaMappingTests
         Assert.Equal("Front End", mapped.Condition?.PrimaryDamage);
         Assert.Equal("2026-09-10T14:00:00.0000000+00:00", mapped.Auction?.AuctionAt?.ToString("O"));
         Assert.Single(mapped.Media?.Photos ?? []);
+    }
+
+    [Fact]
+    public void MapRows_falls_back_to_parent_copart_fields_for_seller_title_condition_and_status()
+    {
+        using var document = JsonDocument.Parse("""
+            [{
+              "vin":"6TESTVIN123456789",
+              "year":2023,
+              "manufacturer":{"name":"Honda"},
+              "model":{"name":"CR-V"},
+              "title_type_label":"Clean Title",
+              "sale_date":"2026-09-12T14:00:00Z",
+              "status":{"name":"UPCOMING"},
+              "seller":{"name":"Example Fleet","type":"Fleet","class":"fleet"},
+              "run_condition":{"value":"RUNS AND DRIVES","label":"Run & Drive"},
+              "lots":[{"lot":"10000004","domain":{"id":3},"images":["https://cdn.example.com/copart-parent.jpg"]}]
+            }]
+            """);
+
+        var mapped = AuctionsApiIncrementalSyncProcessor.MapRows(document.RootElement.EnumerateArray(), "copart").Single();
+
+        Assert.Equal("Example Fleet", mapped.Seller?.Name);
+        Assert.Equal("Fleet", mapped.Seller?.Type);
+        Assert.Equal("Clean Title", mapped.SaleDocument?.Name);
+        Assert.Equal("RUNS AND DRIVES", mapped.Condition?.RunCondition?.Value);
+        Assert.Equal("UPCOMING", mapped.Auction?.LotStatus);
+        Assert.NotNull(mapped.Auction?.AuctionAt);
+
+        var eligibility = AuctionEligibilityEvaluator.Evaluate(mapped, DateTimeOffset.Parse("2026-09-05T12:00:00Z"));
+        Assert.DoesNotContain(eligibility.Flags, flag => flag.Code is "M01" or "M02" or "M04" or "M07");
     }
 
     [Fact]
