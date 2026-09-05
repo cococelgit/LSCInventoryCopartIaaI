@@ -71,6 +71,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         var deactivated = 0;
         var pages = 0;
         var requests = 0;
+        var eligibilityFlagCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
@@ -90,6 +91,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 var lotKey = $"{normalizedPlatform}:{vehicle.LotNumber.Trim()}";
                 var observedAt = DateTimeOffset.UtcNow;
                 var ingested = await canonicalPipeline.ProcessAsync(vehicle, observedAt, cancellationToken, runId, persist: persist);
+                foreach (var flag in ingested.Eligibility.Flags)
+                    eligibilityFlagCounts[flag.Code] = eligibilityFlagCounts.TryGetValue(flag.Code, out var current) ? current + 1 : 1;
                 if (!ingested.Loaded)
                 {
                     if (ingested.Quarantined) quarantined++;
@@ -126,6 +129,11 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             }
 
             var finishedAt = DateTimeOffset.UtcNow;
+            logger.LogInformation(
+                "AuctionsAPI incremental eligibility flags {RunId} platform={Platform} flags={Flags}",
+                runId,
+                normalizedPlatform,
+                JsonSerializer.Serialize(eligibilityFlagCounts.OrderBy(pair => pair.Key).ToDictionary(pair => pair.Key, pair => pair.Value)));
             await snapshotStore.CompleteSyncRunAsync(runId, new InventorySyncRunCompletion(finishedAt, changed + archived, requests, failures, loaded, marked, discarded, quarantined, failures.Count, pages, false), CancellationToken.None);
             return new(runId, normalizedPlatform, persist, changed, archived, loaded, marked, discarded, quarantined, deactivated, pages, requests, failures);
         }
