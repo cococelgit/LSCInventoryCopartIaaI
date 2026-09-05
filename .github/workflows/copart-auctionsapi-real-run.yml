@@ -6,7 +6,7 @@ on:
       maximum:
         description: "Maximum Copart lots to process"
         required: true
-        default: "50"
+        default: "200"
         type: string
 
 permissions:
@@ -48,13 +48,13 @@ jobs:
         run: |
           set -euo pipefail
           case "$MAXIMUM" in ''|*[!0-9]*) echo "maximum must be numeric" >&2; exit 2 ;; esac
-          test "$MAXIMUM" -ge 1 && test "$MAXIMUM" -le 50
+          test "$MAXIMUM" -ge 1 && test "$MAXIMUM" -le 200
           test -n "$AUCTIONS_API_KEY"
           job_json="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
-          patch_body="$(echo "$job_json" | jq --arg key "$AUCTIONS_API_KEY" '
+          patch_body="$(echo "$job_json" | jq --arg key "$AUCTIONS_API_KEY" --arg maximum "$MAXIMUM" '
             .properties.template.containers[0] |= del(.imageType)
             | .properties.template.containers[0].command = ["/app/run-auctionsapi-dry-run.sh"]
-            | .properties.template.containers[0].args = ["copart", "run", "50"]
+            | .properties.template.containers[0].args = ["copart", "run", $maximum]
             | .properties.template.containers[0].env = ((.properties.template.containers[0].env // [])
               | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites"))
               + [
