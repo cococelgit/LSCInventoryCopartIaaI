@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       lot:
-        description: "IAAI lot number or IAAI internal ID"
+        description: "AuctionsAPI lot number or internal ID"
         required: true
         type: string
       search_by_id:
@@ -13,7 +13,7 @@ on:
         default: "1"
         type: string
       domain:
-        description: "AuctionsAPI domain ID: 1=IAAI"
+        description: "AuctionsAPI domain ID: 1=IAAI, 3=Copart"
         required: true
         default: "1"
         type: string
@@ -31,7 +31,7 @@ jobs:
       - name: Validate input
         run: |
           set -euo pipefail
-          [[ "${{ inputs.domain }}" == "1" ]]
+          [[ "${{ inputs.domain }}" == "1" || "${{ inputs.domain }}" == "3" ]]
           [[ "${{ inputs.search_by_id }}" == "0" || "${{ inputs.search_by_id }}" == "1" ]]
           [[ "${{ inputs.lot }}" =~ ^[A-Za-z0-9_-]+$ ]]
       - name: Call directed AuctionsAPI endpoint
