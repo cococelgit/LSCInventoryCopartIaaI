@@ -100,7 +100,8 @@ jobs:
             --only-show-errors
           job_json="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
           patch_body="$(echo "$job_json" | jq --arg image "$COPART_API_IMAGE" --arg api_key "$AUCTIONS_API_KEY" --arg allow_writes "${{ inputs.allow_auctions_writes }}" '
-            .properties.template.containers[0].image = $image
+            .properties.template.containers[0] |= del(.imageType)
+            | .properties.template.containers[0].image = $image
             | .properties.template.containers[0].env = ((.properties.template.containers[0].env // [])
               | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__PageSize" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__RequestIntervalMilliseconds"))
               + [
