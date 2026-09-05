@@ -64,6 +64,8 @@ jobs:
           path_counts = Counter()
           status_counts = Counter()
           shape_counts = Counter()
+          condition_names = Counter()
+          nested_keys = Counter()
           target_keys = {'lot','lots','condition','seller','seller_name','sellerName','consignor','owner','images','media','damage','location','odometer','keys_available','key_available','run_and_drive','run_and_drive_label','run_drive','runs_and_drives','run_condition','start_code','condition_code','vehicle_condition','airbags','trim','series','model_detail','body_style','vehicle_type','sale_date','title','title_type','title_type_label','manufacturer','model','bid','buy_now','status','keys'}
           def walk(value, path=''):
               if isinstance(value, dict):
@@ -75,6 +77,10 @@ jobs:
                       if key in {'seller','seller_type','condition','run_and_drive','run_condition','engine','status','title'} and child not in (None, '', [], {}):
                           shape = 'object:' + ','.join(sorted(child.keys())) if isinstance(child, dict) else type(child).__name__
                           shape_counts[f'{current}={shape}'] += 1
+                          if key == 'condition' and isinstance(child, dict) and child.get('name') not in (None, ''):
+                              condition_names[str(child['name'])] += 1
+                      if key in {'raw','details'} and isinstance(child, dict):
+                          nested_keys[f'{current}=' + ','.join(sorted(child.keys()))] += 1
                       walk(child, current)
               elif isinstance(value, list):
                   for child in value:
@@ -103,6 +109,8 @@ jobs:
           print('ROW_KEYS=' + ','.join(sorted(key_counts)))
           print('FIELD_PATH_PRESENCE=' + ','.join(f'{k}:{path_counts[k]}' for k in sorted(path_counts)))
           print('FIELD_SHAPES=' + ','.join(f'{k}:{shape_counts[k]}' for k in sorted(shape_counts)))
+          print('CONDITION_NAMES=' + ','.join(f'{k}:{condition_names[k]}' for k in sorted(condition_names)))
+          print('NESTED_KEYS=' + ','.join(f'{k}:{nested_keys[k]}' for k in sorted(nested_keys)))
           print('STATUS_COUNTS=' + ','.join(f'{k}:{status_counts[k]}' for k in sorted(status_counts)))
           PY
           test "$status" = "200"
