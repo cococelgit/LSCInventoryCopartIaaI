@@ -46,7 +46,6 @@ jobs:
           execution="$(az containerapp job start \
             --name "$COPART_API_JOB_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --image "$image" \
             --command=/app/run-auctionsapi-dry-run.sh \
             --args=copart \
             -o json)"
