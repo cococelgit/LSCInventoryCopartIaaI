@@ -61,15 +61,23 @@ jobs:
               print('ROW_KEYS=')
               raise SystemExit(0)
           key_counts = Counter()
-          nested_counts = Counter()
+          path_counts = Counter()
+          target_keys = {'lot','lots','condition','seller','images','media','damage','location','odometer','keys_available','key_available','run_and_drive','run_condition','airbags','trim','series','model_detail','body_style','vehicle_type','sale_date','title','manufacturer','model','bid','buy_now','status','keys'}
+          def walk(value, path=''):
+              if isinstance(value, dict):
+                  for key, child in value.items():
+                      current = f'{path}.{key}' if path else key
+                      key_counts[key] += 1
+                      if key in target_keys and child not in (None, '', [], {}):
+                          path_counts[current] += 1
+                      walk(child, current)
+              elif isinstance(value, list):
+                  for child in value:
+                      walk(child, path + '[]')
           for row in rows:
-              if not isinstance(row, dict):
-                  continue
-              key_counts.update(row.keys())
-              for key in ('lots','vehicle','lot','condition','seller','images','media','damage','location','odometer','keys_available','key_available','run_and_drive','run_condition','airbags','trim','series','model_detail','body_style','vehicle_type','sale_date','title','manufacturer','model'):
-                  if key in row and row[key] not in (None, '', [], {}):
-                      nested_counts[key] += 1
+              if isinstance(row, dict):
+                  walk(row)
           print('ROW_KEYS=' + ','.join(sorted(key_counts)))
-          print('FIELD_PRESENCE=' + ','.join(f'{k}:{nested_counts[k]}/{len(rows)}' for k in sorted(nested_counts)))
+          print('FIELD_PATH_PRESENCE=' + ','.join(f'{k}:{path_counts[k]}' for k in sorted(path_counts)))
           PY
           test "$status" = "200"
