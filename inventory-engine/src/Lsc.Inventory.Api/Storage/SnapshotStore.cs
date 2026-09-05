@@ -144,7 +144,10 @@ public sealed record CopartScoringCoverageReport(
     long AuctionToday = 0,
     long FutureAuctions = 0,
     long WithoutAuctionDate = 0,
-    string EligibilityDateUtc = "");
+    string EligibilityDateUtc = "",
+    long EligibleCurrentPolicyScores = 0,
+    long EligibleScoresAbove60 = 0,
+    decimal? EligibleMaximumPreGrade = null);
 
 public sealed record CopartScoringBackfillResult(
     int Scanned,
