@@ -89,4 +89,16 @@ jobs:
             phase_query="ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerGroupName_s startswith \"$TARGET_EXECUTION\" or Log_s contains \"$TARGET_EXECUTION\" | summarize first_seen=min(TimeGenerated), last_seen=max(TimeGenerated), rows=count() by ContainerGroupName_s, ContainerName_s"
             echo '=== EXECUTION LOG SUMMARY ==='
             az monitor log-analytics query --workspace "$WORKSPACE_ID" --analytics-query "$phase_query" -o json || true
+            job_id="/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$CATCHUP_JOB"
+            execution_uri="https://management.azure.com$job_id/executions/$TARGET_EXECUTION?api-version=2024-03-01"
+            job_uri="https://management.azure.com$job_id?api-version=2024-03-01"
+            job_json="$(az rest --method get --uri "$job_uri" -o json)"
+            execution_json="$(az rest --method get --uri "$execution_uri" -o json)"
+            container="$(echo "$job_json" | jq -r '.properties.template.containers[0].name // empty')"
+            echo '=== DIRECT EXECUTION LOGS ==='
+            echo "$execution_json" | jq -r '.properties.replicaStatuses[]?.replicaName // empty' | while IFS= read -r replica; do
+              [ -z "$replica" ] && continue
+              echo "--- replica=$replica container=$container ---"
+              az containerapp job logs show --name "$CATCHUP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$TARGET_EXECUTION" --replica "$replica" --container "$container" --tail 500 --format text 2>&1 || true
+            done
           fi
