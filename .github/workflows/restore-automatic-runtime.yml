@@ -50,7 +50,8 @@ jobs:
               args='["copart","run","500"]'
             fi
             body="$(echo "$before" | jq --argjson args "$args" '
-              .properties.template.containers[0].command=["/app/run-auctionsapi-dry-run.sh"]
+              .properties.template.containers[0] |= del(.imageType)
+              | .properties.template.containers[0].command=["/app/run-auctionsapi-dry-run.sh"]
               | .properties.template.containers[0].args=$args
               | .properties.template.containers[0].env=((.properties.template.containers[0].env // []) | map(select(.name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__AllowWrites",value:"true"}])
               | {properties:{template:.properties.template,configuration:.properties.configuration}}')"
