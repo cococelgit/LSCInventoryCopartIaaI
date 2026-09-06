@@ -49,7 +49,7 @@ jobs:
           test "$CONFIRMATION" = RESTORE_ALTERNATING_AUCTION_SCHEDULES
           test -n "$AUCTIONS_API_KEY"
           api_json="$(az containerapp show --name "$API_APP" --resource-group "$RESOURCE_GROUP" -o json)"
-          persistence_env="$(echo "$api_json" | jq --argjson names '["Persistence__Provider","Persistence__PostgreSqlHost","Persistence__Database","Persistence__ManagedIdentityClientId","Persistence__DatabaseUser","Persistence__RuntimePrincipalName","Persistence__RuntimePrincipalObjectId","Persistence__RunMigrations","BlobAudit__AccountUrl","BlobAudit__ContainerName"]' '[.properties.template.containers[0].env[]? | objects | select(.name as $n | ($names | index($n)) != null) | select(.value != null) | {name:.name,value:.value}]')"
+          persistence_env="$(echo "$api_json" | jq '[.properties.template.containers[0].env[]? | select(.name=="Persistence__Provider" or .name=="Persistence__PostgreSqlHost" or .name=="Persistence__Database" or .name=="Persistence__ManagedIdentityClientId" or .name=="Persistence__DatabaseUser" or .name=="Persistence__RuntimePrincipalName" or .name=="Persistence__RuntimePrincipalObjectId" or .name=="Persistence__RunMigrations" or .name=="BlobAudit__AccountUrl" or .name=="BlobAudit__ContainerName") | {name:.name,value:.value}]')"
           test "$(echo "$persistence_env" | jq 'length')" -eq 10
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
