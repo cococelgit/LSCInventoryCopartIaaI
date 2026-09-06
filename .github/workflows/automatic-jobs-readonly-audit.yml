@@ -55,5 +55,11 @@ jobs:
                 query="union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(48h) | where Log_s contains '$job' or ContainerName_s contains '$job' or ContainerGroupName_s contains '$job' | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s, Reason_s | order by TimeGenerated asc | take 2000"
                 az monitor log-analytics query --workspace "$workspace_id" --analytics-query "$query" -o json || true
               done
+              echo "=== FAILURE LOGS BY EXECUTION: $job ==="
+              for execution in $(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query '[0:6].name' -o tsv); do
+                echo "--- FAILURE EXECUTION $job/$execution ---"
+                exact_query="union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(48h) | where Log_s contains '$execution' or ContainerGroupName_s startswith '$execution' | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s, Reason_s | order by TimeGenerated asc | take 500"
+                az monitor log-analytics query --workspace "$workspace_id" --analytics-query "$exact_query" -o json || true
+              done
             fi
           fi
