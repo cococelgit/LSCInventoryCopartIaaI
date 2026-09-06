@@ -24,6 +24,29 @@ public sealed class CopartCatchUpSafetyContractTests
     }
 
     [Fact]
+    public void IaaI_backfill_filters_lots_before_loading_the_latest_snapshot()
+    {
+        var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));
+        var methodStart = source.IndexOf("public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetIaaIConditionBackfillCandidatesAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "IAAI backfill candidate selector must remain present.");
+        var methodEnd = source.IndexOf("public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartCatchUpCandidatesAsync", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "IAAI selector boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("join lateral", method);
+        Assert.Contains("where lots.platform = 'iaai'", method);
+        Assert.Contains("order by versions.observed_at desc, versions.id desc", method);
+        Assert.DoesNotContain("select distinct on (versions.lot_key)", method);
+    }
+
+    [Fact]
+    public void Candidate_queries_have_a_covering_latest_version_index()
+    {
+        var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));
+        Assert.Contains("ix_auction_lot_versions_lot_observed_id", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Copart_catch_up_uses_tolerant_snapshot_deserialization()
     {
         var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));

@@ -1293,14 +1293,16 @@ public sealed partial class PostgresSnapshotStore(
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
-            select latest.lot_key, latest.observed_at, latest.payload::text
-            from (
-                select distinct on (versions.lot_key) versions.lot_key, versions.observed_at, versions.payload
+            select lots.lot_key, latest.observed_at, latest.payload::text
+            from auction_lots lots
+            join lateral (
+                select versions.observed_at, versions.payload
                 from auction_lot_versions versions
-                order by versions.lot_key, versions.observed_at desc, versions.id desc
-            ) latest
-            join auction_lots lots on lots.lot_key = latest.lot_key
-            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = latest.lot_key
+                where versions.lot_key = lots.lot_key
+                order by versions.observed_at desc, versions.id desc
+                limit 1
+            ) latest on true
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
             where lots.platform = 'iaai'
               and lots.auction_at >= @cutoff
               and coalesce(lifecycle.is_active, true)
@@ -1310,7 +1312,7 @@ public sealed partial class PostgresSnapshotStore(
                  or latest.payload #>> '{condition,has_key}' is null
                  or coalesce(latest.payload #>> '{seller,name}', '') = ''
               )
-            order by lots.auction_at asc, latest.lot_key
+            order by lots.auction_at asc, lots.lot_key
             limit @limit;
             """;
         AddParameter(command, "cutoff", cutoff.ToUniversalTime());
@@ -3128,6 +3130,7 @@ public sealed partial class PostgresSnapshotStore(
                 );
 
                 create index if not exists ix_auction_lot_versions_lot_observed on auction_lot_versions (lot_key, observed_at desc);
+                create index if not exists ix_auction_lot_versions_lot_observed_id on auction_lot_versions (lot_key, observed_at desc, id desc);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
             _schemaInitialized = true;
