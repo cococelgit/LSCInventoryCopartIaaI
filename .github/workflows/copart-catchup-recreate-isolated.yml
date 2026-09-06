@@ -61,7 +61,7 @@ jobs:
           source="$(az rest --method get --uri "$source_uri" -o json)"
           body="$(echo "$source" | jq --arg image "$IMAGE" --arg maximum "$MAXIMUM" '
             .location as $location
-            | .identity as $identity
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
             | .properties.environmentId as $environmentId
             | .properties.template as $sourceTemplate
             | ($sourceTemplate.containers[0]
