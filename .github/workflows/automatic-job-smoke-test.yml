@@ -1,0 +1,112 @@
+name: Automatic Job Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Automatic job platform"
+        required: true
+        type: choice
+        options:
+          - iaai
+          - copart
+      maximum:
+        description: "Maximum records for dry-run"
+        required: true
+        default: "1"
+        type: string
+      confirmation:
+        description: "Type RUN_AUTOMATIC_SMOKE_TEST"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: automatic-job-smoke-test
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_JOB: job-lsc-copart-auto-prod
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Run reversible smoke test
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          MAXIMUM: ${{ inputs.maximum }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "RUN_AUTOMATIC_SMOKE_TEST"
+          case "$PLATFORM" in
+            iaai) job="$IAAI_JOB"; args='["iaai","1"]' ;;
+            copart) job="$COPART_JOB"; args="[\"copart\",\"dry-run\",\"$MAXIMUM\"]" ;;
+            *) exit 64 ;;
+          esac
+          before="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+          test "$(echo "$before" | jq -r '.properties.configuration.triggerType')" = Manual
+          active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
+          test "$active" -eq 0
+          echo "$before" | jq '{properties:{template:.properties.template,configuration:.properties.configuration}}' > "$RUNNER_TEMP/$job.before.json"
+          image="$(echo "$before" | jq -r '.properties.template.containers[0].image')"
+          patched="$(echo "$before" | jq --argjson args "$args" '
+            .properties.template.containers[0].command=["/app/run-auctionsapi-dry-run.sh"]
+            | .properties.template.containers[0].args=$args
+            | .properties.template.containers[0].env=((.properties.template.containers[0].env // []) | map(select(.name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__AllowWrites",value:"false"}])
+            | {properties:{template:.properties.template}}')"
+          job_id="$(echo "$before" | jq -r '.id')"
+          az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$patched" --only-show-errors
+          restore() {
+            original="$(cat "$RUNNER_TEMP/$job.before.json")"
+            az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$original" --only-show-errors || true
+            echo "RESTORED_JOB=$job"
+          }
+          trap restore EXIT
+          execution="$(az containerapp job start --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+          test -n "$execution_name"
+          echo "SMOKE_JOB=$job"
+          echo "SMOKE_EXECUTION=$execution_name"
+          deadline=$((SECONDS + 900))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            current="$(az containerapp job execution show --name "$job" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution_name" -o json)"
+            status="$(echo "$current" | jq -r '.properties.status // "Unknown"')"
+            echo "SMOKE_STATUS=$status"
+            case "$status" in
+              Succeeded|Failed|Canceled|Stopped)
+                echo "$current" | jq '{name:.name,status:.properties.status,start:.properties.startTime,end:.properties.endTime,conditions:.properties.conditions,replicaStatuses:.properties.replicaStatuses}'
+                replicas="$(az containerapp job replica list --name "$job" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" -o json || true)"
+                echo "$replicas" | jq . || true
+                replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+                container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+                if [ -n "$replica" ] && [ -n "$container" ]; then
+                  az containerapp job logs show --name "$job" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" --replica "$replica" --container "$container" --tail 300 --format text || true
+                fi
+                test "$status" = Succeeded
+                exit 0
+                ;;
+            esac
+            sleep 15
+          done
+          echo "Smoke test timed out" >&2
+          exit 1
