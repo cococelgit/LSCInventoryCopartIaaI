@@ -1,0 +1,89 @@
+name: Recreate Isolated Copart Catch-up Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_name:
+        description: "New isolated Azure Container Apps Job name"
+        required: true
+        default: "job-lsc-copart-catchup-v2-prod"
+        type: string
+      image:
+        description: "Immutable engine image reference"
+        required: true
+        default: "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:copart-0301de2becbd20d4f720336dbc2b843d34cf9a03"
+        type: string
+      maximum:
+        description: "Safe dry-run lot limit"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-catchup-recreate-isolated
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  SOURCE_JOB: job-lsc-copart-catchup-prod
+
+jobs:
+  recreate-and-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Recreate isolated manual job and start dry-run
+        env:
+          JOB_NAME: ${{ inputs.job_name }}
+          IMAGE: ${{ inputs.image }}
+          MAXIMUM: ${{ inputs.maximum }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$JOB_NAME" =~ ^job-lsc-copart-catchup-v2-prod$ ]]
+          [[ "$IMAGE" == acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:* ]]
+          [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]] && (( MAXIMUM <= 500 ))
+          source_uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01"
+          source="$(az rest --method get --uri "$source_uri" -o json)"
+          body="$(echo "$source" | jq --arg image "$IMAGE" --arg maximum "$MAXIMUM" '
+            .location as $location
+            | .identity as $identity
+            | .properties.environmentId as $environmentId
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
+                | del(.imageType)
+                | .name="job-lsc-copart-catchup-v2-prod"
+                | .image=$image
+                | .command=["/app/run-auctionsapi-dry-run.sh"]
+                | .args=["copart","catch-up-dry-run",$maximum]
+                | .resources.cpu=0.5
+                | .resources.memory="1Gi"
+                | .env=((.env // []) | map(select(.name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__AllowWrites",value:"false"}])) as $container
+            | {location:$location,identity:$identity,properties:{environmentId:$environmentId,configuration:(.properties.configuration
+                | del(.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=900),template:($sourceTemplate | .containers=[$container])}}')"
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$JOB_NAME?api-version=2024-03-01"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          job="$(az rest --method get --uri "$uri" -o json)"
+          echo "$job" | jq '{name:.name,image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,resources:.properties.template.containers[0].resources,trigger:.properties.configuration.triggerType,timeout:.properties.configuration.replicaTimeout,allowWrites:([.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // "")} '
+          execution="$(az containerapp job start --name "$JOB_NAME" --resource-group "$RESOURCE_GROUP" --only-show-errors -o tsv --query name)"
+          echo "ISOLATED_JOB=$JOB_NAME"
+          echo "ISOLATED_EXECUTION=$execution"
+          echo "ISOLATED_DRY_RUN_STARTED=true"
