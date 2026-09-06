@@ -70,18 +70,20 @@ jobs:
             job_id="$(echo "$current" | jq -r '.id')"
             if [ "$job" = "$IAAI_JOB" ]; then
               cron='0 1-23/2 * * *'
+              is_iaai=true
             else
               cron='0 0-22/2 * * *'
+              is_iaai=false
             fi
-            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" --arg provider "$persistence_provider" --arg postgresHost "$persistence_postgres_host" --arg database "$persistence_database" --arg managedIdentity "$persistence_managed_identity" --arg databaseUser "$persistence_database_user" --arg runtimeName "$persistence_runtime_name" --arg runtimeObjectId "$persistence_runtime_object_id" --arg blobUrl "$blob_account_url" --arg blobContainer "$blob_container_name" '
+            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" --arg provider "$persistence_provider" --arg postgresHost "$persistence_postgres_host" --arg database "$persistence_database" --arg managedIdentity "$persistence_managed_identity" --arg databaseUser "$persistence_database_user" --arg runtimeName "$persistence_runtime_name" --arg runtimeObjectId "$persistence_runtime_object_id" --arg blobUrl "$blob_account_url" --arg blobContainer "$blob_container_name" --argjson isIaai "$is_iaai" --argjson removeNames '["Persistence__Provider","Persistence__PostgreSqlHost","Persistence__Database","Persistence__ManagedIdentityClientId","Persistence__DatabaseUser","Persistence__RuntimePrincipalName","Persistence__RuntimePrincipalObjectId","Persistence__RunMigrations","BlobAudit__AccountUrl","BlobAudit__ContainerName","AuctionsApi__DefaultOverlapMinutes","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__ApiKey","IaaINational__Enabled","IaaINational__RunOnStartup","IaaINational__PrimaryProvider","IaaINational__FallbackProvider","IaaINational__UpdatedWithinMinutes","IaaINational__RequireInitialImportCompleted","IaaINational__EnforceScheduleWindow","IaaINational__ScheduleIntervalHours"]' '
               .properties.template.containers[0] |= (
                 del(.imageType)
-                | if .name == "job-lsc-iaai-pilot-prod" then
+                | if $isIaai then
                     .command=["dotnet"]
                     | .args=["Lsc.Inventory.Api.dll","--iaai-national"]
                   else . end
                 | .env=((.env // [])
-                    | map(select(type=="object") | select(.name != "Persistence__Provider" and .name != "Persistence__PostgreSqlHost" and .name != "Persistence__Database" and .name != "Persistence__ManagedIdentityClientId" and .name != "Persistence__DatabaseUser" and .name != "Persistence__RuntimePrincipalName" and .name != "Persistence__RuntimePrincipalObjectId" and .name != "Persistence__RunMigrations" and .name != "BlobAudit__AccountUrl" and .name != "BlobAudit__ContainerName" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__ApiKey" and .name != "IaaINational__Enabled" and .name != "IaaINational__RunOnStartup" and .name != "IaaINational__PrimaryProvider" and .name != "IaaINational__FallbackProvider" and .name != "IaaINational__UpdatedWithinMinutes" and .name != "IaaINational__RequireInitialImportCompleted" and .name != "IaaINational__EnforceScheduleWindow" and .name != "IaaINational__ScheduleIntervalHours"))
+                    | map(select(type=="object") | select((try .name catch null) as $n | ($removeNames | index($n)) == null))
                     + [
                         {name:"Persistence__Provider",value:$provider},
                         {name:"Persistence__PostgreSqlHost",value:$postgresHost},
@@ -98,7 +100,7 @@ jobs:
                         {name:"AuctionsApi__AllowWrites",value:"true"},
                         {name:"AuctionsApi__ApiKey",value:$apiKey}
                       ]
-                    + (if .name == "job-lsc-iaai-pilot-prod" then [
+                    + (if $isIaai then [
                         {name:"IaaINational__Enabled",value:"true"},
                         {name:"IaaINational__RunOnStartup",value:"true"},
                         {name:"IaaINational__PrimaryProvider",value:"auctionsapi"},
