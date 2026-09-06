@@ -57,6 +57,8 @@ jobs:
               | .image=$image
               | .command=["/app/run-auctionsapi-dry-run.sh"]
               | .args=["copart","catch-up-dry-run",$maximum]
+              | .resources.cpu=0.5
+              | .resources.memory="1Gi"
               | .env=((.env // []) | map(select(.name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__AllowWrites",value:"false"}]))
             | .properties.configuration |= (del(.scheduleTriggerConfig) | .triggerType="Manual" | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1} | .replicaRetryLimit=0 | .replicaTimeout=900)
             | {location:.location,identity:.identity,properties:{environmentId:.properties.environmentId,configuration:.properties.configuration,template:.properties.template}}')"
