@@ -14,6 +14,7 @@ env:
   RESOURCE_GROUP: rg-lsc-inventory-prod
   IAAI_JOB: job-lsc-iaai-pilot-prod
   COPART_JOB: job-lsc-copart-auto-prod
+  API_APP: ca-lsc-inventory-api-prod
 
 jobs:
   audit:
@@ -37,6 +38,15 @@ jobs:
             az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query '{name:name,trigger:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,timezone:properties.configuration.scheduleTriggerConfig.timeZone,replicaTimeout:properties.configuration.replicaTimeout,retry:properties.configuration.replicaRetryLimit}' -o json
             echo "=== DIRECT EXECUTIONS: $job ==="
             az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json --query 'sort_by([].{name:name,status:properties.status,start:properties.startTime,end:properties.endTime}, &start) | reverse(@)[:12]'
+          done
+      - name: Compare persistence configuration names
+        shell: bash
+        run: |
+          set -euo pipefail
+          for resource in "$IAAI_JOB" "$COPART_JOB" "$API_APP"; do
+            echo "=== PERSISTENCE ENV NAMES: $resource ==="
+            az containerapp show --name "$resource" --resource-group "$RESOURCE_GROUP" -o json \
+              | jq '{name:.name,env:(.properties.template.containers[0].env // [] | map(select(.name|test("Persistence|Postgre|Database|AuctionsApi|IaaINational")) | {name,hasValue:(has("value")),secretRef:(.secretRef // null)}))}'
           done
       - name: Read current automatic job health
         shell: bash
