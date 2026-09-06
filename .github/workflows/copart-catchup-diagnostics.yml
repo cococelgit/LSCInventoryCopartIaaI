@@ -2,6 +2,12 @@ name: Diagnose Copart Catch-up Job
 
 on:
   workflow_dispatch:
+    inputs:
+      execution:
+        description: 'Optional Azure Container Apps execution name to isolate'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -67,7 +73,20 @@ jobs:
           az vm list-usage --location eastus2 -o json | jq '[.[] | select(.name.value|test("cores|virtualMachines|container|storage";"i")) | {name:.name.localizedValue,currentValue,limit}]'
       - name: Query recent Container App logs
         shell: bash
+        env:
+          TARGET_EXECUTION: ${{ inputs.execution }}
         run: |
           set -euo pipefail
-          query='union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerName_s == "job-lsc-copart-catchup-prod" or Log_s contains "Copart catch-up" or Log_s contains "Unhandled" or Log_s contains "Exception" or Log_s contains "Npgsql" or Log_s contains "Postgres" or Log_s contains "stack" | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s | order by TimeGenerated desc | take 500'
+          if [ -n "$TARGET_EXECUTION" ]; then
+            filter="(ContainerGroupName_s startswith \"$TARGET_EXECUTION\" or Log_s contains \"$TARGET_EXECUTION\")"
+          else
+            filter='(ContainerName_s == "job-lsc-copart-catchup-prod" or Log_s contains "Copart catch-up" or Log_s contains "CATCHUP_")'
+          fi
+          query="union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where $filter | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s | order by TimeGenerated asc | take 1000"
+          echo '=== FILTERED CONSOLE/SYSTEM LOGS ==='
           az monitor log-analytics query --workspace "$WORKSPACE_ID" --analytics-query "$query" -o json || true
+          if [ -n "$TARGET_EXECUTION" ]; then
+            phase_query="ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerGroupName_s startswith \"$TARGET_EXECUTION\" or Log_s contains \"$TARGET_EXECUTION\" | summarize first_seen=min(TimeGenerated), last_seen=max(TimeGenerated), rows=count() by ContainerGroupName_s, ContainerName_s"
+            echo '=== EXECUTION LOG SUMMARY ==='
+            az monitor log-analytics query --workspace "$WORKSPACE_ID" --analytics-query "$phase_query" -o json || true
+          fi
