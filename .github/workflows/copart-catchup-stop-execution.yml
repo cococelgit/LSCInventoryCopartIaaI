@@ -11,6 +11,11 @@ on:
         description: "Type STOP_COPART_CATCHUP to confirm"
         required: true
         type: string
+      job_name:
+        description: "Azure Container Apps Job that owns the execution"
+        required: false
+        default: "job-lsc-copart-catchup-prod"
+        type: string
 
 permissions:
   contents: read
@@ -38,12 +43,13 @@ jobs:
         env:
           EXECUTION: ${{ inputs.execution }}
           CONFIRM_STOP: ${{ inputs.confirm_stop }}
+          JOB_NAME: ${{ inputs.job_name }}
         shell: bash
         run: |
           set -euo pipefail
           test "$CONFIRM_STOP" = "STOP_COPART_CATCHUP"
-          before="$(az containerapp job execution show --name "$CATCHUP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION" -o json)"
+          before="$(az containerapp job execution show --name "$JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION" -o json)"
           test "$(echo "$before" | jq -r '.properties.status')" = "Running"
-          az containerapp job stop --name "$CATCHUP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION" --only-show-errors
+          az containerapp job stop --name "$JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION" --only-show-errors
           sleep 8
-          az containerapp job execution show --name "$CATCHUP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION" -o json | jq '{execution:.name,status:.properties.status,start:.properties.startTime,end:.properties.endTime}'
+          az containerapp job execution show --name "$JOB_NAME" --resource-group "$RESOURCE_GROUP" --job-execution-name "$EXECUTION" -o json | jq '{job:.name,execution:.name,status:.properties.status,start:.properties.startTime,end:.properties.endTime}'
