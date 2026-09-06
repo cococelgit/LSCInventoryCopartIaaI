@@ -73,7 +73,7 @@ jobs:
                 | .resources.cpu=0.5
                 | .resources.memory="1Gi"
                 | .env=((.env // []) | map(select(.name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__AllowWrites",value:"false"}])) as $container
-            | {location:$location,identity:$identity,properties:{environmentId:$environmentId,configuration:(.properties.configuration
+            | {location:$location,identity:$identity,properties:{environmentId:$environmentId,workloadProfileName:"Consumption",configuration:(.properties.configuration
                 | del(.scheduleTriggerConfig)
                 | .triggerType="Manual"
                 | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
