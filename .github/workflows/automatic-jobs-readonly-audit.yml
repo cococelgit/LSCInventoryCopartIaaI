@@ -28,6 +28,16 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Read direct execution state from Azure
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            echo "=== DIRECT CONFIG: $job ==="
+            az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query '{name:name,trigger:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,timezone:properties.configuration.scheduleTriggerConfig.timeZone,replicaTimeout:properties.configuration.replicaTimeout,retry:properties.configuration.replicaRetryLimit}' -o json
+            echo "=== DIRECT EXECUTIONS: $job ==="
+            az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json --query 'sort_by([].{name:name,status:properties.status,start:properties.startTime,end:properties.endTime}, &start) | reverse(@)[:12]'
+          done
       - name: Read current automatic job health
         shell: bash
         run: |
