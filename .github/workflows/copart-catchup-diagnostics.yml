@@ -109,6 +109,6 @@ jobs:
             echo "$replicas" | while IFS= read -r replica; do
               [ -z "$replica" ] && continue
               echo "--- replica=$replica container=$container ---"
-              az containerapp job logs show --name "$CATCHUP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$TARGET_EXECUTION" --replica "$replica" --container "$container" --tail 500 --format text 2>&1 || true
+              az containerapp job logs show --name "$CATCHUP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$TARGET_EXECUTION" --replica "$replica" --container "$container" --tail 300 --format text 2>&1 || true
             done
           fi
