@@ -58,14 +58,22 @@ jobs:
           body="$(echo "$current" | jq --arg apiKey "$AUCTIONS_API_KEY" '
             .properties.template.containers[0] |= del(.imageType)
             | .properties.template.containers[0].command=["dotnet"]
-            | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--iaai-pilot"]
+            | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--iaai-national"]
             | .properties.template.containers[0].env=((.env // [])
-                | map(select(.name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__ApiKey"))
+                | map(select(.name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__ApiKey" and .name != "IaaINational__Enabled" and .name != "IaaINational__RunOnStartup" and .name != "IaaINational__PrimaryProvider" and .name != "IaaINational__FallbackProvider" and .name != "IaaINational__UpdatedWithinMinutes" and .name != "IaaINational__RequireInitialImportCompleted" and .name != "IaaINational__EnforceScheduleWindow" and .name != "IaaINational__ScheduleIntervalHours"))
                 + [
                     {name:"AuctionsApi__Enabled",value:"true"},
                     {name:"AuctionsApi__AllowWrites",value:"true"},
                     {name:"AuctionsApi__DefaultOverlapMinutes",value:"140"},
-                    {name:"AuctionsApi__ApiKey",value:$apiKey}
+                    {name:"AuctionsApi__ApiKey",value:$apiKey},
+                    {name:"IaaINational__Enabled",value:"true"},
+                    {name:"IaaINational__RunOnStartup",value:"true"},
+                    {name:"IaaINational__PrimaryProvider",value:"auctionsapi"},
+                    {name:"IaaINational__FallbackProvider",value:"apibara"},
+                    {name:"IaaINational__UpdatedWithinMinutes",value:"140"},
+                    {name:"IaaINational__RequireInitialImportCompleted",value:"false"},
+                    {name:"IaaINational__EnforceScheduleWindow",value:"false"},
+                    {name:"IaaINational__ScheduleIntervalHours",value:"2"}
                   ])
             | {properties:{template:.properties.template}}')"
           az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --only-show-errors --output none
@@ -77,11 +85,14 @@ jobs:
           test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
           test "$(echo "$json" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = '0 1-23/2 * * *'
           test "$(echo "$json" | jq -r '.properties.template.containers[0].command | join(" ")')" = dotnet
-          test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-pilot'
+          test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-national'
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
           test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
+          test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="IaaINational__Enabled")][0].value // ""')" = true
+          test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="IaaINational__PrimaryProvider")][0].value // ""')" = auctionsapi
+          test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="IaaINational__EnforceScheduleWindow")][0].value // ""')" = false
           test "$(echo "$json" | jq -r '.properties.configuration.replicaRetryLimit')" = 0
           excel="$(az containerapp job show --name job-lsc-copart-excel-prod --resource-group "$RESOURCE_GROUP" -o json)"
           test "$(echo "$excel" | jq -r '.properties.configuration.triggerType')" = Manual

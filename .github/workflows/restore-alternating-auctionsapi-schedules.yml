@@ -61,16 +61,26 @@ jobs:
               .properties.template.containers[0] |= del(.imageType)
               | if .name == "job-lsc-iaai-pilot-prod" then
                   .properties.template.containers[0].command=["dotnet"]
-                  | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--iaai-pilot"]
+                  | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--iaai-national"]
                 else . end
               | .properties.template.containers[0].env=((.env // [])
-                  | map(select(.name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__ApiKey"))
+                  | map(select(.name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__ApiKey" and .name != "IaaINational__Enabled" and .name != "IaaINational__RunOnStartup" and .name != "IaaINational__PrimaryProvider" and .name != "IaaINational__FallbackProvider" and .name != "IaaINational__UpdatedWithinMinutes" and .name != "IaaINational__RequireInitialImportCompleted" and .name != "IaaINational__EnforceScheduleWindow" and .name != "IaaINational__ScheduleIntervalHours"))
                   + [
                       {name:"AuctionsApi__DefaultOverlapMinutes",value:$minutes},
                       {name:"AuctionsApi__Enabled",value:"true"},
                       {name:"AuctionsApi__AllowWrites",value:"true"},
                       {name:"AuctionsApi__ApiKey",value:$apiKey}
-                    ])
+                    ]
+                  + (if .name == "job-lsc-iaai-pilot-prod" then [
+                      {name:"IaaINational__Enabled",value:"true"},
+                      {name:"IaaINational__RunOnStartup",value:"true"},
+                      {name:"IaaINational__PrimaryProvider",value:"auctionsapi"},
+                      {name:"IaaINational__FallbackProvider",value:"apibara"},
+                      {name:"IaaINational__UpdatedWithinMinutes",value:$minutes},
+                      {name:"IaaINational__RequireInitialImportCompleted",value:"false"},
+                      {name:"IaaINational__EnforceScheduleWindow",value:"false"},
+                      {name:"IaaINational__ScheduleIntervalHours",value:"2"}
+                    ] else [] end))
               | .properties.configuration |= (
                   del(.identitySettings,.secrets,.manualTriggerConfig)
                   | .triggerType="Schedule"
@@ -96,7 +106,9 @@ jobs:
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
             test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
             if [ "$job" = "$IAAI_JOB" ]; then
-              test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-pilot'
+              test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-national'
+              test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="IaaINational__PrimaryProvider")][0].value // ""')" = auctionsapi
+              test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="IaaINational__EnforceScheduleWindow")][0].value // ""')" = false
             fi
             echo "$json" | jq '{name:.name,trigger:.properties.configuration.triggerType,cron:.properties.configuration.scheduleTriggerConfig.cronExpression,retry:.properties.configuration.replicaRetryLimit,parallelism:.properties.configuration.scheduleTriggerConfig.parallelism,overlapMinutes:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes") | .value),enabled:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled") | .value),allowWrites:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites") | .value),image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args}'
           done
