@@ -16,6 +16,8 @@ public sealed class CopartCatchUpSafetyContractTests
         Assert.True(methodEnd > methodStart, "Copart catch-up selector boundary must remain discoverable.");
         var method = source[methodStart..methodEnd];
 
+        Assert.Contains("join lateral", method);
+        Assert.Contains("order by versions.observed_at desc, versions.id desc", method);
         Assert.Contains("jsonb_typeof(latest.payload->'images') = 'array'", method);
         Assert.Contains("then jsonb_array_length(latest.payload->'images')", method);
         Assert.DoesNotContain("jsonb_array_length(coalesce(latest.payload->'images'", method);
