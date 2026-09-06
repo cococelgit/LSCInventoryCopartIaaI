@@ -1,0 +1,63 @@
+name: Diagnose Copart Catch-up Job
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  CATCHUP_JOB: job-lsc-copart-catchup-prod
+  ENVIRONMENT: cae-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  WORKSPACE_ID: d3998ed7-22f3-4fcc-af4d-8645e6fa0960
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Inspect Job, executions and activity events
+        shell: bash
+        run: |
+          set -euo pipefail
+          job_id="/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$CATCHUP_JOB"
+          job_uri="https://management.azure.com$job_id?api-version=2024-03-01"
+          executions_uri="https://management.azure.com$job_id/executions?api-version=2024-03-01"
+          job="$(az rest --method get --uri "$job_uri" -o json)"
+          echo '=== JOB CONFIG (NON-SENSITIVE) ==='
+          echo "$job" | jq '{name:.name,location:.location,provisioningState:.properties.provisioningState,triggerType:.properties.configuration.triggerType,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,resources:.properties.template.containers[0].resources,envNames:[.properties.template.containers[0].env[]?.name],registries:.properties.configuration.registries}'
+          echo '=== RECENT EXECUTIONS ==='
+          az rest --method get --uri "$executions_uri" -o json | jq '[.value[] | {name:.name,status:.properties.status,start:.properties.startTime,end:.properties.endTime,replicaStatuses:.properties.replicaStatuses}] | .[0:10]'
+          echo '=== ACTIVITY LOG ==='
+          az monitor activity-log list --resource-id "$job_id" --offset 4h -o json | jq '[.[] | {eventTimestamp,operationName:.operationName.value,status:.status.value,subStatus:.subStatus.value,caller,description,correlationId}] | .[0:30]'
+      - name: Inspect image, registry and resource quotas
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== ACR ==='
+          az acr show -n "$ACR_NAME" -g "$RESOURCE_GROUP" -o json | jq '{loginServer,sku:.sku.name,adminUserEnabled,provisioningState,publicNetworkAccess}'
+          az acr repository show-manifests -n "$ACR_NAME" --repository lsc-inventory-engine --orderby time_desc -o json | jq '[.[] | {digest,tags,lastUpdateTime}] | .[0:10]'
+          echo '=== CONTAINER APPS ENVIRONMENT ==='
+          az containerapp env show -n "$ENVIRONMENT" -g "$RESOURCE_GROUP" -o json | jq '{name,location,provisioningState:.properties.provisioningState,defaultDomain:.properties.defaultDomain,workloadProfiles:.properties.workloadProfiles,appLogsConfiguration:.properties.appLogsConfiguration}'
+          echo '=== RESOURCE GROUP USAGE ==='
+          az resource list -g "$RESOURCE_GROUP" --query '[].{type:type,name:name,location:location}' -o table
+          echo '=== EAST US 2 QUOTAS ==='
+          az vm list-usage --location eastus2 -o json | jq '[.[] | select(.name.value|test("cores|virtualMachines|container|storage";"i")) | {name:.name.localizedValue,currentValue,limit}]'
+      - name: Query recent Container App logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          query='union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerGroupName_s contains "job-lsc-copart-catchup-prod" or Log_s contains "job-lsc-copart-catchup-prod" | project TimeGenerated, $table, ContainerGroupName_s, ContainerName_s, Log_s | order by TimeGenerated desc | take 200'
+          az monitor log-analytics query --workspace "$WORKSPACE_ID" --analytics-query "$query" -o json || true
