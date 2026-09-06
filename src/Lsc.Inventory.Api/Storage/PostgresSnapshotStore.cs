@@ -1316,14 +1316,15 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "cutoff", cutoff.ToUniversalTime());
         AddParameter(command, "limit", limit);
         var snapshots = new List<StoredVehicleSnapshot>(limit);
-        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        var jsonOptions = CreateStoredVehicleJsonOptions();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var rawJson = reader.GetString(2);
-            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            var lotKey = reader.GetString(0);
+            var vehicle = DeserializeStoredVehicle(rawJson, lotKey, jsonOptions);
             if (vehicle is not null)
-                snapshots.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
+                snapshots.Add(new StoredVehicleSnapshot(lotKey, reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
         }
         return snapshots;
     }
@@ -1355,7 +1356,11 @@ public sealed partial class PostgresSnapshotStore(
                  or latest.payload #>> '{condition,has_key}' is null
                  or coalesce(latest.payload #>> '{seller,name}', '') = ''
                  or coalesce(latest.payload #>> '{seller_name}', '') = ''
-                 or jsonb_array_length(coalesce(latest.payload->'images', '[]'::jsonb)) = 0
+                 or case
+                        when jsonb_typeof(latest.payload->'images') = 'array'
+                            then jsonb_array_length(latest.payload->'images')
+                        else 0
+                    end = 0
               )
             order by lots.auction_at asc, latest.lot_key
             limit @limit;
@@ -1363,14 +1368,15 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "cutoff", cutoff.ToUniversalTime());
         AddParameter(command, "limit", limit);
         var snapshots = new List<StoredVehicleSnapshot>(limit);
-        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+        var jsonOptions = CreateStoredVehicleJsonOptions();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var rawJson = reader.GetString(2);
-            var vehicle = JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions);
+            var lotKey = reader.GetString(0);
+            var vehicle = DeserializeStoredVehicle(rawJson, lotKey, jsonOptions);
             if (vehicle is not null)
-                snapshots.Add(new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
+                snapshots.Add(new StoredVehicleSnapshot(lotKey, reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
         }
         return snapshots;
     }
