@@ -52,7 +52,7 @@ jobs:
           test "$(echo "$current" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = '0 0-22/2 * * *'
           job_id="$(echo "$current" | jq -r '.id')"
           body="$(echo "$current" | jq --arg apiKey "$AUCTIONS_API_KEY" '
-            .properties.template.containers[0] |= del(.imageType)
+            .properties.template.containers[0] |= (del(.imageType) | .command=["/app/run-auctionsapi-dry-run.sh"] | .args=["copart","run"])
             | .properties.template.containers[0].env=((.env // [])
                 | map(select(.name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__ApiKey"))
                 + [
@@ -75,6 +75,7 @@ jobs:
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
           test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
           test "$(echo "$json" | jq -r '.properties.configuration.replicaRetryLimit')" = 0
+          test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'copart run'
           excel="$(az containerapp job show --name job-lsc-copart-excel-prod --resource-group "$RESOURCE_GROUP" -o json)"
           test "$(echo "$excel" | jq -r '.properties.configuration.triggerType')" = Manual
           catchup="$(az containerapp job show --name job-lsc-copart-catchup-prod --resource-group "$RESOURCE_GROUP" -o json)"

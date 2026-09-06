@@ -72,6 +72,29 @@ public sealed class CopartCatchUpSafetyContractTests
         Assert.Contains("app.Lifetime.ApplicationStopping", branch);
     }
 
+    [Fact]
+    public void Automatic_copart_runtime_runs_without_a_maximum_lot_argument()
+    {
+        var workflow = File.ReadAllText(FindRepositoryWorkflowFile("restore-alternating-auctionsapi-schedules.yml"));
+        Assert.Contains(".command=[\"/app/run-auctionsapi-dry-run.sh\"]", workflow);
+        Assert.Contains(".args=[\"copart\",\"run\"]", workflow);
+        Assert.DoesNotContain("[\"copart\",\"run\",\"500\"]", workflow);
+        Assert.DoesNotContain("--maximum 500", workflow, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FindRepositoryWorkflowFile(string fileName)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, ".github", "workflows", fileName);
+            if (File.Exists(candidate)) return candidate;
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate workflow {fileName} from {AppContext.BaseDirectory}");
+    }
+
     private static string FindRepositorySourceFile(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

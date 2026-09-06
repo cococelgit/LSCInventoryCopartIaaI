@@ -81,7 +81,10 @@ jobs:
                 | if $isIaai then
                     .command=["dotnet"]
                     | .args=["Lsc.Inventory.Api.dll","--iaai-national"]
-                  else . end
+                  else
+                    .command=["/app/run-auctionsapi-dry-run.sh"]
+                    | .args=["copart","run"]
+                  end
                 | .env=((.env // [])
                     | map(select(type=="object") | select((try .name catch null) as $n | ($removeNames | index($n)) == null))
                     + [
