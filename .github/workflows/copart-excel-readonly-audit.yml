@@ -1,0 +1,44 @@
+name: Audit Copart Excel Job Readonly
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  JOB: job-lsc-copart-excel-prod
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Read Excel job without modifying it
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$(az containerapp job show --name "$JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          echo '=== CONFIG ==='
+          echo "$config" | jq '{name:.name,provisioningState:.properties.provisioningState,triggerType:.properties.configuration.triggerType,schedule:.properties.configuration.scheduleTriggerConfig,manual:.properties.configuration.manualTriggerConfig,replicaTimeout:.properties.configuration.replicaTimeout,replicaRetryLimit:.properties.configuration.replicaRetryLimit,image:.properties.template.containers[0].image,containerName:.properties.template.containers[0].name,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,environmentId:.properties.environmentId}'
+          echo '=== ACTIVE EXECUTIONS ==='
+          az containerapp job execution list --name "$JOB" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running'].{name:name,start:properties.startTime,status:properties.status}" -o json
+          echo '=== RECENT EXECUTIONS ==='
+          az containerapp job execution list --name "$JOB" --resource-group "$RESOURCE_GROUP" --query '[0:20].{name:name,start:properties.startTime,end:properties.endTime,status:properties.status}' -o json
+          echo '=== RESULT ==='
+          trigger="$(echo "$config" | jq -r '.properties.configuration.triggerType')"
+          active="$(az containerapp job execution list --name "$JOB" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
+          echo "TRIGGER=$trigger ACTIVE_EXECUTIONS=$active"
