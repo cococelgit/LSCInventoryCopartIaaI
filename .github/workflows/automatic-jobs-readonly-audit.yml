@@ -43,6 +43,8 @@ jobs:
             for execution in $(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query '[0:8].name' -o tsv); do
               echo "--- EXECUTION $job/$execution ---"
               az containerapp job execution show --name "$job" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" --query '{name:name,status:properties.status,start:properties.startTime,end:properties.endTime,provisioningState:properties.provisioningState,conditions:properties.conditions,replicaStatuses:properties.replicaStatuses}' -o json || true
+              echo "--- REPLICAS $job/$execution ---"
+              az containerapp job replica list --name "$job" --resource-group "$RESOURCE_GROUP" --execution "$execution" --query '[].{name:name,status:properties.status,containers:properties.containers}' -o json || true
             done
           done
           if [ -n "$environment_id" ]; then
