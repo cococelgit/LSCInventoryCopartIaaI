@@ -1,0 +1,74 @@
+name: Copart AuctionsAPI Catch-up Real Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      maximum:
+        description: Maximum historical Copart lots to process
+        required: true
+        default: '500'
+        type: string
+      confirm_writes:
+        description: Type ENABLE_COPART_CATCHUP_WRITES only after approving dry-run
+        required: true
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-catchup-real-run
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  CATCHUP_JOB: job-lsc-copart-catchup-prod
+
+jobs:
+  real-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Refuse writes without explicit confirmation
+        shell: bash
+        env:
+          CONFIRM_WRITES: ${{ inputs.confirm_writes }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_WRITES" != "ENABLE_COPART_CATCHUP_WRITES" ]]; then
+            echo "Writes remain disabled. Run only after the dry-run has been reviewed and approved."
+            exit 1
+          fi
+      - name: Set real catch-up command and enable writes
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+          MAXIMUM: ${{ inputs.maximum }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]] && (( MAXIMUM <= 500 ))
+          test -n "$AUCTIONS_API_KEY"
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$CATCHUP_JOB?api-version=2024-03-01"
+          current="$(az rest --method get --uri "$uri" -o json)"
+          body="$(echo "$current" | jq --arg key "$AUCTIONS_API_KEY" --arg max "$MAXIMUM" '.properties.template.containers[0] |= (del(.imageType) | .command=["/app/run-auctionsapi-dry-run.sh"] | .args=["copart","catch-up",$max] | .env=((.env // []) | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__ApiKey",value:$key},{name:"AuctionsApi__Enabled",value:"true"},{name:"AuctionsApi__AllowWrites",value:"true"}])) | .properties.configuration |= (del(.identitySettings,.secrets,.scheduleTriggerConfig) | .triggerType="Manual" | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1} | .replicaRetryLimit=0 | .replicaTimeout=10800) | {location:.location,identity:.identity,properties:{environmentId:.properties.environmentId,configuration:.properties.configuration,template:.properties.template}}')"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          echo "COPART_CATCHUP_WRITES_ENABLED=true"
+          echo "COPART_CATCHUP_MAXIMUM=$MAXIMUM"
+      - name: Start one real catch-up execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          execution="$(az containerapp job start -n "$CATCHUP_JOB" -g "$RESOURCE_GROUP" --only-show-errors -o tsv --query name)"
+          echo "COPART_CATCHUP_EXECUTION=$execution"
+          echo "The separate catch-up Job remains Manual; the automatic Copart Job is not modified."
