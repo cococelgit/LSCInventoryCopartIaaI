@@ -23,6 +23,7 @@ env:
   RESOURCE_GROUP: rg-lsc-inventory-prod
   IAAI_JOB: job-lsc-iaai-pilot-prod
   COPART_JOB: job-lsc-copart-auto-prod
+  API_APP: ca-lsc-inventory-api-prod
   OVERLAP_MINUTES: "140"
 
 jobs:
@@ -47,6 +48,9 @@ jobs:
           set -euo pipefail
           test "$CONFIRMATION" = RESTORE_ALTERNATING_AUCTION_SCHEDULES
           test -n "$AUCTIONS_API_KEY"
+          api_json="$(az containerapp show --name "$API_APP" --resource-group "$RESOURCE_GROUP" -o json)"
+          persistence_env="$(echo "$api_json" | jq '[.properties.template.containers[0].env[]? | select(.name|IN("Persistence__Provider","Persistence__PostgreSqlHost","Persistence__Database","Persistence__ManagedIdentityClientId","Persistence__DatabaseUser","Persistence__RuntimePrincipalName","Persistence__RuntimePrincipalObjectId","Persistence__RunMigrations","BlobAudit__AccountUrl","BlobAudit__ContainerName")) | select(has("value")) | {name,value}]')"
+          test "$(echo "$persistence_env" | jq 'length')" -eq 10
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
             test "$active" -eq 0
@@ -88,6 +92,7 @@ jobs:
                   | .replicaTimeout=10800
                   | .replicaRetryLimit=0)
               | {properties:{template:.properties.template,configuration:.properties.configuration}}')"
+            body="$(echo "$body" | jq --argjson persistence "$persistence_env" '.properties.template.containers[0].env += $persistence')"
             az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --only-show-errors
             echo "CONFIGURED_JOB=$job CRON=$cron OVERLAP_MINUTES=$OVERLAP_MINUTES RETRY=0"
           done
