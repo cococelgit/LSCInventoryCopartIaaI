@@ -73,7 +73,7 @@ jobs:
             else
               cron='0 0-22/2 * * *'
             fi
-            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" '
+            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" --arg provider "$persistence_provider" --arg postgresHost "$persistence_postgres_host" --arg database "$persistence_database" --arg managedIdentity "$persistence_managed_identity" --arg databaseUser "$persistence_database_user" --arg runtimeName "$persistence_runtime_name" --arg runtimeObjectId "$persistence_runtime_object_id" --arg blobUrl "$blob_account_url" --arg blobContainer "$blob_container_name" '
               .properties.template.containers[0] |= (
                 del(.imageType)
                 | if .name == "job-lsc-iaai-pilot-prod" then
@@ -83,6 +83,16 @@ jobs:
                 | .env=((.env // [])
                     | map(select(type=="object") | select(.name != "Persistence__Provider" and .name != "Persistence__PostgreSqlHost" and .name != "Persistence__Database" and .name != "Persistence__ManagedIdentityClientId" and .name != "Persistence__DatabaseUser" and .name != "Persistence__RuntimePrincipalName" and .name != "Persistence__RuntimePrincipalObjectId" and .name != "Persistence__RunMigrations" and .name != "BlobAudit__AccountUrl" and .name != "BlobAudit__ContainerName" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__ApiKey" and .name != "IaaINational__Enabled" and .name != "IaaINational__RunOnStartup" and .name != "IaaINational__PrimaryProvider" and .name != "IaaINational__FallbackProvider" and .name != "IaaINational__UpdatedWithinMinutes" and .name != "IaaINational__RequireInitialImportCompleted" and .name != "IaaINational__EnforceScheduleWindow" and .name != "IaaINational__ScheduleIntervalHours"))
                     + [
+                        {name:"Persistence__Provider",value:$provider},
+                        {name:"Persistence__PostgreSqlHost",value:$postgresHost},
+                        {name:"Persistence__Database",value:$database},
+                        {name:"Persistence__ManagedIdentityClientId",value:$managedIdentity},
+                        {name:"Persistence__DatabaseUser",value:$databaseUser},
+                        {name:"Persistence__RuntimePrincipalName",value:$runtimeName},
+                        {name:"Persistence__RuntimePrincipalObjectId",value:$runtimeObjectId},
+                        {name:"Persistence__RunMigrations",value:"false"},
+                        {name:"BlobAudit__AccountUrl",value:$blobUrl},
+                        {name:"BlobAudit__ContainerName",value:$blobContainer},
                         {name:"AuctionsApi__DefaultOverlapMinutes",value:$minutes},
                         {name:"AuctionsApi__Enabled",value:"true"},
                         {name:"AuctionsApi__AllowWrites",value:"true"},
@@ -106,7 +116,6 @@ jobs:
                   | .replicaTimeout=10800
                   | .replicaRetryLimit=0)
               | {properties:{template:.properties.template,configuration:.properties.configuration}}')"
-            az containerapp job update --name "$job" --resource-group "$RESOURCE_GROUP" --set-env-vars "Persistence__Provider=$persistence_provider" "Persistence__PostgreSqlHost=$persistence_postgres_host" "Persistence__Database=$persistence_database" "Persistence__ManagedIdentityClientId=$persistence_managed_identity" "Persistence__DatabaseUser=$persistence_database_user" "Persistence__RuntimePrincipalName=$persistence_runtime_name" "Persistence__RuntimePrincipalObjectId=$persistence_runtime_object_id" "Persistence__RunMigrations=false" "BlobAudit__AccountUrl=$blob_account_url" "BlobAudit__ContainerName=$blob_container_name" --only-show-errors
             az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --only-show-errors
             echo "CONFIGURED_JOB=$job CRON=$cron OVERLAP_MINUTES=$OVERLAP_MINUTES RETRY=0"
           done
