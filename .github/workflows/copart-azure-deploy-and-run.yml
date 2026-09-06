@@ -60,6 +60,11 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      - name: Block retired Copart Excel pipeline
+        shell: bash
+        run: |
+          echo "Copart Excel ingestion is retired. Use job-lsc-copart-auto-prod with AuctionsAPI; no Excel execution or reconfiguration is allowed." >&2
+          exit 1
       - name: Checkout repository
         uses: actions/checkout@v4
 
