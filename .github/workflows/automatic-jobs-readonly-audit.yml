@@ -1,0 +1,59 @@
+name: Audit Automatic IAAI and Copart Jobs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_JOB: job-lsc-copart-auto-prod
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Read current automatic job health
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment_id=""
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            echo "=== JOB CONFIG: $job ==="
+            config="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            echo "$config" | jq '{name:.name,provisioningState:.properties.provisioningState,triggerType:.properties.configuration.triggerType,schedule:.properties.configuration.scheduleTriggerConfig,manual:.properties.configuration.manualTriggerConfig,replicaTimeout:.properties.configuration.replicaTimeout,replicaRetryLimit:.properties.configuration.replicaRetryLimit,workloadProfileName:.properties.workloadProfileName,image:.properties.template.containers[0].image,containerName:.properties.template.containers[0].name,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,resources:.properties.template.containers[0].resources,environmentId:.properties.environmentId}'
+            environment_id="$(echo "$config" | jq -r '.properties.environmentId // empty')"
+            echo "=== EXECUTIONS: $job ==="
+            az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query '[0:12].{name:name,status:properties.status,start:properties.startTime,end:properties.endTime,conditions:properties.conditions,replicaStatuses:properties.replicaStatuses}' -o json
+            for execution in $(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query '[0:8].name' -o tsv); do
+              echo "--- EXECUTION $job/$execution ---"
+              az containerapp job execution show --name "$job" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" --query '{name:name,status:properties.status,start:properties.startTime,end:properties.endTime,provisioningState:properties.provisioningState,conditions:properties.conditions,replicaStatuses:properties.replicaStatuses}' -o json || true
+            done
+          done
+          if [ -n "$environment_id" ]; then
+            echo "=== ENVIRONMENT ==="
+            az resource show --ids "$environment_id" --query '{name:name,provisioningState:properties.provisioningState,workloadProfiles:properties.workloadProfiles,logs:properties.appLogsConfiguration.destination}' -o json || true
+            workspace_id="$(az resource show --ids "$environment_id" --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' -o tsv 2>/dev/null || true)"
+            if [ -n "$workspace_id" ] && [ "$workspace_id" != "None" ]; then
+              for job in "$IAAI_JOB" "$COPART_JOB"; do
+                echo "=== LOGS: $job ==="
+                query="union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(48h) | where Log_s contains '$job' or ContainerName_s contains '$job' or ContainerGroupName_s contains '$job' | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s, Reason_s | order by TimeGenerated asc | take 2000"
+                az monitor log-analytics query --workspace "$workspace_id" --analytics-query "$query" -o json || true
+              done
+            fi
+          fi
