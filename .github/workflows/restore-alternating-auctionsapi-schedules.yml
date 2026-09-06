@@ -58,8 +58,12 @@ jobs:
             body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" '
               .properties.template.containers[0] |= del(.imageType)
               | .properties.template.containers[0].env=((.env // [])
-                  | map(select(.name != "AuctionsApi__DefaultOverlapMinutes"))
-                  + [{name:"AuctionsApi__DefaultOverlapMinutes",value:$minutes}])
+                  | map(select(.name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites"))
+                  + [
+                      {name:"AuctionsApi__DefaultOverlapMinutes",value:$minutes},
+                      {name:"AuctionsApi__Enabled",value:"true"},
+                      {name:"AuctionsApi__AllowWrites",value:"true"}
+                    ])
               | .properties.configuration |= (
                   del(.identitySettings,.secrets,.manualTriggerConfig)
                   | .triggerType="Schedule"
@@ -81,7 +85,9 @@ jobs:
             test "$(echo "$json" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = "$expected"
             test "$(echo "$json" | jq -r '.properties.configuration.replicaRetryLimit')" = 0
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
-            echo "$json" | jq '{name:.name,trigger:.properties.configuration.triggerType,cron:.properties.configuration.scheduleTriggerConfig.cronExpression,retry:.properties.configuration.replicaRetryLimit,parallelism:.properties.configuration.scheduleTriggerConfig.parallelism,overlapMinutes:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes") | .value),image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args}'
+            test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
+            test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
+            echo "$json" | jq '{name:.name,trigger:.properties.configuration.triggerType,cron:.properties.configuration.scheduleTriggerConfig.cronExpression,retry:.properties.configuration.replicaRetryLimit,parallelism:.properties.configuration.scheduleTriggerConfig.parallelism,overlapMinutes:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes") | .value),enabled:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled") | .value),allowWrites:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites") | .value),image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args}'
           done
           excel="$(az containerapp job show --name job-lsc-copart-excel-prod --resource-group "$RESOURCE_GROUP" -o json)"
           test "$(echo "$excel" | jq -r '.properties.configuration.triggerType')" = Manual
