@@ -1,0 +1,80 @@
+name: Promote Copart Catch-up Image and Dry Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Immutable engine image reference"
+        required: true
+        default: "acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:copart-e2d468e2c457112bb0906bb542594e05a1df6d16"
+        type: string
+      maximum:
+        description: "Maximum lots for the safe dry-run"
+        required: true
+        default: "250"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: copart-catchup-promote-image
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  CATCHUP_JOB: job-lsc-copart-catchup-prod
+
+jobs:
+  promote-and-dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Promote image only to isolated catch-up job
+        env:
+          IMAGE: ${{ inputs.image }}
+          MAXIMUM: ${{ inputs.maximum }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE" == acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:* ]]
+          [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]] && (( MAXIMUM <= 500 ))
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$CATCHUP_JOB?api-version=2024-03-01"
+          current="$(az rest --method get --uri "$uri" -o json)"
+          body="$(echo "$current" | jq --arg image "$IMAGE" --arg maximum "$MAXIMUM" '
+            .properties.template.containers[0] |= (del(.imageType)
+              | .image=$image
+              | .command=["/app/run-auctionsapi-dry-run.sh"]
+              | .args=["copart","catch-up-dry-run",$maximum]
+              | .env=((.env // []) | map(select(.name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__AllowWrites",value:"false"}]))
+            | .properties.configuration |= (del(.scheduleTriggerConfig) | .triggerType="Manual" | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1} | .replicaRetryLimit=0 | .replicaTimeout=10800)
+            | {location:.location,identity:.identity,properties:{environmentId:.properties.environmentId,configuration:.properties.configuration,template:.properties.template}}')"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          echo "CATCHUP_IMAGE=$IMAGE"
+          echo "CATCHUP_MAXIMUM=$MAXIMUM"
+
+      - name: Verify writes remain disabled and start one dry-run
+        env:
+          IMAGE: ${{ inputs.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          job="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$CATCHUP_JOB?api-version=2024-03-01" -o json)"
+          echo "$job" | jq '{image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,trigger:.properties.configuration.triggerType,allowWrites:([.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""),timeout:.properties.configuration.replicaTimeout}'
+          test "$(echo "$job" | jq -r '.properties.template.containers[0].image')" = "$IMAGE"
+          test "$(echo "$job" | jq -r '.properties.configuration.triggerType')" = "Manual"
+          test "$(echo "$job" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = "false"
+          execution="$(az containerapp job start -n "$CATCHUP_JOB" -g "$RESOURCE_GROUP" --only-show-errors -o tsv --query name)"
+          echo "CATCHUP_EXECUTION=$execution"
+          echo "CATCHUP_DRY_RUN_STARTED=true"
