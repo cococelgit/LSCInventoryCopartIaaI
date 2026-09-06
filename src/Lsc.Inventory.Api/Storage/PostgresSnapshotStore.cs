@@ -1331,10 +1331,14 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task<IReadOnlyList<StoredVehicleSnapshot>> GetCopartCatchUpCandidatesAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken)
     {
+        Console.WriteLine("CATCHUP_DB=ensure_schema_start");
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
+        Console.WriteLine("CATCHUP_DB=ensure_schema_complete");
         var limit = Math.Clamp(maximum, 1, 10_000);
+        Console.WriteLine($"CATCHUP_DB=open_connection_start limit={limit}");
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        Console.WriteLine("CATCHUP_DB=open_connection_complete");
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
@@ -1371,7 +1375,9 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "limit", limit);
         var snapshots = new List<StoredVehicleSnapshot>(limit);
         var jsonOptions = CreateStoredVehicleJsonOptions();
+        Console.WriteLine("CATCHUP_DB=query_start");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        Console.WriteLine("CATCHUP_DB=query_reader_open");
         while (await reader.ReadAsync(cancellationToken))
         {
             var rawJson = reader.GetString(2);
@@ -1380,6 +1386,7 @@ public sealed partial class PostgresSnapshotStore(
             if (vehicle is not null)
                 snapshots.Add(new StoredVehicleSnapshot(lotKey, reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson));
         }
+        Console.WriteLine($"CATCHUP_DB=query_complete candidates={snapshots.Count}");
         return snapshots;
     }
 

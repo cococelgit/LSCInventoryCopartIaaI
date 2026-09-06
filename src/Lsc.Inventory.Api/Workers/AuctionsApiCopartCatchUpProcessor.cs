@@ -54,8 +54,10 @@ public sealed class AuctionsApiCopartCatchUpProcessor(
             throw new InvalidOperationException("AuctionsAPI canonical writes are disabled for Copart catch-up.");
 
         var limit = Math.Clamp(maximum, 1, 10_000);
+        Console.WriteLine($"CATCHUP_PHASE=candidate_query_start maximum={limit} cutoff={cutoff:o} dryRun={dryRun}");
         logger.LogInformation("Copart catch-up candidate query starting. Maximum={Maximum}, Cutoff={Cutoff:o}, DryRun={DryRun}.", limit, cutoff, dryRun);
         var candidates = await snapshotStore.GetCopartCatchUpCandidatesAsync(limit, cutoff, cancellationToken);
+        Console.WriteLine($"CATCHUP_PHASE=candidate_query_complete candidates={candidates.Count} dryRun={dryRun}");
         logger.LogInformation("Copart catch-up candidate query completed. Candidates={CandidateCount}, DryRun={DryRun}.", candidates.Count, dryRun);
 
         var runId = dryRun
@@ -95,9 +97,11 @@ public sealed class AuctionsApiCopartCatchUpProcessor(
                 {
                     requests++;
                     var requestStopwatch = Stopwatch.StartNew();
+                    Console.WriteLine($"CATCHUP_PHASE=auctionsapi_request_start lot={lot} request={requests} dryRun={dryRun}");
                     logger.LogInformation("Copart catch-up AuctionsAPI request starting. Lot={LotNumber}, Domain=3, RequestNumber={RequestNumber}, DryRun={DryRun}.", lot, requests, dryRun);
                     var response = await auctionsApiClient.GetLotAsync(lot, 3, searchById: false, includePricesHistory: false, cancellationToken);
                     requestStopwatch.Stop();
+                    Console.WriteLine($"CATCHUP_PHASE=auctionsapi_request_complete lot={lot} request={requests} elapsedMs={requestStopwatch.ElapsedMilliseconds} dataKind={response.Data.ValueKind}");
                     logger.LogInformation("Copart catch-up AuctionsAPI request completed. Lot={LotNumber}, RequestNumber={RequestNumber}, ElapsedMs={ElapsedMs}, DataKind={DataKind}.", lot, requests, requestStopwatch.ElapsedMilliseconds, response.Data.ValueKind);
                     var rows = response.Data.ValueKind == JsonValueKind.Object && response.Data.TryGetProperty("lots", out var nestedLots) && nestedLots.ValueKind == JsonValueKind.Array
                         ? new List<JsonElement> { response.Data }
