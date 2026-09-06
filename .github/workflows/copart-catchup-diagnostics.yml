@@ -42,6 +42,16 @@ jobs:
           az rest --method get --uri "$executions_uri" -o json | jq '[.value[] | {name:.name,status:.properties.status,start:.properties.startTime,end:.properties.endTime,replicaStatuses:.properties.replicaStatuses}] | .[0:10]'
           echo '=== ACTIVITY LOG ==='
           az monitor activity-log list --resource-id "$job_id" --offset 4h -o json | jq '[.[] | {eventTimestamp,operationName:.operationName.value,status:.status.value,subStatus:.subStatus.value,caller,description,correlationId}] | .[0:30]'
+          echo '=== JOB IDENTITY ==='
+          identity_id="$(echo "$job" | jq -r '.identity.userAssignedIdentities // {} | keys[0] // empty')"
+          if [ -n "$identity_id" ]; then
+            principal_id="$(az identity show --ids "$identity_id" --query principalId -o tsv)"
+            echo "$job" | jq --arg identity_id "$identity_id" --arg principal_id "$principal_id" '{identityResourceId:$identity_id,principalId:$principal_id}'
+            acr_id="$(az acr show -n "$ACR_NAME" -g "$RESOURCE_GROUP" --query id -o tsv)"
+            az role assignment list --assignee-object-id "$principal_id" --scope "$acr_id" -o json | jq '[.[] | {roleDefinitionName,scope,principalId}]'
+          else
+            echo '{"identityResourceId":null,"principalId":null,"acrPullAssignments":[]}'
+          fi
       - name: Inspect image, registry and resource quotas
         shell: bash
         run: |
@@ -59,5 +69,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          query='union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerGroupName_s contains "job-lsc-copart-catchup-prod" or Log_s contains "job-lsc-copart-catchup-prod" | project TimeGenerated, $table, ContainerGroupName_s, ContainerName_s, Log_s | order by TimeGenerated desc | take 200'
+          query='union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerGroupName_s contains "job-lsc-copart-catchup-prod" or Log_s contains "job-lsc-copart-catchup-prod" | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s | order by TimeGenerated desc | take 200'
           az monitor log-analytics query --workspace "$WORKSPACE_ID" --analytics-query "$query" -o json || true
