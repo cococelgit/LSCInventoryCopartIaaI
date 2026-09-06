@@ -54,7 +54,7 @@ jobs:
               | .properties.template.containers[0].command=["/app/run-auctionsapi-dry-run.sh"]
               | .properties.template.containers[0].args=$args
               | .properties.template.containers[0].env=((.properties.template.containers[0].env // []) | map(select(.name != "AuctionsApi__AllowWrites")) + [{name:"AuctionsApi__AllowWrites",value:"true"}])
-              | {properties:{template:.properties.template,configuration:.properties.configuration}}')"
+              | {properties:{template:.properties.template}}')"
             az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --only-show-errors
             echo "RESTORED_RUNTIME=$job"
           done
