@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: ''
+      replica:
+        description: 'Optional exact replica name from the system log'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -75,6 +80,7 @@ jobs:
         shell: bash
         env:
           TARGET_EXECUTION: ${{ inputs.execution }}
+          TARGET_REPLICA: ${{ inputs.replica }}
         run: |
           set -euo pipefail
           if [ -n "$TARGET_EXECUTION" ]; then
@@ -96,7 +102,11 @@ jobs:
             execution_json="$(az rest --method get --uri "$execution_uri" -o json)"
             container="$(echo "$job_json" | jq -r '.properties.template.containers[0].name // empty')"
             echo '=== DIRECT EXECUTION LOGS ==='
-            echo "$execution_json" | jq -r '.properties.replicaStatuses[]?.replicaName // empty' | while IFS= read -r replica; do
+            replicas="$TARGET_REPLICA"
+            if [ -z "$replicas" ]; then
+              replicas="$(echo "$execution_json" | jq -r '.properties.replicaStatuses[]?.replicaName // empty')"
+            fi
+            echo "$replicas" | while IFS= read -r replica; do
               [ -z "$replica" ] && continue
               echo "--- replica=$replica container=$container ---"
               az containerapp job logs show --name "$CATCHUP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$TARGET_EXECUTION" --replica "$replica" --container "$container" --tail 500 --format text 2>&1 || true
