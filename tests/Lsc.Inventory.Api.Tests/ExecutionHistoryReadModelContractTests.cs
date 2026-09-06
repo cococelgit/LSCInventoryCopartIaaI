@@ -29,6 +29,18 @@ public sealed class ExecutionHistoryReadModelContractTests
         Assert.DoesNotContain("coalesce(events.created_count, 0)", method, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Incremental_progress_updates_live_counts_before_completion()
+    {
+        var storeSource = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));
+        var processorSource = File.ReadAllText(FindRepositoryFile("../Workers/AuctionsApiIncrementalSyncProcessor.cs"));
+        Assert.Contains("UpdateSyncRunProgressAsync", storeSource, StringComparison.Ordinal);
+        Assert.Contains("vehicles_observed = @vehicles_observed", storeSource, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("loaded_count = excluded.loaded_count", storeSource, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("if ((changed % 25) == 0)", processorSource, StringComparison.Ordinal);
+        Assert.Contains("InventorySyncRunProgress", processorSource, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryFile(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
