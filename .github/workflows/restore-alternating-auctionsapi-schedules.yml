@@ -42,9 +42,11 @@ jobs:
         shell: bash
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
           test "$CONFIRMATION" = RESTORE_ALTERNATING_AUCTION_SCHEDULES
+          test -n "$AUCTIONS_API_KEY"
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
             test "$active" -eq 0
@@ -55,18 +57,19 @@ jobs:
             else
               cron='0 0-22/2 * * *'
             fi
-            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" '
+            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" '
               .properties.template.containers[0] |= del(.imageType)
               | if .name == "job-lsc-iaai-pilot-prod" then
                   .properties.template.containers[0].command=["dotnet"]
                   | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--iaai-pilot"]
                 else . end
               | .properties.template.containers[0].env=((.env // [])
-                  | map(select(.name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites"))
+                  | map(select(.name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__ApiKey"))
                   + [
                       {name:"AuctionsApi__DefaultOverlapMinutes",value:$minutes},
                       {name:"AuctionsApi__Enabled",value:"true"},
-                      {name:"AuctionsApi__AllowWrites",value:"true"}
+                      {name:"AuctionsApi__AllowWrites",value:"true"},
+                      {name:"AuctionsApi__ApiKey",value:$apiKey}
                     ])
               | .properties.configuration |= (
                   del(.identitySettings,.secrets,.manualTriggerConfig)
@@ -91,6 +94,7 @@ jobs:
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
+            test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
             if [ "$job" = "$IAAI_JOB" ]; then
               test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-pilot'
             fi

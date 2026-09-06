@@ -40,23 +40,26 @@ jobs:
         shell: bash
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
           test "$CONFIRMATION" = REPAIR_COPART_AUTOMATIC_RUNTIME
+          test -n "$AUCTIONS_API_KEY"
           active="$(az containerapp job execution list --name "$COPART_JOB" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
           test "$active" -eq 0
           current="$(az containerapp job show --name "$COPART_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
           test "$(echo "$current" | jq -r '.properties.configuration.triggerType')" = Schedule
           test "$(echo "$current" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = '0 0-22/2 * * *'
           job_id="$(echo "$current" | jq -r '.id')"
-          body="$(echo "$current" | jq '
+          body="$(echo "$current" | jq --arg apiKey "$AUCTIONS_API_KEY" '
             .properties.template.containers[0] |= del(.imageType)
             | .properties.template.containers[0].env=((.env // [])
-                | map(select(.name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes"))
+                | map(select(.name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__ApiKey"))
                 + [
                     {name:"AuctionsApi__Enabled",value:"true"},
                     {name:"AuctionsApi__AllowWrites",value:"true"},
-                    {name:"AuctionsApi__DefaultOverlapMinutes",value:"140"}
+                    {name:"AuctionsApi__DefaultOverlapMinutes",value:"140"},
+                    {name:"AuctionsApi__ApiKey",value:$apiKey}
                   ])
             | {properties:{template:.properties.template}}')"
           az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --only-show-errors --output none
@@ -70,6 +73,7 @@ jobs:
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
+          test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
           test "$(echo "$json" | jq -r '.properties.configuration.replicaRetryLimit')" = 0
           excel="$(az containerapp job show --name job-lsc-copart-excel-prod --resource-group "$RESOURCE_GROUP" -o json)"
           test "$(echo "$excel" | jq -r '.properties.configuration.triggerType')" = Manual
