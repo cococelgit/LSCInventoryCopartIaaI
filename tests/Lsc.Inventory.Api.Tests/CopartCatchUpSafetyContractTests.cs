@@ -34,6 +34,32 @@ public sealed class CopartCatchUpSafetyContractTests
         Assert.DoesNotContain("JsonSerializer.Deserialize<AuctionVehicle>(rawJson, jsonOptions)", method);
     }
 
+    [Fact]
+    public void Catch_up_cli_uses_application_stopping_token()
+    {
+        var source = File.ReadAllText(FindRepositorySourceFile("Program.cs"));
+        var marker = "IAuctionsApiCopartCatchUpProcessor";
+        var methodStart = source.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "Catch-up CLI branch must resolve the Copart processor.");
+        var branchEnd = source.IndexOf("if (args.Contains(\"--iaai-auctionsapi-backfill\"", methodStart, StringComparison.Ordinal);
+        Assert.True(branchEnd > methodStart, "Catch-up CLI branch boundary must remain discoverable.");
+        var branch = source[methodStart..branchEnd];
+        Assert.Contains("app.Lifetime.ApplicationStopping", branch);
+    }
+
+    private static string FindRepositorySourceFile(string fileName)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, "src", "Lsc.Inventory.Api", fileName);
+            if (File.Exists(candidate)) return candidate;
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate {fileName} from {AppContext.BaseDirectory}");
+    }
+
     private static string FindRepositoryFile(string fileName)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

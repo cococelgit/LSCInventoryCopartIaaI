@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
@@ -93,8 +94,11 @@ public sealed class AuctionsApiCopartCatchUpProcessor(
                 try
                 {
                     requests++;
+                    var requestStopwatch = Stopwatch.StartNew();
                     logger.LogInformation("Copart catch-up AuctionsAPI request starting. Lot={LotNumber}, Domain=3, RequestNumber={RequestNumber}, DryRun={DryRun}.", lot, requests, dryRun);
                     var response = await auctionsApiClient.GetLotAsync(lot, 3, searchById: false, includePricesHistory: false, cancellationToken);
+                    requestStopwatch.Stop();
+                    logger.LogInformation("Copart catch-up AuctionsAPI request completed. Lot={LotNumber}, RequestNumber={RequestNumber}, ElapsedMs={ElapsedMs}, DataKind={DataKind}.", lot, requests, requestStopwatch.ElapsedMilliseconds, response.Data.ValueKind);
                     var rows = response.Data.ValueKind == JsonValueKind.Object && response.Data.TryGetProperty("lots", out var nestedLots) && nestedLots.ValueKind == JsonValueKind.Array
                         ? new List<JsonElement> { response.Data }
                         : AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data).ToList();
@@ -133,7 +137,7 @@ public sealed class AuctionsApiCopartCatchUpProcessor(
                 {
                     failed++;
                     failures.Add($"{lot}:auctionsapi:{exception.Message}");
-                    logger.LogWarning(exception, "Copart AuctionsAPI catch-up failed for lot {LotNumber}.", lot);
+                    logger.LogWarning(exception, "Copart AuctionsAPI catch-up failed for lot {LotNumber} after {RequestNumber} requests.", lot, requests);
                 }
 
                 completed++;
@@ -147,7 +151,9 @@ public sealed class AuctionsApiCopartCatchUpProcessor(
                     DateTimeOffset.UtcNow, candidates.Count, requests, failures.Take(20).ToArray(), updated, 0, 0, 0, failed, requests, true), CancellationToken.None);
             }
 
-            return new(runId, candidates.Count, matched, updated, noEvidence, failed, requests, failures.Take(20).ToArray(), dryRun);
+            var result = new AuctionsApiCopartCatchUpResult(runId, candidates.Count, matched, updated, noEvidence, failed, requests, failures.Take(20).ToArray(), dryRun);
+            logger.LogInformation("Copart catch-up completed. RunId={RunId}, Candidates={Candidates}, Matched={Matched}, Updated={Updated}, NoEvidence={NoEvidence}, Failed={Failed}, RequestsIssued={RequestsIssued}, DryRun={DryRun}.", result.RunId, result.Candidates, result.Matched, result.Updated, result.NoEvidence, result.Failed, result.RequestsIssued, result.DryRun);
+            return result;
         }
         catch (OperationCanceledException)
         {

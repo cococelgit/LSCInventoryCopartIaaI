@@ -1104,7 +1104,7 @@ if (args.Contains("--copart-auctionsapi-catch-up", StringComparer.OrdinalIgnoreC
     var cutoff = new DateTimeOffset(localToday, eastern.GetUtcOffset(new DateTimeOffset(localToday, eastern.BaseUtcOffset))).ToUniversalTime();
     await using var scope = app.Services.CreateAsyncScope();
     var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiCopartCatchUpProcessor>();
-    var result = await processor.RunAsync(maximum, cutoff, CancellationToken.None, dryRun);
+    var result = await processor.RunAsync(maximum, cutoff, app.Lifetime.ApplicationStopping, dryRun);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
     if (result.Failed > 0 || (!result.DryRun && result.Updated + result.NoEvidence + result.Failed < result.Candidates))
         Environment.ExitCode = 1;
