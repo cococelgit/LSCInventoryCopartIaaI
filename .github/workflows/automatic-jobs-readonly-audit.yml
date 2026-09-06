@@ -50,7 +50,7 @@ jobs:
             else
               json="$(az containerapp job show --name "$resource" --resource-group "$RESOURCE_GROUP" -o json)"
             fi
-            echo "$json" | jq '{name:.name,containerType:(.properties.template.containers|type),envType:(.properties.template.containers[0].env|type),envItemTypes:(.properties.template.containers[0].env // [] | map(type))}'
+            echo "$json" | jq '{name:.name,containerType:(.properties.template.containers|type),envType:(.properties.template.containers[0].env|type),envNames:(.properties.template.containers[0].env // [] | map(select(type=="object") | .name))}'
           done
       - name: Read current automatic job health
         shell: bash
