@@ -69,5 +69,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          query='union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerGroupName_s contains "job-lsc-copart-catchup-prod" or Log_s contains "job-lsc-copart-catchup-prod" | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s | order by TimeGenerated desc | take 200'
+          query='union isfuzzy=true ContainerAppSystemLogs_CL, ContainerAppConsoleLogs_CL | where TimeGenerated > ago(4h) | where ContainerName_s == "job-lsc-copart-catchup-prod" or Log_s contains "Copart catch-up" or Log_s contains "Unhandled" or Log_s contains "Exception" or Log_s contains "Npgsql" or Log_s contains "Postgres" or Log_s contains "stack" | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s | order by TimeGenerated desc | take 500'
           az monitor log-analytics query --workspace "$WORKSPACE_ID" --analytics-query "$query" -o json || true
