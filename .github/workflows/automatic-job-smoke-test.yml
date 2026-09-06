@@ -67,7 +67,7 @@ jobs:
           test "$(echo "$before" | jq -r '.properties.configuration.triggerType')" = Manual
           active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
           test "$active" -eq 0
-          echo "$before" | jq '{properties:{template:.properties.template}}' > "$RUNNER_TEMP/$job.before.json"
+          echo "$before" | jq '{properties:{template:.properties.template}} | .properties.template.containers[0] |= del(.imageType)' > "$RUNNER_TEMP/$job.before.json"
           image="$(echo "$before" | jq -r '.properties.template.containers[0].image')"
           patched="$(echo "$before" | jq --argjson args "$args" '
             .properties.template.containers[0] |= del(.imageType)
