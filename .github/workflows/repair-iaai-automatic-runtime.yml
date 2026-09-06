@@ -1,0 +1,87 @@
+name: Repair IAAI Automatic One-Shot Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type REPAIR_IAAI_AUTOMATIC_RUNTIME"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: repair-iaai-automatic-runtime
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Stop only stale IAAI executions and repair one-shot runtime
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = REPAIR_IAAI_AUTOMATIC_RUNTIME
+          mapfile -t running < <(az containerapp job execution list --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running'].name" -o tsv)
+          for execution in "${running[@]}"; do
+            [[ "$execution" =~ ^job-lsc-iaai-pilot-prod-[a-z0-9]+$ ]]
+            echo "Stopping stale IAAI execution $execution"
+            az containerapp job stop --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" --only-show-errors
+          done
+          current="$(az containerapp job show --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          test "$(echo "$current" | jq -r '.properties.configuration.triggerType')" = Schedule
+          test "$(echo "$current" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = '0 1-23/2 * * *'
+          job_id="$(echo "$current" | jq -r '.id')"
+          body="$(echo "$current" | jq '
+            .properties.template.containers[0] |= del(.imageType)
+            | .properties.template.containers[0].command=["dotnet"]
+            | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--iaai-pilot"]
+            | .properties.template.containers[0].env=((.env // [])
+                | map(select(.name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes"))
+                + [
+                    {name:"AuctionsApi__Enabled",value:"true"},
+                    {name:"AuctionsApi__AllowWrites",value:"true"},
+                    {name:"AuctionsApi__DefaultOverlapMinutes",value:"140"}
+                  ])
+            | {properties:{template:.properties.template}}')"
+          az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --only-show-errors --output none
+      - name: Verify one-shot runtime and isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          json="$(az containerapp job show --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
+          test "$(echo "$json" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = '0 1-23/2 * * *'
+          test "$(echo "$json" | jq -r '.properties.template.containers[0].command | join(" ")')" = dotnet
+          test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-pilot'
+          test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
+          test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
+          test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
+          test "$(echo "$json" | jq -r '.properties.configuration.replicaRetryLimit')" = 0
+          excel="$(az containerapp job show --name job-lsc-copart-excel-prod --resource-group "$RESOURCE_GROUP" -o json)"
+          test "$(echo "$excel" | jq -r '.properties.configuration.triggerType')" = Manual
+          catchup="$(az containerapp job show --name job-lsc-copart-catchup-prod --resource-group "$RESOURCE_GROUP" -o json)"
+          test "$(echo "$catchup" | jq -r '.properties.configuration.triggerType')" = Manual
+          echo "$json" | jq '{name:.name,trigger:.properties.configuration.triggerType,cron:.properties.configuration.scheduleTriggerConfig.cronExpression,retry:.properties.configuration.replicaRetryLimit,enabled:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled") | .value),allowWrites:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites") | .value),overlapMinutes:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes") | .value),image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args}'
+          echo "Excel remains Manual; catch-up remains Manual."

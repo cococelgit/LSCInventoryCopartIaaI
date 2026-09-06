@@ -57,6 +57,10 @@ jobs:
             fi
             body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" '
               .properties.template.containers[0] |= del(.imageType)
+              | if .name == "job-lsc-iaai-pilot-prod" then
+                  .properties.template.containers[0].command=["dotnet"]
+                  | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--iaai-pilot"]
+                else . end
               | .properties.template.containers[0].env=((.env // [])
                   | map(select(.name != "AuctionsApi__DefaultOverlapMinutes" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites"))
                   + [
@@ -87,6 +91,9 @@ jobs:
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
+            if [ "$job" = "$IAAI_JOB" ]; then
+              test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-pilot'
+            fi
             echo "$json" | jq '{name:.name,trigger:.properties.configuration.triggerType,cron:.properties.configuration.scheduleTriggerConfig.cronExpression,retry:.properties.configuration.replicaRetryLimit,parallelism:.properties.configuration.scheduleTriggerConfig.parallelism,overlapMinutes:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes") | .value),enabled:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled") | .value),allowWrites:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites") | .value),image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args}'
           done
           excel="$(az containerapp job show --name job-lsc-copart-excel-prod --resource-group "$RESOURCE_GROUP" -o json)"
