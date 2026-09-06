@@ -15,6 +15,18 @@ public sealed class TitleTaxonomyGateContractTests
     }
 
     [Fact]
+    public void Serializes_shared_facet_rebuilds_and_handles_concurrent_keys()
+    {
+        var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));
+        var refreshStart = source.IndexOf("private async Task RefreshSearchFacetsAsync", StringComparison.Ordinal);
+        var refreshEnd = source.IndexOf("private async Task RefreshSearchProjectionStatisticsIfReadyAsync", refreshStart, StringComparison.Ordinal);
+        var refresh = source[refreshStart..refreshEnd];
+
+        Assert.Contains("pg_advisory_xact_lock", refresh, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("on conflict (facet_key, facet_value) do update", refresh, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Measures_taxonomy_coverage_from_the_active_projection_not_version_history()
     {
         var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));

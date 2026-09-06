@@ -2340,6 +2340,10 @@ public sealed partial class PostgresSnapshotStore(
         facets.Transaction = transaction;
         facets.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 300);
         facets.CommandText = $"""
+            -- IAAI and Copart jobs can refresh the shared facet projection concurrently.
+            -- Serialize the delete/rebuild transaction so a second worker cannot insert
+            -- the same primary keys while the first worker is rebuilding the table.
+            select pg_advisory_xact_lock(hashtextextended('lsc:inventory_search_facet_counts', 0));
             delete from inventory_search_facet_counts;
             with expanded as (
                 select facet_key, nullif(btrim(facet_value), '') as facet_value
@@ -2364,7 +2368,10 @@ public sealed partial class PostgresSnapshotStore(
                 from counts
             )
             insert into inventory_search_facet_counts (facet_key, facet_value, vehicle_count, generated_at)
-            select facet_key, facet_value, vehicle_count, now() from ranked where rank <= 250;
+            select facet_key, facet_value, vehicle_count, now() from ranked where rank <= 250
+            on conflict (facet_key, facet_value) do update set
+                vehicle_count = excluded.vehicle_count,
+                generated_at = excluded.generated_at;
             """;
         await facets.ExecuteNonQueryAsync(cancellationToken);
     }
