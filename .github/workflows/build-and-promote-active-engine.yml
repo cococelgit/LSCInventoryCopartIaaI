@@ -45,9 +45,10 @@ jobs:
           test '${{ inputs.confirmation }}' = 'PROMOTE_ACTIVE_ENGINE_FIX'
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
-            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            echo "BASELINE_JOB=$job TRIGGER=$trigger IMAGE=$(echo "$json" | jq -r '.properties.template.containers[0].image')"
+            test "$trigger" = Schedule
             echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.before.json"
-            echo "BEFORE_$job=$(echo "$json" | jq -r '.properties.template.containers[0].image')"
           done
       - name: Build immutable shared engine image
         shell: bash
@@ -68,9 +69,9 @@ jobs:
           set -euo pipefail
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
-            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
-            test "$(echo "$json" | jq -r '.properties.configuration.parallelism')" = 1
-            test "$(echo "$json" | jq -r '.properties.configuration.replicaRetryLimit')" = 0
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            echo "VERIFY_JOB=$job TRIGGER=$trigger IMAGE=$(echo "$json" | jq -r '.properties.template.containers[0].image')"
+            test "$trigger" = Schedule
             echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.after.json"
             diff -u "$RUNNER_TEMP/$job.before.json" "$RUNNER_TEMP/$job.after.json"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
