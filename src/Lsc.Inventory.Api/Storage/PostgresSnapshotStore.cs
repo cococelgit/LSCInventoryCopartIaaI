@@ -463,6 +463,44 @@ public sealed partial class PostgresSnapshotStore(
         await RefreshSearchProjectionStatisticsIfReadyAsync(cancellationToken);
     }
 
+    public async Task UpdateSyncRunProgressAsync(Guid runId, InventorySyncRunProgress progress, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var metrics = connection.CreateCommand();
+        metrics.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        metrics.CommandText = """
+            insert into inventory_execution_run_metrics (
+                run_id, loaded_count, marked_count, discarded_count, quarantined_count, error_count, pages_processed,
+                cycle_completed, failures, updated_at)
+            values (@run_id, @loaded_count, @marked_count, @discarded_count, @quarantined_count, @error_count, @pages_processed,
+                false, '[]'::jsonb, now())
+            on conflict (run_id) do update set
+                loaded_count = excluded.loaded_count, marked_count = excluded.marked_count,
+                discarded_count = excluded.discarded_count, quarantined_count = excluded.quarantined_count,
+                error_count = excluded.error_count, pages_processed = excluded.pages_processed, updated_at = now();
+            """;
+        AddParameter(metrics, "run_id", runId);
+        AddParameter(metrics, "loaded_count", progress.Loaded);
+        AddParameter(metrics, "marked_count", progress.Marked);
+        AddParameter(metrics, "discarded_count", progress.Discarded);
+        AddParameter(metrics, "quarantined_count", progress.Quarantined);
+        AddParameter(metrics, "error_count", progress.Errors);
+        AddParameter(metrics, "pages_processed", progress.PagesProcessed);
+        await metrics.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            update inventory_sync_runs
+            set vehicles_observed = @vehicles_observed, requests_issued = @requests_issued
+            where run_id = @run_id and status = 'running';
+            """;
+        AddParameter(command, "run_id", runId);
+        AddParameter(command, "vehicles_observed", progress.VehiclesObserved);
+        AddParameter(command, "requests_issued", progress.RequestsIssued);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task RecordSyncRunEventAsync(InventorySyncRunEvent syncEvent, CancellationToken cancellationToken)
     {
         await EnsureSchemaAsync(cancellationToken);

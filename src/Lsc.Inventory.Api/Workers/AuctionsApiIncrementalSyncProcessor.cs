@@ -70,6 +70,9 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         var discarded = 0;
         var quarantined = 0;
         var deactivated = 0;
+        var created = 0;
+        var updated = 0;
+        var unchanged = 0;
         var pages = 0;
         var requests = 0;
         var eligibilityFlagCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -98,6 +101,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 {
                     if (ingested.Quarantined) quarantined++;
                     else if (ingested.Discarded) discarded++;
+                    if ((changed % 25) == 0)
+                        await snapshotStore.UpdateSyncRunProgressAsync(runId, new InventorySyncRunProgress(changed + archived, requests, loaded, created, updated, unchanged, marked, discarded, quarantined, failures.Count, pages), cancellationToken);
                     continue;
                 }
                 loaded++;
@@ -105,12 +110,17 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 if (persist)
                 {
                     var saved = ingested.Persistence!;
+                    if (saved.Action.Equals("created", StringComparison.OrdinalIgnoreCase)) created++;
+                    else if (saved.Action.Equals("updated", StringComparison.OrdinalIgnoreCase)) updated++;
+                    else if (saved.Action.Equals("unchanged", StringComparison.OrdinalIgnoreCase)) unchanged++;
                     await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, saved.LotKey, ingested.Vehicle.LotNumber, MaskVin(ingested.Vehicle.Vin), saved.Action, saved.ChangedFields, [], observedAt), cancellationToken);
                 }
                 else
                 {
                     await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, lotKey, vehicle.LotNumber, MaskVin(vehicle.Vin), "shadow-evaluated", [], [], observedAt), cancellationToken);
                 }
+                if ((changed % 25) == 0)
+                    await snapshotStore.UpdateSyncRunProgressAsync(runId, new InventorySyncRunProgress(changed + archived, requests, loaded, created, updated, unchanged, marked, discarded, quarantined, failures.Count, pages), cancellationToken);
             }
 
             if (requestedMaximum is null)
@@ -128,6 +138,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 if (persist && archivedKeys.Count > 0)
                     deactivated = await snapshotStore.DeactivateArchivedLotsAsync(normalizedPlatform, archivedKeys, DateTimeOffset.UtcNow, cancellationToken, runId);
             }
+
+            await snapshotStore.UpdateSyncRunProgressAsync(runId, new InventorySyncRunProgress(changed + archived, requests, loaded, created, updated, unchanged, marked, discarded, quarantined, failures.Count, pages), CancellationToken.None);
 
             var finishedAt = DateTimeOffset.UtcNow;
             logger.LogInformation(

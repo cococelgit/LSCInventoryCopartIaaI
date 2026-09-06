@@ -13,6 +13,7 @@ public interface IInventorySnapshotStore
 {
     Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken);
     Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken);
+    Task UpdateSyncRunProgressAsync(Guid runId, InventorySyncRunProgress progress, CancellationToken cancellationToken);
     Task RecordSyncRunEventAsync(InventorySyncRunEvent syncEvent, CancellationToken cancellationToken);
     Task<InventoryExecutionHistoryPage> GetExecutionHistoryAsync(InventoryExecutionHistoryRequest request, CancellationToken cancellationToken);
     Task<InventoryExecutionEventPage> GetExecutionEventsAsync(Guid runId, int page, int pageSize, CancellationToken cancellationToken);
@@ -76,6 +77,19 @@ public sealed record InventorySyncRunCompletion(
     bool Cancelled = false);
 
 public sealed record InventoryLotPersistenceResult(string LotKey, string Action, IReadOnlyList<string> ChangedFields);
+
+public sealed record InventorySyncRunProgress(
+    int VehiclesObserved,
+    int RequestsIssued,
+    int Loaded,
+    int Created,
+    int Updated,
+    int Unchanged,
+    int Marked,
+    int Discarded,
+    int Quarantined,
+    int Errors,
+    int PagesProcessed);
 
 public sealed record InventorySyncRunEvent(
     Guid RunId,
@@ -491,6 +505,12 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         cancellationToken.ThrowIfCancellationRequested();
         if (_syncRuns.TryGetValue(runId, out var current))
             _syncRuns[runId] = (current.Start, completion);
+        return Task.CompletedTask;
+    }
+
+    public Task UpdateSyncRunProgressAsync(Guid runId, InventorySyncRunProgress progress, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         return Task.CompletedTask;
     }
 
