@@ -160,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           image_tag="searchperf-staging-${GITHUB_SHA:0:8}-${GITHUB_RUN_NUMBER}"
-          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file Dockerfile .
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file inventory-engine/Dockerfile inventory-engine
           echo "STAGING_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
           registry_identity="$(az identity show -g "$PROD_RESOURCE_GROUP" -n uai-lsc-inventory-release-afaac3d --query id -o tsv)"
           test -n "$registry_identity" && test "$registry_identity" != "None"
