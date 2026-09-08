@@ -226,6 +226,9 @@ jobs:
               --only-show-errors >/dev/null
             az containerapp secret set -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_API_NAME" --secrets "inventory-api-token=$inventory_token" --only-show-errors >/dev/null
           fi
+          if [[ "${{ inputs.operation }}" == "api-only" ]]; then
+            az containerapp revision set-mode -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_API_NAME" --mode Single --only-show-errors >/dev/null
+          fi
 
       - name: Run internal Staging migration runner
         if: ${{ inputs.operation != 'api-only' }}
