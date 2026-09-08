@@ -1208,6 +1208,98 @@ public sealed partial class PostgresSnapshotStore(
             ReadCounts(reader.GetString(6), jsonOptions));
     }
 
+    public async Task<CopartAuctionHistoryDetail?> GetCopartAuctionHistoryDetailAsync(string lotKey, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(lotKey)) throw new ArgumentException("Lot key is required.", nameof(lotKey));
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select
+                attempts.attempt_number,
+                attempts.auction_at,
+                attempts.first_observed_at,
+                attempts.last_observed_at,
+                attempts.first_bid_usd,
+                attempts.last_bid_usd,
+                attempts.maximum_bid_usd,
+                attempts.buy_now_usd,
+                attempts.sale_price_usd,
+                attempts.outcome,
+                attempts.evidence_level,
+                attempts.outcome_evidence,
+                attempts.observation_count,
+                signals.attempt_count,
+                signals.relisted_inferred_count,
+                signals.score,
+                signals.level,
+                signals.first_attempt_at,
+                signals.last_attempt_at,
+                signals.last_bid_usd,
+                signals.historical_maximum_bid_usd,
+                signals.score_components
+            from copart_auction_attempts attempts
+            join auction_lots lots on lots.lot_key = attempts.lot_key and lots.platform = 'copart'
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+            left join copart_lot_motivation_signals signals on signals.lot_key = attempts.lot_key
+            where attempts.lot_key = @lot_key
+              and coalesce(lifecycle.is_active, true)
+            order by attempts.auction_at asc;
+            """;
+        AddParameter(command, "lot_key", lotKey.Trim().ToLowerInvariant());
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+
+        static decimal? NullableDecimal(NpgsqlDataReader dataReader, int ordinal) => dataReader.IsDBNull(ordinal) ? null : dataReader.GetDecimal(ordinal);
+        static DateTimeOffset? NullableDate(NpgsqlDataReader dataReader, int ordinal) => dataReader.IsDBNull(ordinal) ? null : dataReader.GetFieldValue<DateTimeOffset>(ordinal);
+        static string? NullableString(NpgsqlDataReader dataReader, int ordinal) => dataReader.IsDBNull(ordinal) ? null : dataReader.GetString(ordinal);
+
+        var attempts = new List<CopartAuctionAttempt>();
+        CopartMotivationSignalSnapshot? signal = null;
+        do
+        {
+            attempts.Add(new CopartAuctionAttempt(
+                lotKey.Trim().ToLowerInvariant(),
+                reader.GetInt32(0),
+                reader.GetFieldValue<DateTimeOffset>(1),
+                reader.GetFieldValue<DateTimeOffset>(2),
+                reader.GetFieldValue<DateTimeOffset>(3),
+                NullableDecimal(reader, 4),
+                NullableDecimal(reader, 5),
+                NullableDecimal(reader, 6),
+                NullableDecimal(reader, 7),
+                NullableDecimal(reader, 8),
+                reader.GetString(9),
+                reader.GetString(10),
+                NullableString(reader, 11),
+                reader.GetInt32(12)));
+
+            if (!reader.IsDBNull(13))
+            {
+                var components = reader.IsDBNull(21)
+                    ? JsonDocument.Parse("{}").RootElement.Clone()
+                    : JsonDocument.Parse(reader.GetString(21)).RootElement.Clone();
+                signal = new CopartMotivationSignalSnapshot(
+                    lotKey.Trim().ToLowerInvariant(),
+                    reader.GetInt32(13),
+                    reader.GetInt32(14),
+                    reader.GetInt32(15),
+                    reader.GetString(16),
+                    NullableDate(reader, 17),
+                    NullableDate(reader, 18),
+                    NullableDecimal(reader, 19),
+                    NullableDecimal(reader, 20),
+                    components);
+            }
+        }
+        while (await reader.ReadAsync(cancellationToken));
+
+        return new CopartAuctionHistoryDetail(lotKey.Trim().ToLowerInvariant(), signal, attempts);
+    }
+
     private async Task<int> CountCopartAuctionAttemptsAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
