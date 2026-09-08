@@ -35,6 +35,19 @@ public sealed class PersistenceOptions
 
     [Range(1, 120)]
     public int CommandTimeoutSeconds { get; init; } = 30;
+
+    /// <summary>
+    /// Uses score columns denormalized into inventory_search_current for browse queries.
+    /// The flag must remain disabled until the additive search-performance migration has
+    /// been applied and validated in the target environment.
+    /// </summary>
+    public bool UseDenormalizedScoringSearch { get; init; }
+
+    /// <summary>
+    /// Runs the exact result count and first-page item query concurrently on separate
+    /// pooled PostgreSQL connections. This changes latency only, not response semantics.
+    /// </summary>
+    public bool RunBrowseCountAndItemsInParallel { get; init; }
 }
 
 public sealed class BlobAuditOptions

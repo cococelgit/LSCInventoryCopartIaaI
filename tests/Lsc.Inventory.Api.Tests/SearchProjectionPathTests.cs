@@ -61,6 +61,18 @@ public sealed class SearchProjectionPathTests
     [InlineData(null, "latest.observed_at desc nulls last")]
     [InlineData("updated-desc", "latest.observed_at desc nulls last")]
     [InlineData("buy-desc", "latest.buy_now_usd desc nulls last")]
+    [InlineData("auction", "latest.auction_at asc nulls last")]
+    public void Denormalized_path_preserves_grading_first_and_secondary_sort(string? sort, string secondary)
+    {
+        var ordering = InvokeString("GetDenormalizedProjectionOrdering", sort);
+
+        Assert.Equal($"latest.score_pre_grade desc nulls last, {secondary}", ordering);
+    }
+
+    [Theory]
+    [InlineData(null, "latest.observed_at desc nulls last")]
+    [InlineData("updated-desc", "latest.observed_at desc nulls last")]
+    [InlineData("buy-desc", "latest.buy_now_usd desc nulls last")]
     public void Fallback_search_also_orders_by_grading_first(string? sort, string secondary)
     {
         var ordering = InvokeString("GetSearchOrdering", sort);

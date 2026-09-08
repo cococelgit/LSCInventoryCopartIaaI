@@ -450,6 +450,7 @@ public sealed partial class PostgresSnapshotStore
 
     private async Task PersistScoringResultAsync(LscVehicleScoringResult outcome, DateTimeOffset sourceObservedAt, CancellationToken cancellationToken)
     {
+        var updateDenormalizedProjection = await CanUseDenormalizedScoringSearchAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var result = connection.CreateCommand())
@@ -500,6 +501,29 @@ public sealed partial class PostgresSnapshotStore
                 """;
             AddScoringParameters(current, outcome, sourceObservedAt);
             await current.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (updateDenormalizedProjection)
+        {
+            await using var projection = connection.CreateCommand();
+            projection.Transaction = transaction;
+            projection.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            projection.CommandText = """
+                update inventory_search_current
+                set score_status = @status,
+                    score_pre_grade = @pre_grade,
+                    score_buy_score = @buy_score,
+                    score_max_points_evaluable = @max_points_evaluable,
+                    score_coverage_percent = @coverage_percent,
+                    score_confidence_percent = @confidence_percent,
+                    score_category = @category,
+                    score_policy_version = @policy_version,
+                    score_scored_at = @scored_at,
+                    score_source_observed_at = @source_observed_at
+                where lot_key = @lot_key
+                  and observed_at = @source_observed_at;
+                """;
+            AddScoringParameters(projection, outcome, sourceObservedAt);
+            await projection.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
     }

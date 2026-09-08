@@ -46,6 +46,7 @@ public sealed partial class PostgresSnapshotStore(
     private AccessToken _cachedDatabaseAccessToken;
     private bool _projectionReadyCache;
     private long _projectionReadyCheckedAtTicks;
+    private bool? _denormalizedScoringSearchReady;
     private const string ActiveLifecyclePredicate = "coalesce(lifecycle.is_active, current.is_active)";
     private readonly TokenCredential _credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
     {
@@ -1492,6 +1493,31 @@ public sealed partial class PostgresSnapshotStore(
         return _projectionReadyCache;
     }
 
+    private async Task<bool> CanUseDenormalizedScoringSearchAsync(CancellationToken cancellationToken)
+    {
+        if (!_persistence.UseDenormalizedScoringSearch) return false;
+        if (_denormalizedScoringSearchReady.HasValue) return _denormalizedScoringSearchReady.Value;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
+        command.CommandText = """
+            select
+                exists (
+                    select 1
+                    from information_schema.columns
+                    where table_schema = current_schema()
+                      and table_name = 'inventory_search_current'
+                      and column_name = 'score_pre_grade')
+                and to_regclass('ix_inventory_search_visible_score_observed_v7') is not null;
+            """;
+        _denormalizedScoringSearchReady = await command.ExecuteScalarAsync(cancellationToken) is true;
+        if (!_denormalizedScoringSearchReady.Value)
+            logger.LogWarning(
+                "Denormalized scoring search was requested but migration 016_search_projection_denormalized_score_v1 is not ready; using the legacy search query.");
+        return _denormalizedScoringSearchReady.Value;
+    }
+
     private async Task<InventorySearchPage> SearchProjectionAsync(InventorySearchRequest request, CancellationToken cancellationToken)
     {
         if (IsPreGradeBaselineSearch(request))
@@ -1500,26 +1526,73 @@ public sealed partial class PostgresSnapshotStore(
         var page = Math.Max(1, request.Page);
         var pageSize = Math.Clamp(request.PageSize, 1, 100);
         var offset = checked((page - 1) * pageSize);
+        var useDenormalizedScore = await CanUseDenormalizedScoringSearchAsync(cancellationToken);
+
+        if (_persistence.RunBrowseCountAndItemsInParallel)
+        {
+            var totalTask = ReadProjectionTotalAsync(request, useDenormalizedScore, cancellationToken);
+            var itemsTask = ReadProjectionItemsAsync(request, pageSize, offset, useDenormalizedScore, cancellationToken);
+            await Task.WhenAll(totalTask, itemsTask);
+            var parallelItems = await itemsTask;
+            var parallelGeneratedAt = parallelItems.Count == 0 ? DateTimeOffset.UtcNow : parallelItems.Max(snapshot => snapshot.ObservedAt);
+            return new InventorySearchPage(page, pageSize, await totalTask, parallelGeneratedAt, parallelItems);
+        }
+
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        var total = await GetProjectionTotalAsync(connection, request, cancellationToken);
-        var where = new List<string> { "latest.is_active" };
+        var total = await GetProjectionTotalAsync(connection, request, cancellationToken, useDenormalizedScore);
+        var items = await ReadProjectionItemsAsync(connection, request, pageSize, offset, useDenormalizedScore, cancellationToken);
+        var generatedAt = items.Count == 0 ? DateTimeOffset.UtcNow : items.Max(snapshot => snapshot.ObservedAt);
+        return new InventorySearchPage(page, pageSize, total, generatedAt, items);
+    }
+
+    private async Task<int> ReadProjectionTotalAsync(
+        InventorySearchRequest request,
+        bool useDenormalizedScore,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        return await GetProjectionTotalAsync(connection, request, cancellationToken, useDenormalizedScore);
+    }
+
+    private async Task<IReadOnlyList<StoredVehicleSnapshot>> ReadProjectionItemsAsync(
+        InventorySearchRequest request,
+        int pageSize,
+        int offset,
+        bool useDenormalizedScore,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        return await ReadProjectionItemsAsync(connection, request, pageSize, offset, useDenormalizedScore, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<StoredVehicleSnapshot>> ReadProjectionItemsAsync(
+        NpgsqlConnection connection,
+        InventorySearchRequest request,
+        int pageSize,
+        int offset,
+        bool useDenormalizedScore,
+        CancellationToken cancellationToken)
+    {
         var itemWhere = new List<string> { "latest.is_active" };
         await using var itemsCommand = connection.CreateCommand();
         itemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        AddProjectionFilters(itemsCommand, request, itemWhere);
+        AddProjectionFilters(itemsCommand, request, itemWhere, useDenormalizedScore ? "latest" : "score");
+        var scoreJoin = useDenormalizedScore
+            ? string.Empty
+            : " left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key";
+        var columns = useDenormalizedScore ? DenormalizedProjectionSnapshotColumns : ProjectionSnapshotColumns;
+        var ordering = useDenormalizedScore ? GetDenormalizedProjectionOrdering(request.Sort) : GetProjectionOrdering(request.Sort);
         itemsCommand.CommandText = $"""
-            select {ProjectionSnapshotColumns}
+            select {columns}
             from inventory_search_current latest
-            left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
+            {scoreJoin}
             where {string.Join(" and ", itemWhere)}
-            order by {GetProjectionOrdering(request.Sort)}, latest.lot_key asc
+            order by {ordering}, latest.lot_key asc
             limit @limit offset @offset;
             """;
         AddParameter(itemsCommand, "limit", pageSize);
         AddParameter(itemsCommand, "offset", offset);
-        var items = await ReadStoredSnapshotsAsync(itemsCommand, cancellationToken);
-        var generatedAt = items.Count == 0 ? DateTimeOffset.UtcNow : items.Max(snapshot => snapshot.ObservedAt);
-        return new InventorySearchPage(page, pageSize, total, generatedAt, items);
+        return await ReadStoredSnapshotsAsync(itemsCommand, cancellationToken);
     }
 
     private const string ProjectionSnapshotColumns = """
@@ -1529,6 +1602,18 @@ public sealed partial class PostgresSnapshotStore(
         score.max_points_evaluable as score_max_points_evaluable,
         score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
         score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
+        """;
+
+    private const string DenormalizedProjectionSnapshotColumns = """
+        latest.lot_key, latest.observed_at, latest.payload::text,
+        latest.platform, latest.lot_number, latest.vin,
+        latest.score_status as score_status, latest.score_pre_grade as score_pre_grade,
+        latest.score_buy_score as score_buy_score,
+        latest.score_max_points_evaluable as score_max_points_evaluable,
+        latest.score_coverage_percent as score_coverage_percent,
+        latest.score_confidence_percent as score_confidence_percent,
+        latest.score_category as score_category, latest.score_policy_version as score_policy_version,
+        latest.score_scored_at as score_scored_at
         """;
 
     private const string ProjectionSnapshotColumnsWithoutScore = """
@@ -1634,7 +1719,11 @@ public sealed partial class PostgresSnapshotStore(
         return new InventorySearchPage(page, pageSize, total, generatedAt, items);
     }
 
-    private async Task<int> GetProjectionTotalAsync(NpgsqlConnection connection, InventorySearchRequest request, CancellationToken cancellationToken)
+    private async Task<int> GetProjectionTotalAsync(
+        NpgsqlConnection connection,
+        InventorySearchRequest request,
+        CancellationToken cancellationToken,
+        bool useDenormalizedScore = false)
     {
         int? total = null;
         if (IsDefaultVisibleSearch(request))
@@ -1678,8 +1767,8 @@ public sealed partial class PostgresSnapshotStore(
             var where = new List<string> { "latest.is_active" };
             await using var countCommand = connection.CreateCommand();
             countCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            AddProjectionFilters(countCommand, request, where);
-            var scoreJoin = RequiresProjectionScoreJoin(request)
+            AddProjectionFilters(countCommand, request, where, useDenormalizedScore ? "latest" : "score");
+            var scoreJoin = !useDenormalizedScore && RequiresProjectionScoreJoin(request)
                 ? " left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key"
                 : string.Empty;
             countCommand.CommandText = $"select count(*)::int from inventory_search_current latest{scoreJoin} where {string.Join(" and ", where)};";
@@ -1923,7 +2012,11 @@ public sealed partial class PostgresSnapshotStore(
     private static string SqlSellerTypePayloadExpression(string alias) => SqlSellerTypeTaxonomy($"coalesce(nullif(btrim({alias}.payload #>> '{{seller,type}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,Type}}'), ''), nullif(btrim({alias}.payload #>> '{{seller,text_class}}'), ''), nullif(btrim({alias}.payload #>> '{{seller,textClass}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,TextClass}}'), ''), nullif(btrim({alias}.payload #>> '{{seller,class}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,Class}}'), ''), nullif(btrim({alias}.payload #>> '{{seller,name}}'), ''), nullif(btrim({alias}.payload #>> '{{Seller,Name}}'), ''))");
     private static string SqlSellerTypeTaxonomy(string source) => $"case when {source} is null or lower({source}) = '{SellerTaxonomy.Unclassified}' then '{SellerTaxonomy.Unclassified}' when lower({source}) = '{SellerTaxonomy.Insurance}' or lower({source}) like '%insurance%' or lower({source}) like '%insurer%' or lower({source}) like '%casualty%' or lower({source}) like '%geico%' or lower({source}) like '%allstate%' or lower({source}) like '%usaa%' or lower({source}) like '%progressive%' or lower({source}) like '%state farm%' or lower({source}) like '%farmers%' or lower({source}) like '%bristol west%' or lower({source}) like '%liberty mutual%' or lower({source}) like '%nationwide%' or lower({source}) like '%travelers%' or lower({source}) like '%kemper%' or lower({source}) like '%mercury%' or lower({source}) like '%safeco%' or lower({source}) like '%amica%' or lower({source}) like '%esurance%' or lower({source}) like '%mapfre%' then '{SellerTaxonomy.Insurance}' when lower({source}) = '{SellerTaxonomy.Dealer}' or lower({source}) like '%dealer%' or lower({source}) like '%auto group%' or lower({source}) like '%motor group%' then '{SellerTaxonomy.Dealer}' when lower({source}) = '{SellerTaxonomy.RepossessionBank}' or lower({source}) like '%repo%' or lower({source}) like '%bank%' or lower({source}) like '%credit union%' or lower({source}) like '%lender%' then '{SellerTaxonomy.RepossessionBank}' when lower({source}) = '{SellerTaxonomy.Finance}' or lower({source}) like '%finance%' or lower({source}) like '%financial%' or lower({source}) like '%leasing%' then '{SellerTaxonomy.Finance}' when lower({source}) = '{SellerTaxonomy.RentalFleet}' or lower({source}) like '%rental%' or lower({source}) like '%fleet%' then '{SellerTaxonomy.RentalFleet}' when lower({source}) = '{SellerTaxonomy.Government}' or lower({source}) like '%government%' or lower({source}) like '%govt%' or lower({source}) like '%municipal%' or lower({source}) like '%county%' or lower({source}) like '%city%' then '{SellerTaxonomy.Government}' when lower({source}) = '{SellerTaxonomy.Other}' then '{SellerTaxonomy.Other}' when lower({source}) = '{SellerTaxonomy.Unknown}' or lower({source}) in ('unknown', 'unavailable', 'no information', 'no info', 'not reported', 'n/a', 'na') then '{SellerTaxonomy.Unknown}' else '{SellerTaxonomy.Other}' end";
 
-    private static void AddProjectionFilters(NpgsqlCommand command, InventorySearchRequest request, List<string> where)
+    private static void AddProjectionFilters(
+        NpgsqlCommand command,
+        InventorySearchRequest request,
+        List<string> where,
+        string scoreAlias = "score")
     {
         static string[] Values(IReadOnlyCollection<string>? values) => values?.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
         void AddAny(string parameter, IReadOnlyCollection<string>? values, string expression)
@@ -1983,8 +2076,10 @@ public sealed partial class PostgresSnapshotStore(
         if (request.EngineSizeTo.HasValue) { where.Add("latest.engine_size_liters <= @engine_size_to"); AddParameter(command, "engine_size_to", request.EngineSizeTo.Value); }
         if (request.HorsepowerFrom.HasValue) { where.Add("latest.horsepower >= @horsepower_from"); AddParameter(command, "horsepower_from", request.HorsepowerFrom.Value); }
         if (request.HorsepowerTo.HasValue) { where.Add("latest.horsepower <= @horsepower_to"); AddParameter(command, "horsepower_to", request.HorsepowerTo.Value); }
-        if (request.PreGradeFrom.HasValue) { where.Add("score.pre_grade >= @pre_grade_from"); AddParameter(command, "pre_grade_from", request.PreGradeFrom.Value); }
-        AddAny("scoring_statuses", request.ScoringStatuses, "score.status");
+        var preGradeExpression = scoreAlias == "latest" ? "latest.score_pre_grade" : "score.pre_grade";
+        var scoringStatusExpression = scoreAlias == "latest" ? "latest.score_status" : "score.status";
+        if (request.PreGradeFrom.HasValue) { where.Add($"{preGradeExpression} >= @pre_grade_from"); AddParameter(command, "pre_grade_from", request.PreGradeFrom.Value); }
+        AddAny("scoring_statuses", request.ScoringStatuses, scoringStatusExpression);
         if (string.Equals(request.AuctionStatus, "open", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.lot_status, latest.lot_sub_status)) like any(array['%open%', '%active%'])");
         if (string.Equals(request.AuctionStatus, "live", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.lot_status, latest.lot_sub_status)) like '%live%'");
         if (string.Equals(request.AuctionStatus, "finished", StringComparison.OrdinalIgnoreCase)) where.Add("lower(concat_ws(' ', latest.auction_state, latest.lot_status, latest.lot_sub_status)) like any(array['%finished%', '%ended%', '%sold%'])");
@@ -2011,12 +2106,16 @@ public sealed partial class PostgresSnapshotStore(
         return $"score.pre_grade desc nulls last, {secondary}";
     }
 
+    private static string GetDenormalizedProjectionOrdering(string? sort) =>
+        GetProjectionOrdering(sort).Replace("score.pre_grade", "latest.score_pre_grade", StringComparison.Ordinal);
+
     public async Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var titleCategorySql = TitleFacetCategory.BuildSqlCaseExpression("title_normalized.normalized_document", "lower(lots.platform)");
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
+        var synchronizeDenormalizedScores = await CanUseDenormalizedScoringSearchAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var acquireLock = connection.CreateCommand())
@@ -2148,6 +2247,29 @@ public sealed partial class PostgresSnapshotStore(
                 .Replace("__TITLE_CATEGORY_SQL__", titleCategorySql, StringComparison.Ordinal)
                 .Replace("__SELLER_TYPE_SQL__", SqlSellerTypePayloadExpression("latest"), StringComparison.Ordinal);
             await rebuild.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (synchronizeDenormalizedScores)
+        {
+            await using var synchronizeScores = connection.CreateCommand();
+            synchronizeScores.Transaction = transaction;
+            synchronizeScores.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 300);
+            synchronizeScores.CommandText = """
+                update inventory_search_current latest
+                set score_status = score.status,
+                    score_pre_grade = score.pre_grade,
+                    score_buy_score = score.buy_score,
+                    score_max_points_evaluable = score.max_points_evaluable,
+                    score_coverage_percent = score.coverage_percent,
+                    score_confidence_percent = score.confidence_percent,
+                    score_category = score.category,
+                    score_policy_version = score.policy_version,
+                    score_scored_at = score.scored_at,
+                    score_source_observed_at = score.source_observed_at
+                from inventory_vehicle_score_current score
+                where score.lot_key = latest.lot_key;
+                """;
+            await synchronizeScores.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await RefreshSearchFacetsAsync(connection, transaction, cancellationToken);

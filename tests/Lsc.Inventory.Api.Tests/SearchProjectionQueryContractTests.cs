@@ -22,6 +22,73 @@ public sealed class SearchProjectionQueryContractTests
     }
 
     [Fact]
+    public void DenormalizedBrowseCanRemoveTheScoringJoinWithoutChangingTheLegacyDefault()
+    {
+        var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");
+        var source = File.ReadAllText(sourcePath);
+        var methodStart = source.IndexOf("private async Task<IReadOnlyList<StoredVehicleSnapshot>> ReadProjectionItemsAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "The optimized item reader must remain present.");
+        var methodEnd = source.IndexOf("private const string ProjectionSnapshotColumns", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "The optimized item reader boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("var scoreJoin = useDenormalizedScore", method);
+        Assert.Contains("? string.Empty", method);
+        Assert.Contains("DenormalizedProjectionSnapshotColumns", method);
+        Assert.Contains("GetDenormalizedProjectionOrdering", method);
+        Assert.Contains("left join inventory_vehicle_score_current score", method);
+    }
+
+    [Fact]
+    public void DenormalizedBrowseIsCapabilityGatedByFlagColumnAndIndex()
+    {
+        var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");
+        var source = File.ReadAllText(sourcePath);
+        var methodStart = source.IndexOf("private async Task<bool> CanUseDenormalizedScoringSearchAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "The denormalized search gate must remain present.");
+        var methodEnd = source.IndexOf("private async Task<InventorySearchPage> SearchProjectionAsync", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "The denormalized search gate boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("UseDenormalizedScoringSearch", method);
+        Assert.Contains("column_name = 'score_pre_grade'", method);
+        Assert.Contains("ix_inventory_search_visible_score_observed_v7", method);
+        Assert.Contains("using the legacy search query", method);
+    }
+
+    [Fact]
+    public void OptimizedCountAvoidsScoreJoinButLegacyCountRemainsAvailable()
+    {
+        var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");
+        var source = File.ReadAllText(sourcePath);
+        var methodStart = source.IndexOf("private async Task<int> GetProjectionTotalAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "GetProjectionTotalAsync must remain present.");
+        var methodEnd = source.IndexOf("private static void AddPlatformParameter", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "GetProjectionTotalAsync boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("!useDenormalizedScore && RequiresProjectionScoreJoin(request)", method);
+        Assert.Contains("useDenormalizedScore ? \"latest\" : \"score\"", method);
+    }
+
+    [Fact]
+    public void ScoringWriteSynchronizesTheProjectionInTheSameTransaction()
+    {
+        var sourcePath = FindRepositoryFile("PostgresSnapshotStore.Scoring.cs");
+        var source = File.ReadAllText(sourcePath);
+        var methodStart = source.IndexOf("private async Task PersistScoringResultAsync", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "PersistScoringResultAsync must remain present.");
+        var methodEnd = source.IndexOf("private static void AddScoringParameters", methodStart, StringComparison.Ordinal);
+        Assert.True(methodEnd > methodStart, "PersistScoringResultAsync boundary must remain discoverable.");
+        var method = source[methodStart..methodEnd];
+
+        Assert.Contains("var updateDenormalizedProjection = await CanUseDenormalizedScoringSearchAsync", method);
+        Assert.Contains("projection.Transaction = transaction", method);
+        Assert.Contains("set score_status = @status", method);
+        Assert.Contains("and observed_at = @source_observed_at", method);
+    }
+
+    [Fact]
     public void DefaultVisibleBrowseFallsBackWhenTheVisibleCountCacheIsStale()
     {
         var sourcePath = FindRepositoryFile("PostgresSnapshotStore.cs");
