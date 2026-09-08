@@ -116,15 +116,6 @@ jobs:
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file Dockerfile .
           echo "CANDIDATE_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
 
-      - name: Prepare production projection ownership
-        shell: bash
-        run: |
-          set -euo pipefail
-          psql "host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$TEMP_BOOTSTRAP_USER sslmode=require" \
-            -v ON_ERROR_STOP=1 \
-            -c "GRANT USAGE, CREATE ON SCHEMA public TO \"$RUNTIME_PRINCIPAL_NAME\"; ALTER TABLE inventory_search_current OWNER TO \"$RUNTIME_PRINCIPAL_NAME\"; ALTER TABLE inventory_vehicle_score_current OWNER TO \"$RUNTIME_PRINCIPAL_NAME\"; ALTER TABLE schema_migrations OWNER TO \"$RUNTIME_PRINCIPAL_NAME\";"
-          echo "Production projection ownership precheck passed."
-
       - name: Run internal production migration job
         shell: bash
         run: |
@@ -163,7 +154,15 @@ jobs:
             status="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$job" --query '[0].properties.status' -o tsv 2>/dev/null || true)"
             echo "migration attempt=$attempt execution=$execution status=$status"
             [[ "$status" == "Succeeded" ]] && break
-            [[ "$status" == "Failed" || "$status" == "Stopped" ]] && { az containerapp job logs show -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --container lsc-inventory-engine --tail 100 --format text || true; exit 1; }
+            if [[ "$status" == "Failed" || "$status" == "Stopped" ]]; then
+              replica="$(az containerapp job replica list -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].name' -o tsv 2>/dev/null || true)"
+              container="$(az containerapp job replica list -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].properties.containers[0].name' -o tsv 2>/dev/null || true)"
+              echo "production migration replica=$replica container=$container"
+              if [[ -n "$replica" && -n "$container" ]]; then
+                az containerapp job logs show -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --replica "$replica" --container "$container" --tail 100 --format text || true
+              fi
+              exit 1
+            fi
             sleep 10
           done
           test "${status:-}" = "Succeeded"
