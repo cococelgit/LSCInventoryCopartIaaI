@@ -87,6 +87,7 @@ builder.Services.AddHostedService<InventorySyncWorker>();
 
 var app = builder.Build();
 var inventoryReadToken = builder.Configuration["InventoryApi:Token"] ?? Environment.GetEnvironmentVariable("INVENTORY_API_TOKEN");
+var motivatedSellerReadEnabled = builder.Configuration.GetValue<bool>("MotivatedSellers:ReadEnabled");
 
 static bool HasValidReadToken(HttpContext context, string? expectedToken)
 {
@@ -354,6 +355,23 @@ app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInven
             AuctionEligibilityEvaluator.Evaluate(item.Vehicle).LoadToSystem);
     var requestBaseUri = new Uri($"{context.Request.Scheme}://{context.Request.Host}");
     return snapshot is null ? Results.NotFound() : Results.Ok(ToPublicVehicle(snapshot, requestBaseUri, inventoryReadToken));
+});
+
+app.MapGet("/internal/copart/auction-history/{lotKey}", async (
+    HttpContext context,
+    IInventorySnapshotStore store,
+    string lotKey,
+    CancellationToken cancellationToken) =>
+{
+    if (!motivatedSellerReadEnabled) return Results.NotFound();
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var normalizedLotKey = lotKey.Trim().StartsWith("copart:", StringComparison.OrdinalIgnoreCase)
+        ? lotKey.Trim().ToLowerInvariant()
+        : $"copart:{lotKey.Trim()}";
+    if (!normalizedLotKey.StartsWith("copart:", StringComparison.OrdinalIgnoreCase) || normalizedLotKey.Length <= "copart:".Length)
+        return Results.NotFound();
+    var detail = await store.GetCopartAuctionHistoryDetailAsync(normalizedLotKey, cancellationToken);
+    return detail is null ? Results.NotFound() : Results.Ok(detail);
 });
 
 app.MapGet("/api/v1/inventory/media/{platform}/{lot}/{photoIndex:int}", async (
