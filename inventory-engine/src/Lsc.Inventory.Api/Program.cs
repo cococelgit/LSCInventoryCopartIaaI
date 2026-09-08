@@ -357,6 +357,17 @@ app.MapGet("/api/v1/inventory/vehicle/{lot}", async (HttpContext context, IInven
     return snapshot is null ? Results.NotFound() : Results.Ok(ToPublicVehicle(snapshot, requestBaseUri, inventoryReadToken));
 });
 
+app.MapGet("/internal/copart/auction-history-sample", async (
+    HttpContext context,
+    IInventorySnapshotStore store,
+    CancellationToken cancellationToken) =>
+{
+    if (!motivatedSellerReadEnabled) return Results.NotFound();
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var samples = await store.GetCopartAuctionHistorySampleAsync(100, cancellationToken);
+    return Results.Ok(new { generatedAt = DateTimeOffset.UtcNow, count = samples.Count, samples });
+});
+
 app.MapGet("/internal/copart/auction-history/{lotKey}", async (
     HttpContext context,
     IInventorySnapshotStore store,
