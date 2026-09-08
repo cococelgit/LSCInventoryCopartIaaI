@@ -299,7 +299,7 @@ jobs:
           echo "PRODUCTION_UNCHANGED=true"
           {
             echo "### Search performance Staging API"
-            echo "- Image: \\`$staging_image\\`"
+            echo "- Image: $staging_image"
             echo "- URL: https://$staging_fqdn"
             echo "- Flags: disabled"
             echo "- Production unchanged: true"
