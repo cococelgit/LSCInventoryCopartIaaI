@@ -14,6 +14,7 @@ on:
         options:
           - migration
           - report
+          - sample
 
 permissions:
   contents: read
@@ -51,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${{ inputs.confirm }}" = "CREATE-LSC-STAGING-API"
-          case "${{ inputs.operation }}" in migration|report) ;; *) exit 1 ;; esac
+          case "${{ inputs.operation }}" in migration|report|sample) ;; *) exit 1 ;; esac
 
       - name: Checkout exact candidate commit
         uses: actions/checkout@v4
@@ -233,6 +234,8 @@ jobs:
           operation="${{ inputs.operation }}"
           if [[ "$operation" == "report" ]]; then
             runner_args=(Lsc.Inventory.Api.dll copart-auction-history-report)
+          elif [[ "$operation" == "sample" ]]; then
+            runner_args=(Lsc.Inventory.Api.dll --copart-auction-history-sample)
           else
             runner_args=(Lsc.Inventory.Api.dll search-projection-migration)
           fi
