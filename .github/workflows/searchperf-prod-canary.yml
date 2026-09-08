@@ -116,7 +116,7 @@ jobs:
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file Dockerfile .
           echo "CANDIDATE_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
 
-      - name: Create temporary database bootstrap job
+      - name: Run internal production migration job
         shell: bash
         run: |
           set -euo pipefail
@@ -132,16 +132,16 @@ jobs:
             --registry-server "$ACR_SERVER" \
             --registry-identity "$API_UAI_RESOURCE_ID" \
             --mi-user-assigned "$API_UAI_RESOURCE_ID" \
-            --command sh \
-            --args=-c "exec dotnet Lsc.Inventory.Api.dll --bootstrap-db" \
+            --command dotnet \
+            --args Lsc.Inventory.Api.dll search-projection-migration \
             --env-vars \
               "Persistence__Provider=Postgres" \
               "Persistence__PostgreSqlHost=$POSTGRES_HOST" \
               "Persistence__Database=$POSTGRES_DATABASE" \
               "Persistence__ManagedIdentityClientId=$POSTGRES_CLIENT_ID" \
-              "Persistence__DatabaseUser=$TEMP_BOOTSTRAP_USER" \
-              "Persistence__RuntimePrincipalName=$TEMP_BOOTSTRAP_USER" \
-              "Persistence__RuntimePrincipalObjectId=$TEMP_BOOTSTRAP_OBJECT_ID" \
+              "Persistence__DatabaseUser=$POSTGRES_DATABASE_USER" \
+              "Persistence__RuntimePrincipalName=$RUNTIME_PRINCIPAL_NAME" \
+              "Persistence__RuntimePrincipalObjectId=$RUNTIME_PRINCIPAL_OBJECT_ID" \
               "Persistence__RunMigrations=false" \
               "Sync__Enabled=false" \
               "BlobAudit__AccountUrl=$BLOB_ACCOUNT_URL" \
@@ -152,55 +152,19 @@ jobs:
           for attempt in $(seq 1 60); do
             execution="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$job" --query '[0].name' -o tsv 2>/dev/null || true)"
             status="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$job" --query '[0].properties.status' -o tsv 2>/dev/null || true)"
-            echo "bootstrap attempt=$attempt execution=$execution status=$status"
+            echo "migration attempt=$attempt execution=$execution status=$status"
             [[ "$status" == "Succeeded" ]] && break
             [[ "$status" == "Failed" || "$status" == "Stopped" ]] && { az containerapp job logs show -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --container lsc-inventory-engine --tail 100 --format text || true; exit 1; }
             sleep 10
           done
           test "${status:-}" = "Succeeded"
 
-      - name: Apply and verify migration through temporary Entra principal
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client
-          server_fqdn="$(az postgres flexible-server show -g rg-lsc-inventory-prod -n "$POSTGRES_HOST" --query fullyQualifiedDomainName -o tsv)"
-          test -n "$server_fqdn"
-          access_token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
-          export PGPASSWORD="$access_token"
-          conn="host=$server_fqdn port=5432 dbname=$POSTGRES_DATABASE user=$TEMP_BOOTSTRAP_USER sslmode=require"
-          psql "$conn" -v ON_ERROR_STOP=1 -f infra/sql/016_search_projection_denormalized_score_v1.sql
-          psql "$conn" -v ON_ERROR_STOP=1 -At -F '|' -f infra/sql/016_search_projection_denormalized_score_v1_verify.sql | tee /tmp/prod-searchperf-verify.txt
-          mismatch_count="$(sed -n '1p' /tmp/prod-searchperf-verify.txt | tr -d '[:space:]')"
-          valid_indexes="$(sed -n '2,$p' /tmp/prod-searchperf-verify.txt | awk -F'|' '$2=="t" && $3=="t" {count++} END {print count+0}')"
-          test "$mismatch_count" = "0"
-          test "$valid_indexes" = "4"
-          echo "PROD_SCORE_PROJECTION_MISMATCHES=$mismatch_count"
-          echo "PROD_VALID_READY_INDEXES=$valid_indexes"
-
-      - name: Remove temporary database principal and job
+      - name: Remove migration job
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           if [[ -n "${MIGRATION_JOB:-}" ]]; then
-            az containerapp job update \
-              -g "$RESOURCE_GROUP" -n "$MIGRATION_JOB" \
-              --set-env-vars \
-                "Persistence__DatabaseUser=$POSTGRES_DATABASE_USER" \
-                "Persistence__RuntimePrincipalName=$RUNTIME_PRINCIPAL_NAME" \
-                "Persistence__RuntimePrincipalObjectId=$RUNTIME_PRINCIPAL_OBJECT_ID" \
-                "Persistence__PreviousRuntimePrincipalName=$TEMP_BOOTSTRAP_USER" \
-              --only-show-errors >/dev/null
-            az containerapp job start -g "$RESOURCE_GROUP" -n "$MIGRATION_JOB" --only-show-errors >/dev/null
-            for attempt in $(seq 1 60); do
-              status="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$MIGRATION_JOB" --query '[0].properties.status' -o tsv 2>/dev/null || true)"
-              echo "cleanup attempt=$attempt status=$status"
-              [[ "$status" == "Succeeded" ]] && break
-              [[ "$status" == "Failed" || "$status" == "Stopped" ]] && break
-              sleep 10
-            done
             az containerapp job delete -g "$RESOURCE_GROUP" -n "$MIGRATION_JOB" --yes --only-show-errors >/dev/null || true
           fi
 
