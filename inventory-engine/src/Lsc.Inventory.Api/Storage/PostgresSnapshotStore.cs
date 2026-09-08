@@ -1208,6 +1208,51 @@ public sealed partial class PostgresSnapshotStore(
             ReadCounts(reader.GetString(6), jsonOptions));
     }
 
+    public async Task<IReadOnlyList<CopartAuctionHistorySample>> GetCopartAuctionHistorySampleAsync(int maximum, CancellationToken cancellationToken)
+    {
+        maximum = Math.Clamp(maximum, 1, 100);
+        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 60);
+        command.CommandText = """
+            select
+                attempts.lot_key,
+                count(*)::int as attempt_count,
+                min(attempts.auction_at) as first_auction_at,
+                max(attempts.auction_at) as last_auction_at,
+                bool_or(signals.lot_key is not null) as has_signal,
+                max(signals.score) as signal_score,
+                max(signals.level) as signal_level
+            from copart_auction_attempts attempts
+            join auction_lots lots on lots.lot_key = attempts.lot_key and lots.platform = 'copart'
+            left join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = lots.lot_key
+            left join copart_lot_motivation_signals signals on signals.lot_key = attempts.lot_key
+            where coalesce(lifecycle.is_active, true)
+            group by attempts.lot_key
+            order by count(*) desc, max(attempts.auction_at) desc, attempts.lot_key
+            limit @maximum;
+            """;
+        AddParameter(command, "maximum", maximum);
+
+        var samples = new List<CopartAuctionHistorySample>(maximum);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            samples.Add(new CopartAuctionHistorySample(
+                reader.GetString(0),
+                reader.GetInt32(1),
+                reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTimeOffset>(2),
+                reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+                reader.GetBoolean(4),
+                reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6)));
+        }
+
+        return samples;
+    }
+
     public async Task<CopartAuctionHistoryDetail?> GetCopartAuctionHistoryDetailAsync(string lotKey, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(lotKey)) throw new ArgumentException("Lot key is required.", nameof(lotKey));
