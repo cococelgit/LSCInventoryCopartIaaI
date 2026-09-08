@@ -1,0 +1,105 @@
+name: Search performance staging PostgreSQL
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type CREATE-LSC-STAGING-SEARCHPERF to authorize the isolated PostgreSQL restore
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: searchperf-staging-postgres
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  LOCATION: eastus2
+  PROD_RESOURCE_GROUP: rg-lsc-inventory-prod
+  PROD_POSTGRES_SERVER: psql-lsc-inventory-cu
+  STAGING_RESOURCE_GROUP: rg-lsc-inventory-staging
+  STAGING_POSTGRES_SERVER: psql-lsc-inventory-staging
+
+jobs:
+  restore:
+    if: inputs.confirm == 'CREATE-LSC-STAGING-SEARCHPERF'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify source and create isolated resource group
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "CREATE-LSC-STAGING-SEARCHPERF"
+          az postgres flexible-server show \
+            --resource-group "$PROD_RESOURCE_GROUP" \
+            --name "$PROD_POSTGRES_SERVER" \
+            --query '{name:name,state:state,version:version,sku:sku.name,storage:storage.storageSizeGb,network:network.publicNetworkAccess}' \
+            --output json
+          az group create \
+            --name "$STAGING_RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --tags environment=staging purpose=search-performance managed-by=github-actions source=production-restore retention=temporary \
+            --only-show-errors \
+            --output json
+
+      - name: Restore PostgreSQL into Staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          if az postgres flexible-server show \
+            --resource-group "$STAGING_RESOURCE_GROUP" \
+            --name "$STAGING_POSTGRES_SERVER" \
+            --only-show-errors >/dev/null 2>&1; then
+            echo "Staging PostgreSQL already exists; refusing to overwrite it."
+            exit 0
+          fi
+          source_server_id="$(az postgres flexible-server show \
+            --resource-group "$PROD_RESOURCE_GROUP" \
+            --name "$PROD_POSTGRES_SERVER" \
+            --query id -o tsv)"
+          test -n "$source_server_id"
+          az postgres flexible-server restore \
+            --resource-group "$STAGING_RESOURCE_GROUP" \
+            --name "$STAGING_POSTGRES_SERVER" \
+            --source-server "$source_server_id" \
+            --location "$LOCATION" \
+            --only-show-errors
+
+      - name: Verify Staging PostgreSQL only
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 36); do
+            state="$(az postgres flexible-server show \
+              --resource-group "$STAGING_RESOURCE_GROUP" \
+              --name "$STAGING_POSTGRES_SERVER" \
+              --query state -o tsv 2>/dev/null || true)"
+            echo "STAGING_POSTGRES_STATE attempt=$attempt state=${state:-unknown}"
+            [[ "$state" = "Ready" ]] && break
+            sleep 30
+          done
+          az postgres flexible-server show \
+            --resource-group "$STAGING_RESOURCE_GROUP" \
+            --name "$STAGING_POSTGRES_SERVER" \
+            --query '{id:id,name:name,state:state,version:version,sku:sku.name,storage:storage.storageSizeGb,fqdn:fullyQualifiedDomainName,network:network.publicNetworkAccess}' \
+            --output json
+          az resource list \
+            --resource-group "$STAGING_RESOURCE_GROUP" \
+            --query '[].{name:name,type:type,location:location}' \
+            --output table
+          echo "NO_PRODUCTION_RESOURCE_UPDATED=true"
+          echo "NEXT_GATE=configure_private_or_temporary_staging_network_then_deploy_candidate"
