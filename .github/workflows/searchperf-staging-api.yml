@@ -129,8 +129,8 @@ jobs:
           az storage account create -g "$STAGING_RESOURCE_GROUP" -n "$storage_name" -l "$LOCATION" --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 --allow-blob-public-access false --only-show-errors >/dev/null
           storage_id="$(az storage account show -g "$STAGING_RESOURCE_GROUP" -n "$storage_name" --query id -o tsv)"
           storage_url="https://${storage_name}.blob.core.windows.net"
-          az storage container create --account-name "$storage_name" --name raw-apibara --auth-mode login --only-show-errors >/dev/null
-          az role assignment create --assignee-object-id "$STAGING_IDENTITY_PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" --scope "$storage_id" --only-show-errors >/dev/null
+          storage_key="$(az storage account keys list -g "$STAGING_RESOURCE_GROUP" -n "$storage_name" --query '[0].value' -o tsv)"
+          az storage container create --account-name "$storage_name" --account-key "$storage_key" --name raw-apibara --only-show-errors >/dev/null
           echo "STAGING_STORAGE_NAME=$storage_name" >> "$GITHUB_ENV"
           echo "STAGING_STORAGE_URL=$storage_url" >> "$GITHUB_ENV"
 
@@ -149,8 +149,9 @@ jobs:
           image_tag="searchperf-staging-${GITHUB_SHA:0:8}-${GITHUB_RUN_NUMBER}"
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file Dockerfile .
           echo "STAGING_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
-          acr_id="$(az acr show -n "$ACR_NAME" --query id -o tsv)"
-          az role assignment create --assignee-object-id "$STAGING_IDENTITY_PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role AcrPull --scope "$acr_id" --only-show-errors >/dev/null
+          registry_identity="$(az identity show -g "$PROD_RESOURCE_GROUP" -n uai-lsc-inventory-release-afaac3d --query id -o tsv)"
+          test -n "$registry_identity" && test "$registry_identity" != "None"
+          echo "REGISTRY_IDENTITY_ID=$registry_identity" >> "$GITHUB_ENV"
 
       - name: Create or update isolated API Container App
         shell: bash
@@ -165,7 +166,7 @@ jobs:
               --image "$STAGING_IMAGE" \
               --user-assigned "$STAGING_IDENTITY_ID" \
               --registry-server "$ACR_SERVER" \
-              --registry-identity "$STAGING_IDENTITY_ID" \
+              --registry-identity "$REGISTRY_IDENTITY_ID" \
               --ingress external \
               --target-port 8080 \
               --min-replicas 1 \
