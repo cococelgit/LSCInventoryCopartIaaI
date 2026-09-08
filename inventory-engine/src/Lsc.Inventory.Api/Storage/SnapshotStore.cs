@@ -51,6 +51,7 @@ public interface IInventorySnapshotStore
     Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken);
+    Task<CopartAuctionHistoryDetail?> GetCopartAuctionHistoryDetailAsync(string lotKey, CancellationToken cancellationToken);
     Task<SellerAuditReport> GetSellerAuditReportAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
@@ -225,6 +226,23 @@ public sealed record CopartAuctionHistoryReport(
     IReadOnlyDictionary<string, long> AttemptsByOutcome,
     IReadOnlyDictionary<string, long> AttemptsByEvidenceLevel,
     IReadOnlyDictionary<string, long> SignalsByLevel);
+
+public sealed record CopartMotivationSignalSnapshot(
+    string LotKey,
+    int AttemptCount,
+    int RelistedInferredCount,
+    int Score,
+    string Level,
+    DateTimeOffset? FirstAttemptAt,
+    DateTimeOffset? LastAttemptAt,
+    decimal? LastBidUsd,
+    decimal? HistoricalMaximumBidUsd,
+    JsonElement ScoreComponents);
+
+public sealed record CopartAuctionHistoryDetail(
+    string LotKey,
+    CopartMotivationSignalSnapshot? Signal,
+    IReadOnlyList<CopartAuctionAttempt> Attempts);
 
 public sealed record InventoryBrowseQuery(
     string? Platform,
@@ -882,6 +900,12 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)));
+    }
+
+    public Task<CopartAuctionHistoryDetail?> GetCopartAuctionHistoryDetailAsync(string lotKey, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<CopartAuctionHistoryDetail?>(null);
     }
 
     public Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken)
