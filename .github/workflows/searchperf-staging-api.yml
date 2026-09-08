@@ -15,6 +15,7 @@ on:
           - migration
           - report
           - sample
+          - api-only
 
 permissions:
   contents: read
@@ -52,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${{ inputs.confirm }}" = "CREATE-LSC-STAGING-API"
-          case "${{ inputs.operation }}" in migration|report|sample) ;; *) exit 1 ;; esac
+          case "${{ inputs.operation }}" in migration|report|sample|api-only) ;; *) exit 1 ;; esac
 
       - name: Checkout exact candidate commit
         uses: actions/checkout@v4
@@ -227,6 +228,7 @@ jobs:
           fi
 
       - name: Run internal Staging migration runner
+        if: ${{ inputs.operation != 'api-only' }}
         shell: bash
         run: |
           set -Eeuo pipefail
