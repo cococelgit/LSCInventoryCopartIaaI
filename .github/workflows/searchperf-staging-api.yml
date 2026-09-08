@@ -171,6 +171,8 @@ jobs:
         run: |
           set -euo pipefail
           inventory_token="$(openssl rand -hex 32)"
+          echo "::add-mask::$inventory_token"
+          echo "STAGING_INVENTORY_TOKEN=$inventory_token" >> "$GITHUB_ENV"
           if ! az containerapp show -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_API_NAME" --only-show-errors >/dev/null 2>&1; then
             az containerapp create \
               -g "$STAGING_RESOURCE_GROUP" \
@@ -229,6 +231,18 @@ jobs:
           if [[ "${{ inputs.operation }}" == "api-only" ]]; then
             az containerapp revision set-mode -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_API_NAME" --mode Single --only-show-errors >/dev/null
           fi
+      - name: Verify authenticated Motivated Sellers sample in Staging
+        if: ${{ inputs.operation == 'api-only' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          fqdn="$(az containerapp show -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_API_NAME" --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          test -n "$fqdn" && test "$fqdn" != "None"
+          response_file="$(mktemp)"
+          status="$(curl -sS --connect-timeout 5 --max-time 30 -o "$response_file" -w '%{http_code}' -H "Authorization: Bearer $STAGING_INVENTORY_TOKEN" "https://$fqdn/internal/copart/auction-history-sample")"
+          test "$status" = "200"
+          jq '{generatedAt, count, sampleCount: (.samples | length)}' "$response_file"
+          echo "STAGING_MOTIVATED_SAMPLE_HTTP=$status"
 
       - name: Run internal Staging migration runner
         if: ${{ inputs.operation != 'api-only' }}
