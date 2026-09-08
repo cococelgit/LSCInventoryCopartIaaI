@@ -1173,7 +1173,7 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken)
     {
-        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
+        // Read-only diagnostics must not acquire DDL locks. Schema creation is owned by migrations/backfill paths.
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
