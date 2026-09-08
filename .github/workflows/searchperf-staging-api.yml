@@ -110,19 +110,12 @@ jobs:
           echo "STAGING_DATABASE=$db_name" >> "$GITHUB_ENV"
           access_token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
           export PGPASSWORD="$access_token"
-          cat > /tmp/create-staging-principal.sql <<'SQL'
-          DO $$
-          BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'principal') THEN
-              PERFORM pgaadauth_create_principal(:'principal', false, false);
-            END IF;
-          END
-          $$;
-          SQL
-          psql "host=psql-lsc-inventory-staging.postgres.database.azure.com port=5432 dbname=postgres user=github-actions-staging-bootstrap sslmode=require" \
-            -v ON_ERROR_STOP=1 \
-            --set=principal="$STAGING_IDENTITY_NAME" \
-            -f /tmp/create-staging-principal.sql
+          if ! psql "host=psql-lsc-inventory-staging.postgres.database.azure.com port=5432 dbname=postgres user=github-actions-staging-bootstrap sslmode=require" \
+            -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$STAGING_IDENTITY_NAME'" | grep -qx '1'; then
+            psql "host=psql-lsc-inventory-staging.postgres.database.azure.com port=5432 dbname=postgres user=github-actions-staging-bootstrap sslmode=require" \
+              -v ON_ERROR_STOP=1 \
+              -c "SELECT pgaadauth_create_principal('$STAGING_IDENTITY_NAME', false, false);"
+          fi
           psql "host=psql-lsc-inventory-staging.postgres.database.azure.com port=5432 dbname=postgres user=github-actions-staging-bootstrap sslmode=require" \
             -v ON_ERROR_STOP=1 \
             -c "GRANT CONNECT ON DATABASE \"$db_name\" TO \"$STAGING_IDENTITY_NAME\";"
