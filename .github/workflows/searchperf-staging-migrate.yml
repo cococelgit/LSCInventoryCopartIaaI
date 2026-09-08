@@ -1,0 +1,92 @@
+name: Search performance staging migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type APPLY-LSC-STAGING-SEARCHPERF-MIGRATION to change only Staging PostgreSQL"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: search-performance-staging-migration
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  STAGING_RESOURCE_GROUP: rg-lsc-inventory-staging
+  STAGING_POSTGRES_SERVER: psql-lsc-inventory-staging
+  STAGING_DATABASE: lsc_inventory
+  BOOTSTRAP_DATABASE_USER: github-actions-staging-bootstrap
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Guard explicit confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm }}" = "APPLY-LSC-STAGING-SEARCHPERF-MIGRATION"
+
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: manus/search-latency-prod-base
+          fetch-depth: 1
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Verify Staging target and apply migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          server_state="$(az postgres flexible-server show -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_POSTGRES_SERVER" --query state -o tsv)"
+          test "$server_state" = "Ready"
+          server_fqdn="$(az postgres flexible-server show -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_POSTGRES_SERVER" --query fullyQualifiedDomainName -o tsv)"
+          test "$server_fqdn" = "psql-lsc-inventory-staging.postgres.database.azure.com"
+          access_token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$access_token"
+          conn="host=$server_fqdn port=5432 dbname=$STAGING_DATABASE user=$BOOTSTRAP_DATABASE_USER sslmode=require"
+          psql "$conn" -v ON_ERROR_STOP=1 -f infra/sql/016_search_projection_denormalized_score_v1.sql
+          echo "MIGRATION_APPLIED=016_search_projection_denormalized_score_v1"
+
+      - name: Verify projection equivalence and valid indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          access_token="$(az account get-access-token --resource-type ossrdbms --query accessToken -o tsv 2>/dev/null || az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$access_token"
+          conn="host=psql-lsc-inventory-staging.postgres.database.azure.com port=5432 dbname=$STAGING_DATABASE user=$BOOTSTRAP_DATABASE_USER sslmode=require"
+          psql "$conn" -v ON_ERROR_STOP=1 -At -F '|' -f infra/sql/016_search_projection_denormalized_score_v1_verify.sql | tee /tmp/searchperf-verify.txt
+          mismatch_count="$(sed -n '1p' /tmp/searchperf-verify.txt | tr -d '[:space:]')"
+          test "$mismatch_count" = "0"
+          expected_indexes=4
+          valid_indexes="$(sed -n '2,$p' /tmp/searchperf-verify.txt | awk -F'|' '$2=="t" && $3=="t" {count++} END {print count+0}')"
+          test "$valid_indexes" = "$expected_indexes"
+          echo "SCORE_PROJECTION_MISMATCHES=$mismatch_count"
+          echo "VALID_READY_INDEXES=$valid_indexes"
+          {
+            echo "### Search performance Staging migration"
+            echo "- Migration: \\`016_search_projection_denormalized_score_v1\\`"
+            echo "- Target: \\`psql-lsc-inventory-staging / $STAGING_DATABASE\\`"
+            echo "- Score mismatches: \\`$mismatch_count\\`"
+            echo "- Valid and ready indexes: \\`$valid_indexes/$expected_indexes\\`"
+          } >> "$GITHUB_STEP_SUMMARY"
