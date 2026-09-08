@@ -624,7 +624,8 @@ if (args.Contains("--copart-auction-history-report", StringComparer.OrdinalIgnor
     return;
 }
 
-if (args.Contains("--copart-auction-history-sample", StringComparer.OrdinalIgnoreCase))
+if (args.Contains("--copart-auction-history-sample", StringComparer.OrdinalIgnoreCase) ||
+    args.Contains("copart-auction-history-sample", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
     var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
