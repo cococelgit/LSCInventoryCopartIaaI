@@ -224,6 +224,10 @@ jobs:
             az containerapp job delete -g "$STAGING_RESOURCE_GROUP" -n "$job" --yes --only-show-errors >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
+          acr_user="$(az acr credential show -n "$ACR_NAME" --query username -o tsv)"
+          acr_password="$(az acr credential show -n "$ACR_NAME" --query 'passwords[0].value' -o tsv)"
+          test -n "$acr_user" && test -n "$acr_password"
+          echo "::add-mask::$acr_password"
           az containerapp job create \
             -g "$STAGING_RESOURCE_GROUP" -n "$job" \
             --environment "$STAGING_ENVIRONMENT" \
@@ -233,7 +237,8 @@ jobs:
             --replica-completion-count 1 \
             --image "$STAGING_IMAGE" \
             --registry-server "$ACR_SERVER" \
-            --registry-identity "$REGISTRY_IDENTITY_ID" \
+            --registry-username "$acr_user" \
+            --registry-password "$acr_password" \
             --mi-user-assigned "$STAGING_IDENTITY_ID" \
             --command dotnet \
             --args Lsc.Inventory.Api.dll search-projection-migration \
