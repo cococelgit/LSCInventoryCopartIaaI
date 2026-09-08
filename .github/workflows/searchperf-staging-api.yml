@@ -294,7 +294,7 @@ jobs:
               "BlobAudit__ContainerName=raw-apibara" \
             --only-show-errors >/dev/null
           az containerapp job start -g "$STAGING_RESOURCE_GROUP" -n "$job" --only-show-errors >/dev/null
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 120); do
             execution="$(az containerapp job execution list -g "$STAGING_RESOURCE_GROUP" -n "$job" --query '[0].name' -o tsv 2>/dev/null || true)"
             status="$(az containerapp job execution list -g "$STAGING_RESOURCE_GROUP" -n "$job" --query '[0].properties.status' -o tsv 2>/dev/null || true)"
             echo "staging migration attempt=$attempt execution=$execution status=$status"
