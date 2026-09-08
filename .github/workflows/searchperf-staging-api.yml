@@ -190,6 +190,7 @@ jobs:
                 "Persistence__UseDenormalizedScoringSearch=false" \
                 "Persistence__RunBrowseCountAndItemsInParallel=false" \
                 "SearchProjection__WarmupOnStartup=false" \
+                "MotivatedSellers__ReadEnabled=true" \
                 "InventoryApi__Token=secretref:inventory-api-token" \
                 "BlobAudit__AccountUrl=$STAGING_STORAGE_URL" \
                 "BlobAudit__ContainerName=raw-apibara" \
@@ -202,6 +203,7 @@ jobs:
               "Persistence__UseDenormalizedScoringSearch=false" \
               "Persistence__RunBrowseCountAndItemsInParallel=false" \
               "SearchProjection__WarmupOnStartup=false" \
+              "MotivatedSellers__ReadEnabled=true" \
               "InventoryApi__Token=secretref:inventory-api-token" \
               "Persistence__PostgreSqlHost=psql-lsc-inventory-staging.postgres.database.azure.com" \
               "Persistence__Database=$STAGING_DATABASE" \
@@ -297,7 +299,7 @@ jobs:
           echo "PRODUCTION_UNCHANGED=true"
           {
             echo "### Search performance Staging API"
-            echo "- Image: \\`$staging_image\\`"
+            echo "- Image: $staging_image"
             echo "- URL: https://$staging_fqdn"
             echo "- Flags: disabled"
             echo "- Production unchanged: true"
