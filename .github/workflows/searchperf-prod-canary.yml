@@ -133,7 +133,7 @@ jobs:
             --registry-identity "$API_UAI_RESOURCE_ID" \
             --mi-user-assigned "$API_UAI_RESOURCE_ID" \
             --command sh \
-            --args -c "exec dotnet Lsc.Inventory.Api.dll --bootstrap-db" \
+            --args=-c "exec dotnet Lsc.Inventory.Api.dll --bootstrap-db" \
             --env-vars \
               "Persistence__Provider=Postgres" \
               "Persistence__PostgreSqlHost=$POSTGRES_HOST" \
