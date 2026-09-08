@@ -215,6 +215,56 @@ jobs:
             az containerapp secret set -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_API_NAME" --secrets "inventory-api-token=$inventory_token" --only-show-errors >/dev/null
           fi
 
+      - name: Run internal Staging migration runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          job="job-lsc-spmig-stg-${GITHUB_RUN_NUMBER}"
+          cleanup() {
+            az containerapp job delete -g "$STAGING_RESOURCE_GROUP" -n "$job" --yes --only-show-errors >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          az containerapp job create \
+            -g "$STAGING_RESOURCE_GROUP" -n "$job" \
+            --environment "$STAGING_ENVIRONMENT" \
+            --trigger-type Manual \
+            --replica-timeout 900 \
+            --parallelism 1 \
+            --replica-completion-count 1 \
+            --image "$STAGING_IMAGE" \
+            --registry-server "$ACR_SERVER" \
+            --registry-identity "$REGISTRY_IDENTITY_ID" \
+            --mi-user-assigned "$STAGING_IDENTITY_ID" \
+            --command dotnet \
+            --args Lsc.Inventory.Api.dll search-projection-migration \
+            --env-vars \
+              "Persistence__Provider=Postgres" \
+              "Persistence__PostgreSqlHost=psql-lsc-inventory-staging.postgres.database.azure.com" \
+              "Persistence__Database=$STAGING_DATABASE" \
+              "Persistence__ManagedIdentityClientId=$STAGING_IDENTITY_CLIENT_ID" \
+              "Persistence__DatabaseUser=$STAGING_IDENTITY_NAME" \
+              "Persistence__RuntimePrincipalName=$STAGING_IDENTITY_NAME" \
+              "Persistence__RuntimePrincipalObjectId=$STAGING_IDENTITY_PRINCIPAL_ID" \
+              "Persistence__RunMigrations=false" \
+              "Sync__Enabled=false" \
+              "BlobAudit__AccountUrl=$STAGING_STORAGE_URL" \
+              "BlobAudit__ContainerName=raw-apibara" \
+            --only-show-errors >/dev/null
+          az containerapp job start -g "$STAGING_RESOURCE_GROUP" -n "$job" --only-show-errors >/dev/null
+          for attempt in $(seq 1 60); do
+            execution="$(az containerapp job execution list -g "$STAGING_RESOURCE_GROUP" -n "$job" --query '[0].name' -o tsv 2>/dev/null || true)"
+            status="$(az containerapp job execution list -g "$STAGING_RESOURCE_GROUP" -n "$job" --query '[0].properties.status' -o tsv 2>/dev/null || true)"
+            echo "staging migration attempt=$attempt execution=$execution status=$status"
+            [[ "$status" == "Succeeded" ]] && break
+            if [[ "$status" == "Failed" || "$status" == "Stopped" ]]; then
+              az containerapp job logs show -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --container lsc-inventory-engine --tail 100 --format text || true
+              exit 1
+            fi
+            sleep 10
+          done
+          test "${status:-}" = "Succeeded"
+          echo "STAGING_MIGRATION_RUNNER=Succeeded" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify Staging API and Production unchanged
         shell: bash
         run: |
