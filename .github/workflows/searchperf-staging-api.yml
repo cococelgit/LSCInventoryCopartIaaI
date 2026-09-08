@@ -224,9 +224,9 @@ jobs:
             az containerapp job delete -g "$STAGING_RESOURCE_GROUP" -n "$job" --yes --only-show-errors >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          acr_user="$(az acr credential show -n "$ACR_NAME" --query username -o tsv)"
-          acr_password="$(az acr credential show -n "$ACR_NAME" --query 'passwords[0].value' -o tsv)"
-          test -n "$acr_user" && test -n "$acr_password"
+          acr_user="00000000-0000-0000-0000-000000000000"
+          acr_password="$(az acr login --name "$ACR_NAME" --expose-token --output tsv --query accessToken)"
+          test -n "$acr_password"
           echo "::add-mask::$acr_password"
           az containerapp job create \
             -g "$STAGING_RESOURCE_GROUP" -n "$job" \
