@@ -138,6 +138,10 @@ builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotPro
 builder.Services.AddScoped<IInventoryScoringProcessor, InventoryScoringProcessor>();
 builder.Services.AddSingleton<IInventorySearchProjectionRebuildRunner, InventorySearchProjectionRebuildRunner>();
 builder.Services.AddSingleton<ISearchProjectionRebuildCoordinator, SearchProjectionRebuildCoordinator>();
+if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<SearchProjectionMigrationRunner>();
+}
 builder.Services.AddHostedService<InventorySyncWorker>();
 if (builder.Configuration.GetValue<bool>("SearchProjection:WarmupOnStartup"))
 {
@@ -985,6 +989,16 @@ app.MapPost("/internal/auctions-api/runs/{runId:guid}/cancel", async (HttpContex
     var changed = await queue.RequestCancellationAsync(runId, DateTimeOffset.UtcNow, CancellationToken.None);
     return Results.Ok(new { runId, cancellationRequested = changed, status = changed && job.Status == "queued" ? "cancelled" : job.Status });
 });
+
+if (args.Any(argument => string.Equals(argument, "--search-projection-migration", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(argument, "search-projection-migration", StringComparison.OrdinalIgnoreCase)))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var runner = scope.ServiceProvider.GetRequiredService<SearchProjectionMigrationRunner>();
+    var result = await runner.RunAsync(CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
 
 if (args.Contains("--bootstrap-db", StringComparer.OrdinalIgnoreCase))
 {
