@@ -1211,8 +1211,7 @@ public sealed partial class PostgresSnapshotStore(
     public async Task<IReadOnlyList<CopartAuctionHistorySample>> GetCopartAuctionHistorySampleAsync(int maximum, CancellationToken cancellationToken)
     {
         maximum = Math.Clamp(maximum, 1, 100);
-        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
-        await EnsureLifecycleSchemaAsync(cancellationToken);
+        // Read paths must never run schema DDL. The migration workflow owns schema creation.
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 60);
@@ -1256,8 +1255,7 @@ public sealed partial class PostgresSnapshotStore(
     public async Task<CopartAuctionHistoryDetail?> GetCopartAuctionHistoryDetailAsync(string lotKey, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(lotKey)) throw new ArgumentException("Lot key is required.", nameof(lotKey));
-        await EnsureCopartAuctionHistorySchemaAsync(cancellationToken);
-        await EnsureLifecycleSchemaAsync(cancellationToken);
+        // Read paths must never run schema DDL. The migration workflow owns schema creation.
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
