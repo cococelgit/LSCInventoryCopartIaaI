@@ -116,6 +116,15 @@ jobs:
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file Dockerfile .
           echo "CANDIDATE_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
 
+      - name: Prepare production projection ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$TEMP_BOOTSTRAP_USER sslmode=require" \
+            -v ON_ERROR_STOP=1 \
+            -c "GRANT USAGE, CREATE ON SCHEMA public TO \"$RUNTIME_PRINCIPAL_NAME\"; ALTER TABLE inventory_search_current OWNER TO \"$RUNTIME_PRINCIPAL_NAME\"; ALTER TABLE inventory_vehicle_score_current OWNER TO \"$RUNTIME_PRINCIPAL_NAME\"; ALTER TABLE schema_migrations OWNER TO \"$RUNTIME_PRINCIPAL_NAME\";"
+          echo "Production projection ownership precheck passed."
+
       - name: Run internal production migration job
         shell: bash
         run: |
