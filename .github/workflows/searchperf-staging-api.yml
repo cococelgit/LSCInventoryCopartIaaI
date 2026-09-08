@@ -262,7 +262,12 @@ jobs:
             echo "staging migration attempt=$attempt execution=$execution status=$status"
             [[ "$status" == "Succeeded" ]] && break
             if [[ "$status" == "Failed" || "$status" == "Stopped" ]]; then
-              az containerapp job logs show -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --container lsc-inventory-engine --tail 100 --format text || true
+              replica="$(az containerapp job replica list -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].name' -o tsv 2>/dev/null || true)"
+              container="$(az containerapp job replica list -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].properties.containers[0].name' -o tsv 2>/dev/null || true)"
+              echo "staging migration replica=$replica container=$container"
+              if [[ -n "$replica" && -n "$container" ]]; then
+                az containerapp job logs show -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --replica "$replica" --container "$container" --tail 100 --format text || true
+              fi
               exit 1
             fi
             sleep 10
