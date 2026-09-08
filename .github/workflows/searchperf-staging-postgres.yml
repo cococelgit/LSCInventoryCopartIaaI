@@ -76,7 +76,6 @@ jobs:
             --resource-group "$STAGING_RESOURCE_GROUP" \
             --name "$STAGING_POSTGRES_SERVER" \
             --source-server "$source_server_id" \
-            --location "$LOCATION" \
             --only-show-errors
 
       - name: Verify Staging PostgreSQL only
