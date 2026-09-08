@@ -17,6 +17,9 @@ env:
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
   POSTGRES_SERVER: psql-lsc-inventory-cu
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
   INVENTORY_API_APP: ca-lsc-inventory-api-prod
   PRIVATE_ENDPOINT_NAME: pe-psql-lsc-inventory-cu
   PRIVATE_DNS_ZONE: privatelink.postgres.database.azure.com
@@ -148,6 +151,37 @@ jobs:
 
           echo "HEALTH_HTTP_CODE=$health_code"
           test "$health_code" = "200"
+
+      - name: Profile inventory search read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          connection="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require"
+          eastern_floor="date_trunc('day', now() at time zone 'America/New_York') at time zone 'America/New_York'"
+
+          psql "$connection" --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            -c "set default_transaction_read_only=on; set statement_timeout='30s'; select json_build_object('capturedAt',now(),'projectionRows',count(*),'visibleFutureRows',count(*) filter (where is_active and not is_special_title and auction_at >= $eastern_floor),'scoredRows',(select count(*) from inventory_vehicle_score_current where pre_grade is not null)) from inventory_search_current;" \
+            > diagnostics/search-profile-metadata.json
+
+          psql "$connection" --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            -c "set default_transaction_read_only=on; set statement_timeout='30s'; explain (analyze,buffers,timing,summary,format json) select count(*)::int from inventory_search_current latest where latest.is_active and not latest.is_special_title and latest.auction_at >= $eastern_floor;" \
+            > diagnostics/search-count-plan.json
+
+          psql "$connection" --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            -c "set default_transaction_read_only=on; set statement_timeout='30s'; explain (analyze,buffers,timing,summary,format json) select latest.lot_key from inventory_search_current latest left join inventory_vehicle_score_current score on score.lot_key=latest.lot_key where latest.is_active and not latest.is_special_title and latest.auction_at >= $eastern_floor order by score.pre_grade desc nulls last, latest.observed_at desc nulls last, latest.lot_key asc limit 24 offset 0;" \
+            > diagnostics/search-items-current-plan.json
+
+          psql "$connection" --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            -c "set default_transaction_read_only=on; set statement_timeout='30s'; explain (analyze,buffers,timing,summary,format json) select latest.lot_key from inventory_vehicle_score_current score join inventory_search_current latest on latest.lot_key=score.lot_key where score.pre_grade is not null and latest.is_active and not latest.is_special_title and latest.auction_at >= $eastern_floor order by score.pre_grade desc nulls last, latest.observed_at desc nulls last, latest.lot_key asc limit 24 offset 0;" \
+            > diagnostics/search-items-scored-first-plan.json
+
+          psql "$connection" --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            -c "select coalesce(json_agg(json_build_object('indexName',indexname,'definition',indexdef)),'[]'::json) from pg_indexes where schemaname=current_schema() and tablename in ('inventory_search_current','inventory_vehicle_score_current');" \
+            > diagnostics/search-indexes.json
+          unset PGPASSWORD token connection
 
       - name: Query recent Inventory API logs
         if: always()
