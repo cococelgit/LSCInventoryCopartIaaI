@@ -121,7 +121,7 @@ jobs:
             -c "GRANT CONNECT ON DATABASE \"$db_name\" TO \"$STAGING_IDENTITY_NAME\";"
           psql "host=psql-lsc-inventory-staging.postgres.database.azure.com port=5432 dbname=$db_name user=github-actions-staging-bootstrap sslmode=require" \
             -v ON_ERROR_STOP=1 \
-            -c "GRANT USAGE ON SCHEMA public TO \"$STAGING_IDENTITY_NAME\"; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$STAGING_IDENTITY_NAME\"; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO \"$STAGING_IDENTITY_NAME\"; ALTER TABLE inventory_search_current OWNER TO \"$STAGING_IDENTITY_NAME\"; ALTER TABLE inventory_vehicle_score_current OWNER TO \"$STAGING_IDENTITY_NAME\"; ALTER TABLE schema_migrations OWNER TO \"$STAGING_IDENTITY_NAME\";"
+            -c "GRANT USAGE, CREATE ON SCHEMA public TO \"$STAGING_IDENTITY_NAME\"; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$STAGING_IDENTITY_NAME\"; GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO \"$STAGING_IDENTITY_NAME\"; ALTER TABLE inventory_search_current OWNER TO \"$STAGING_IDENTITY_NAME\"; ALTER TABLE inventory_vehicle_score_current OWNER TO \"$STAGING_IDENTITY_NAME\"; ALTER TABLE schema_migrations OWNER TO \"$STAGING_IDENTITY_NAME\";"
 
       - name: Create isolated Blob Storage
         shell: bash
