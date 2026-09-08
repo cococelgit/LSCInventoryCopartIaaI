@@ -92,7 +92,7 @@ jobs:
             az containerapp update \
               -g "$STAGING_RESOURCE_GROUP" \
               -n "$STAGING_API_NAME" \
-              --revision-suffix "benchmark-$label-${GITHUB_RUN_NUMBER}" \
+              --revision-suffix "b${label:0:1}${GITHUB_RUN_NUMBER}" \
               --set-env-vars \
                 "Sync__Enabled=false" \
                 "Persistence__RunMigrations=false" \
