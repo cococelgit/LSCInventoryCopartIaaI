@@ -83,7 +83,11 @@ jobs:
           set -euo pipefail
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
-            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = "Manual"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            case "$trigger" in
+              Manual|Schedule) ;;
+              *) echo "Unsupported existing trigger for $job: $trigger" >&2; exit 1 ;;
+            esac
             echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.before.json"
             echo "BASELINE_$job=$(echo "$json" | jq -c '{trigger: .properties.configuration.triggerType, cron: .properties.configuration.scheduleTriggerConfig.cronExpression, image: .properties.template.containers[0].image}')"
           done
@@ -118,13 +122,17 @@ jobs:
           set -euo pipefail
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
-            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = "Manual"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            case "$trigger" in
+              Manual|Schedule) ;;
+              *) echo "Unsupported resulting trigger for $job: $trigger" >&2; exit 1 ;;
+            esac
             echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.after.json"
             diff -u "$RUNNER_TEMP/$job.before.json" "$RUNNER_TEMP/$job.after.json" || true
             test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__CanonicalShadowEnabled") | .value')" = "${{ inputs.canonical_shadow_enabled }}"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__CanonicalMapperEnabled") | .value')" = "${{ inputs.canonical_mapper_enabled }}"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__AllowWrites") | .value')" = "false"
-            echo "VERIFIED_JOB=$job IMAGE=$PROMOTED_IMAGE TRIGGER=Manual SHADOW=${{ inputs.canonical_shadow_enabled }} CANONICAL=${{ inputs.canonical_mapper_enabled }} WRITES=false"
+            echo "VERIFIED_JOB=$job IMAGE=$PROMOTED_IMAGE TRIGGER=$trigger SHADOW=${{ inputs.canonical_shadow_enabled }} CANONICAL=${{ inputs.canonical_mapper_enabled }} WRITES=false"
           done
           echo "No job execution was started."
