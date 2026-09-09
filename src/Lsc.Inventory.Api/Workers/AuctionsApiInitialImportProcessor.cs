@@ -86,7 +86,11 @@ public sealed class AuctionsApiInitialImportProcessor(
                 var response = await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(DomainId(normalizedPlatform), null, page, _options.PageSize), cancellationToken);
                 requests++;
                 pages++;
-                foreach (var vehicle in AuctionsApiIncrementalSyncProcessor.MapRows(AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data), normalizedPlatform))
+                var sourceRows = AuctionsApiIncrementalSyncProcessor.ExtractRows(response.Data);
+                var mappedVehicles = _options.CanonicalMapperEnabled
+                    ? AuctionsApiIncrementalSyncProcessor.MapRowsCanonical(sourceRows, normalizedPlatform)
+                    : AuctionsApiIncrementalSyncProcessor.MapRows(sourceRows, normalizedPlatform);
+                foreach (var vehicle in mappedVehicles)
                 {
                     sourceRowsScanned++;
                     if ((requireSaleDate || requireFutureSaleDate) && vehicle.Auction?.AuctionAt is null)

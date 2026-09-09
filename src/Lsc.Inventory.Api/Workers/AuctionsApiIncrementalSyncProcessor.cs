@@ -83,8 +83,13 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             var activeWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: false, cancellationToken);
             pages += activeWindow.Pages;
             requests += activeWindow.Requests;
-            foreach (var vehicle in MapRows(activeWindow.Rows, normalizedPlatform))
+            var activeVehicles = _options.CanonicalMapperEnabled
+                ? MapRowsCanonical(activeWindow.Rows, normalizedPlatform)
+                : MapRows(activeWindow.Rows, normalizedPlatform);
+            foreach (var vehicle in activeVehicles)
             {
+                if (_options.CanonicalShadowEnabled)
+                    LogCanonicalShadowComparison(vehicle, normalizedPlatform);
                 if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
                 if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
                 {
@@ -129,7 +134,10 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 pages += archivedWindow.Pages;
                 requests += archivedWindow.Requests;
                 var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var vehicle in MapRows(archivedWindow.Rows, normalizedPlatform))
+                var archivedVehicles = _options.CanonicalMapperEnabled
+                    ? MapRowsCanonical(archivedWindow.Rows, normalizedPlatform)
+                    : MapRows(archivedWindow.Rows, normalizedPlatform);
+                foreach (var vehicle in archivedVehicles)
                 {
                     if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
                     archived++;
@@ -225,6 +233,19 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         return false;
     }
 
+    private void LogCanonicalShadowComparison(AuctionVehicle legacy, string platform)
+    {
+        if (legacy.RawSource is not { ValueKind: JsonValueKind.Object } raw || !raw.TryGetProperty("vehicle", out var vehicleRow)) return;
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(vehicleRow, platform);
+        if (provider is null) return;
+        var canonical = AuctionsApiCanonicalMapper.ToAuctionVehicles(provider)
+            .FirstOrDefault(item => string.Equals(item.LotNumber, legacy.LotNumber, StringComparison.OrdinalIgnoreCase));
+        if (canonical is null) return;
+        var comparison = AuctionsApiCanonicalShadowComparer.Compare(legacy, canonical);
+        if (comparison.HasDifferences)
+            logger.LogInformation("AuctionsAPI canonical shadow difference platform={Platform} lot={LotNumber} fields={Fields}", platform, comparison.LotNumber, string.Join(',', comparison.Differences));
+    }
+
     private static int DomainId(string platform) => platform == "iaai" ? 1 : 3;
 
     internal static IEnumerable<JsonElement> ExtractRows(JsonElement data)
@@ -240,6 +261,20 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             if (!data.TryGetProperty(key, out var nested) || nested.ValueKind != JsonValueKind.Array) continue;
             foreach (var row in nested.EnumerateArray()) yield return row;
             yield break;
+        }
+    }
+
+    internal static IEnumerable<AuctionVehicle> MapRowsCanonical(IEnumerable<JsonElement> rows, string platform, bool trustRequestedDomain = false)
+    {
+        var expectedDomain = DomainId(platform).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var row in rows)
+        {
+            if (row.ValueKind != JsonValueKind.Object) continue;
+            var provider = AuctionsApiCanonicalMapper.MapVehicle(row, platform);
+            if (provider is null) continue;
+            if (!string.Equals(provider.DomainId, expectedDomain, StringComparison.OrdinalIgnoreCase) && !trustRequestedDomain) continue;
+            foreach (var vehicle in AuctionsApiCanonicalMapper.ToAuctionVehicles(provider))
+                if (!string.IsNullOrWhiteSpace(vehicle.LotNumber)) yield return vehicle;
         }
     }
 
