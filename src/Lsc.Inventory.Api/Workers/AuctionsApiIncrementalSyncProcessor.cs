@@ -83,7 +83,10 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             var activeWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: false, cancellationToken);
             pages += activeWindow.Pages;
             requests += activeWindow.Requests;
-            foreach (var vehicle in MapRows(activeWindow.Rows, normalizedPlatform))
+            var activeVehicles = _options.CanonicalMapperEnabled
+                ? MapRowsCanonical(activeWindow.Rows, normalizedPlatform)
+                : MapRows(activeWindow.Rows, normalizedPlatform);
+            foreach (var vehicle in activeVehicles)
             {
                 if (_options.CanonicalShadowEnabled)
                     LogCanonicalShadowComparison(vehicle, normalizedPlatform);
@@ -131,7 +134,10 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 pages += archivedWindow.Pages;
                 requests += archivedWindow.Requests;
                 var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var vehicle in MapRows(archivedWindow.Rows, normalizedPlatform))
+                var archivedVehicles = _options.CanonicalMapperEnabled
+                    ? MapRowsCanonical(archivedWindow.Rows, normalizedPlatform)
+                    : MapRows(archivedWindow.Rows, normalizedPlatform);
+                foreach (var vehicle in archivedVehicles)
                 {
                     if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
                     archived++;
