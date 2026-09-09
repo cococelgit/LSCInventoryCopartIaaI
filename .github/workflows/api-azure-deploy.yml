@@ -3,6 +3,11 @@ name: Inventory API Azure Deploy
 on:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: "Reviewed Git ref to build and deploy"
+        required: true
+        default: main
+        type: string
       enable_auctions_api:
         description: "Enable AuctionsAPI client; keep false for a code-only rollout"
         required: true
@@ -55,6 +60,8 @@ jobs:
     steps:
       - name: Checkout selected commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
 
       - name: Login to Azure through federated identity
         uses: azure/login@v2

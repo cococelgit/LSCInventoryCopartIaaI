@@ -3,6 +3,11 @@ name: Deploy AuctionsAPI canonical shadow jobs
 on:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: "Reviewed Git ref to build"
+        required: true
+        default: main
+        type: string
       confirmation:
         description: "Type DEPLOY_CANONICAL_SHADOW to update both jobs without starting them"
         required: true
@@ -59,6 +64,8 @@ jobs:
 
       - name: Checkout selected ref
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
 
       - name: Login to Azure
         uses: azure/login@v2
