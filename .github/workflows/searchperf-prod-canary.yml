@@ -72,10 +72,11 @@ jobs:
           test -n "$api_revision" && test "$api_revision" != "null"
           test "$ready_revision" = "$api_revision"
           test "$active_mode" = "Single"
+          test -n "$ingress_fqdn" && test "$ingress_fqdn" != "null"
           test "$sync" = "false"
           test "$migrations" = "false"
           test "$warmup" = "true"
-          curl --fail --silent --show-error --retry 6 --retry-delay 5 "https://$ingress_fqdn/healthz" >/dev/null
+          curl --fail-with-body --silent --show-error --retry 6 --retry-delay 5 "https://$ingress_fqdn/healthz"
           api_uai_resource_id="$(jq -r '.identity.userAssignedIdentities | keys[0] // empty' <<<"$app_json")"
           test -n "$api_uai_resource_id"
           app_env() { jq -r --arg n "$1" '.properties.template.containers[0].env[]? | select(.name==$n) | (.value // empty)' <<<"$app_json"; }
@@ -106,7 +107,7 @@ jobs:
             echo "BLOB_CONTAINER_NAME=$blob_container"
             echo "CONTAINER_ENVIRONMENT_ID=$env_id"
           } >> "$GITHUB_ENV"
-          echo "Production prechecks passed for revision=$api_revision image=$api_image"
+          echo "Production prechecks passed for revision=$api_revision image=$api_image fqdn=$ingress_fqdn"
 
       - name: Build immutable candidate image
         shell: bash
@@ -133,7 +134,7 @@ jobs:
             --registry-identity "$API_UAI_RESOURCE_ID" \
             --mi-user-assigned "$API_UAI_RESOURCE_ID" \
             --command dotnet \
-            --args Lsc.Inventory.Api.dll search-projection-migration \
+            --args Lsc.Inventory.Api.dll production-migration \
             --env-vars \
               "Persistence__Provider=Postgres" \
               "Persistence__PostgreSqlHost=$POSTGRES_HOST" \
@@ -142,7 +143,7 @@ jobs:
               "Persistence__DatabaseUser=$POSTGRES_DATABASE_USER" \
               "Persistence__RuntimePrincipalName=$RUNTIME_PRINCIPAL_NAME" \
               "Persistence__RuntimePrincipalObjectId=$RUNTIME_PRINCIPAL_OBJECT_ID" \
-              "Persistence__RunMigrations=false" \
+              "Persistence__RunMigrations=true" \
               "Sync__Enabled=false" \
               "BlobAudit__AccountUrl=$BLOB_ACCOUNT_URL" \
               "BlobAudit__ContainerName=$BLOB_CONTAINER_NAME" \
@@ -200,6 +201,7 @@ jobs:
               "SearchProjection__WarmupOnStartup=true" \
               "Persistence__UseDenormalizedScoringSearch=false" \
               "Persistence__RunBrowseCountAndItemsInParallel=false" \
+              "MotivatedSellers__ReadEnabled=false" \
             --only-show-errors >/dev/null
           NEW_REVISION="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_NAME" --query properties.latestRevisionName -o tsv)"
           test "$NEW_REVISION" != "$CURRENT_API_REVISION"
@@ -238,6 +240,7 @@ jobs:
               "SearchProjection__WarmupOnStartup=true" \
               "Persistence__UseDenormalizedScoringSearch=true" \
               "Persistence__RunBrowseCountAndItemsInParallel=true" \
+              "MotivatedSellers__ReadEnabled=true" \
             --only-show-errors >/dev/null
           ENABLED_REVISION="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_NAME" --query properties.latestRevisionName -o tsv)"
           test "$ENABLED_REVISION" != "$NEW_REVISION"
