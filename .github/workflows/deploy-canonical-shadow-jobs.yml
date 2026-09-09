@@ -100,16 +100,26 @@ jobs:
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
           echo "PROMOTED_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
 
-      - name: Update images and shadow flags only
+      - name: Configure AuctionsAPI secret reference and update shadow flags
         shell: bash
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
           for job in "$IAAI_JOB" "$COPART_JOB"; do
+            az containerapp job secret set \
+              --name "$job" \
+              --resource-group "$RESOURCE_GROUP" \
+              --secrets "auctions-api-key=$AUCTIONS_API_KEY" \
+              --only-show-errors
             az containerapp job update \
               --name "$job" \
               --resource-group "$RESOURCE_GROUP" \
               --image "$PROMOTED_IMAGE" \
               --set-env-vars \
+                "AuctionsApi__ApiKey=secretref:auctions-api-key" \
+                "AuctionsApi__Enabled=true" \
                 "AuctionsApi__CanonicalShadowEnabled=${{ inputs.canonical_shadow_enabled }}" \
                 "AuctionsApi__CanonicalMapperEnabled=${{ inputs.canonical_mapper_enabled }}" \
                 "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
@@ -130,6 +140,8 @@ jobs:
             echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.after.json"
             diff -u "$RUNNER_TEMP/$job.before.json" "$RUNNER_TEMP/$job.after.json" || true
             test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
+            test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__ApiKey") | .secretRef')" = "auctions-api-key"
+            test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__Enabled") | .value')" = "true"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__CanonicalShadowEnabled") | .value')" = "${{ inputs.canonical_shadow_enabled }}"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__CanonicalMapperEnabled") | .value')" = "${{ inputs.canonical_mapper_enabled }}"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].env[] | select(.name=="AuctionsApi__AllowWrites") | .value')" = "false"
