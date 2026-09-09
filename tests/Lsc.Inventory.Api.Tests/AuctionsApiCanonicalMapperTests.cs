@@ -118,6 +118,21 @@ public sealed class AuctionsApiCanonicalMapperTests
         Assert.Contains("primary_damage", result.Differences);
     }
 
+    [Fact]
+    public void Shadow_comparison_against_real_iaai_fixture_preserves_official_values()
+    {
+        var payload = ReadFixture("iaai_cars_page1.json");
+        var row = payload.GetProperty("data")[0];
+        var legacy = AuctionsApiIncrementalSyncProcessor.MapRows(new[] { row }, "iaai").Single();
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(row, "iaai");
+        var canonical = AuctionsApiCanonicalMapper.ToAuctionVehicles(provider!).Single();
+
+        Assert.Equal("sedan", canonical.VehicleSpecs!.BodyStyle);
+        Assert.Equal("actual", provider!.Lots.Single().OdometerStatus!.NormalizedValue);
+        Assert.NotNull(provider.Lots.Single().DamageMain);
+        Assert.Equal(legacy.LotNumber, canonical.LotNumber);
+    }
+
     private static JsonElement ReadFixture(string name)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", name);
