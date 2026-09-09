@@ -368,6 +368,16 @@ app.MapGet("/internal/copart/auction-history-sample", async (
     return Results.Ok(new { generatedAt = DateTimeOffset.UtcNow, count = samples.Count, samples });
 });
 
+app.MapGet("/internal/copart/auction-history-report", async (
+    HttpContext context,
+    IInventorySnapshotStore store,
+    CancellationToken cancellationToken) =>
+{
+    if (!motivatedSellerReadEnabled) return Results.NotFound();
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    return Results.Ok(await store.GetCopartAuctionHistoryReportAsync(cancellationToken));
+});
+
 app.MapGet("/internal/copart/auction-history/{lotKey}", async (
     HttpContext context,
     IInventorySnapshotStore store,
