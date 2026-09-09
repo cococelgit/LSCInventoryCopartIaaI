@@ -13,6 +13,21 @@ on:
         required: true
         default: false
         type: boolean
+      canonical_shadow_enabled:
+        description: "Run old and canonical mappers in shadow mode without changing writes; default false"
+        required: true
+        default: false
+        type: boolean
+      canonical_mapper_enabled:
+        description: "Use canonical mapper output; keep false for shadow-only canary"
+        required: true
+        default: false
+        type: boolean
+      preserve_previous_revision:
+        description: "Keep the previous API revision active for rollback; default true"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -78,6 +93,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "AuctionsAPI canonical writes requested: ${{ inputs.allow_auctions_writes }}"
+          echo "Canonical shadow requested: ${{ inputs.canonical_shadow_enabled }}"
+          echo "Canonical mapper requested: ${{ inputs.canonical_mapper_enabled }}"
+          echo "Preserve previous revision: ${{ inputs.preserve_previous_revision }}"
           # Manual workflow_dispatch input only; default remains false.
           if [[ "${{ inputs.allow_auctions_writes }}" != "true" && "${{ inputs.allow_auctions_writes }}" != "false" ]]; then
             echo "Invalid write flag." >&2
@@ -106,6 +124,8 @@ jobs:
               "AuctionsApi__ApiKey=secretref:auctions-api-key" \
               "AuctionsApi__Enabled=${{ inputs.enable_auctions_api }}" \
               "AuctionsApi__AllowWrites=${{ inputs.allow_auctions_writes }}" \
+              "AuctionsApi__CanonicalShadowEnabled=${{ inputs.canonical_shadow_enabled }}" \
+              "AuctionsApi__CanonicalMapperEnabled=${{ inputs.canonical_mapper_enabled }}" \
             --only-show-errors
 
       - name: Deactivate previous API revision
@@ -113,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           deployed_revision="$(az containerapp show --name "$INVENTORY_API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.latestRevisionName' -o tsv)"
-          if [[ -n "${CURRENT_API_REVISION:-}" && "$CURRENT_API_REVISION" != "$deployed_revision" ]]; then
+          if [[ "${{ inputs.preserve_previous_revision }}" != "true" && -n "${CURRENT_API_REVISION:-}" && "$CURRENT_API_REVISION" != "$deployed_revision" ]]; then
             az containerapp revision deactivate \
               --name "$INVENTORY_API_APP_NAME" \
               --resource-group "$RESOURCE_GROUP" \
@@ -132,6 +152,9 @@ jobs:
           echo "AuctionsAPI enabled: ${{ inputs.enable_auctions_api }}"
           echo "AuctionsAPI API key: server-side secret reference"
           echo "AuctionsAPI writes: ${{ inputs.allow_auctions_writes }}"
+          echo "Canonical shadow: ${{ inputs.canonical_shadow_enabled }}"
+          echo "Canonical mapper: ${{ inputs.canonical_mapper_enabled }}"
+          echo "Previous revision preserved: ${{ inputs.preserve_previous_revision }}"
           echo "Previous image for rollback: $CURRENT_API_IMAGE"
           {
             echo "### Inventory API deployment"
