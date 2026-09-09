@@ -105,6 +105,8 @@ builder.Services.AddHttpClient("copart-media-proxy", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddMemoryCache(options => options.SizeLimit = 2_000);
+builder.Services.AddScoped<ILiveCopartAuctionHistoryLookup, LiveCopartAuctionHistoryLookup>();
 
 var persistenceProvider = builder.Configuration.GetValue<string>($"{PersistenceOptions.SectionName}:Provider") ?? "InMemory";
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
@@ -149,6 +151,7 @@ if (builder.Configuration.GetValue<bool>("SearchProjection:WarmupOnStartup"))
 var app = builder.Build();
 var inventoryReadToken = builder.Configuration["InventoryApi:Token"] ?? Environment.GetEnvironmentVariable("INVENTORY_API_TOKEN");
 var titleTaxonomyFacetsEnabled = builder.Configuration.GetValue("TitleTaxonomy:FacetsEnabled", false);
+var motivatedSellersLiveHistoryEnabled = builder.Configuration.GetValue("MotivatedSellers:LiveHistoryEnabled", false);
 
 static bool HasValidReadToken(HttpContext context, string? expectedToken)
 {
@@ -825,6 +828,20 @@ app.MapGet("/api/v1/inventory/media/{platform}/{lot}/{photoIndex:int}", async (
     if (bytes.Length > maximumBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
     context.Response.Headers.CacheControl = "public,max-age=86400,stale-while-revalidate=604800";
     return Results.File(bytes, contentType);
+});
+
+app.MapGet("/internal/copart/motivated-seller-live/{lot}", async (
+    HttpContext context,
+    ILiveCopartAuctionHistoryLookup historyLookup,
+    string lot,
+    CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    if (!motivatedSellersLiveHistoryEnabled) return Results.NotFound();
+    if (!LiveCopartAuctionHistoryParser.IsSupportedLot(lot))
+        return Results.BadRequest(new { error = "A numeric Copart lot number between 4 and 32 digits is required." });
+    var history = await historyLookup.GetAsync(lot, cancellationToken);
+    return history is null ? Results.NotFound() : Results.Ok(history);
 });
 
 app.MapGet("/internal/eligibility/discarded", async (
