@@ -3,6 +3,7 @@ using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Scoring;
+using Lsc.Inventory.Api.SaleAttempts;
 using Lsc.Inventory.Api.Services;
 using Lsc.Inventory.Api.Sources;
 using Lsc.Inventory.Api.Storage;
@@ -25,6 +26,12 @@ builder.Services
     .AddOptions<AuctionsApiOptions>()
     .Bind(builder.Configuration.GetSection(AuctionsApiOptions.SectionName))
     .ValidateDataAnnotations();
+
+builder.Services
+    .AddOptions<SaleAttemptIntelligenceOptions>()
+    .Bind(builder.Configuration.GetSection(SaleAttemptIntelligenceOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 
 builder.Services
     .AddOptions<SyncOptions>()
@@ -110,11 +117,16 @@ var persistenceProvider = builder.Configuration.GetValue<string>($"{PersistenceO
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddSingleton<IInventorySnapshotStore, PostgresSnapshotStore>();
+    builder.Services.AddSingleton<ISaleAttemptHistoryStore>(serviceProvider =>
+        (PostgresSnapshotStore)serviceProvider.GetRequiredService<IInventorySnapshotStore>());
 }
 else
 {
     builder.Services.AddSingleton<IInventorySnapshotStore, InMemorySnapshotStore>();
+    builder.Services.AddSingleton<ISaleAttemptHistoryStore, InMemorySaleAttemptHistoryStore>();
 }
+builder.Services.AddSingleton<SellerMotivationSignalCalculator>();
+builder.Services.AddScoped<ISaleAttemptIntelligenceProcessor, SaleAttemptIntelligenceProcessor>();
 builder.Services.AddScoped<IInventorySyncProcessor, InventorySyncProcessor>();
 builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
 builder.Services.AddScoped<IaaINationalSyncProcessor>();
@@ -150,6 +162,7 @@ if (builder.Configuration.GetValue<bool>("SearchProjection:WarmupOnStartup"))
 
 var app = builder.Build();
 var inventoryReadToken = builder.Configuration["InventoryApi:Token"] ?? Environment.GetEnvironmentVariable("INVENTORY_API_TOKEN");
+var motivatedSellerReadEnabled = builder.Configuration.GetValue("MotivatedSellers:ReadEnabled", false);
 var titleTaxonomyFacetsEnabled = builder.Configuration.GetValue("TitleTaxonomy:FacetsEnabled", false);
 
 static bool HasValidReadToken(HttpContext context, string? expectedToken)
@@ -843,6 +856,21 @@ app.MapGet("/internal/eligibility/discarded", async (
     return Results.Ok(result);
 });
 
+app.MapGet("/internal/copart/motivated-seller/{lotKey}", async (HttpContext context, IInventorySnapshotStore store, string lotKey, CancellationToken cancellationToken) =>
+{
+    if (!motivatedSellerReadEnabled) return Results.NotFound();
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    var detail = await store.GetMotivatedSellerDetailAsync(lotKey, cancellationToken);
+    return detail is null ? Results.NotFound() : Results.Ok(detail);
+});
+
+app.MapGet("/internal/copart/motivated-seller-report", async (HttpContext context, IInventorySnapshotStore store, CancellationToken cancellationToken) =>
+{
+    if (!motivatedSellerReadEnabled) return Results.NotFound();
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    return Results.Ok(await store.GetMotivatedSellerReportAsync(cancellationToken));
+});
+
 app.MapGet("/internal/validation", async (HttpContext context, IInventorySnapshotStore store, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
@@ -989,6 +1017,34 @@ app.MapPost("/internal/auctions-api/runs/{runId:guid}/cancel", async (HttpContex
     var changed = await queue.RequestCancellationAsync(runId, DateTimeOffset.UtcNow, CancellationToken.None);
     return Results.Ok(new { runId, cancellationRequested = changed, status = changed && job.Status == "queued" ? "cancelled" : job.Status });
 });
+
+if (args.Any(argument => string.Equals(argument, "--production-migration", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(argument, "production-migration", StringComparison.OrdinalIgnoreCase)))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+        throw new InvalidOperationException("Production migration requires Persistence:Provider=Postgres.");
+
+    await postgresStore.EnsureMotivatedSellerSchemaForMigrationAsync(CancellationToken.None);
+    var runner = scope.ServiceProvider.GetRequiredService<SearchProjectionMigrationRunner>();
+    var result = await runner.RunAsync(CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { motivatedSellerSchema = "completed", searchProjection = result }));
+    return;
+}
+
+if (args.Any(argument => string.Equals(argument, "--motivated-seller-schema-migration", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(argument, "motivated-seller-schema-migration", StringComparison.OrdinalIgnoreCase)))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+        throw new InvalidOperationException("Motivated Seller schema migration requires Persistence:Provider=Postgres.");
+
+    await postgresStore.EnsureMotivatedSellerSchemaForMigrationAsync(CancellationToken.None);
+    Console.WriteLine("Motivated Seller schema migration completed.");
+    return;
+}
 
 if (args.Any(argument => string.Equals(argument, "--search-projection-migration", StringComparison.OrdinalIgnoreCase)
     || string.Equals(argument, "search-projection-migration", StringComparison.OrdinalIgnoreCase)))

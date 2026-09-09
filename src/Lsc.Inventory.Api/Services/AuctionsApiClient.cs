@@ -14,13 +14,15 @@ public interface IAuctionsApiClient
 {
     Task<AuctionsApiPage> GetChangedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken);
     Task<AuctionsApiPage> GetArchivedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken);
+    Task<AuctionsApiPage> GetLotAsync(string lot, int domainId, bool searchById, bool includePricesHistory, CancellationToken cancellationToken);
 }
 
 public sealed record AuctionsApiWindowRequest(
     int DomainId,
     int? Minutes,
     int Page = 1,
-    int? PerPage = null);
+    int? PerPage = null,
+    bool IncludePricesHistory = false);
 
 public sealed record AuctionsApiPage(JsonElement Data, JsonElement Meta, int? NextPage = null);
 
@@ -45,10 +47,23 @@ public sealed class AuctionsApiClient(
     public Task<AuctionsApiPage> GetArchivedLotsAsync(AuctionsApiWindowRequest request, CancellationToken cancellationToken) =>
         GetPageAsync("archived-lots", request, cancellationToken);
 
-    private async Task<AuctionsApiPage> GetPageAsync(string path, AuctionsApiWindowRequest request, CancellationToken cancellationToken)
+    public Task<AuctionsApiPage> GetLotAsync(string lot, int domainId, bool searchById, bool includePricesHistory, CancellationToken cancellationToken)
     {
-        if (!_options.IsConfigured)
-            throw new InvalidOperationException("AuctionsAPI is disabled. Enable it only for an approved shadow evaluation.");
+        if (string.IsNullOrWhiteSpace(lot)) throw new ArgumentException("A lot identifier is required.", nameof(lot));
+        if (domainId is not (1 or 3)) throw new ArgumentOutOfRangeException(nameof(domainId));
+        var path = $"search-lot/{Uri.EscapeDataString(lot.Trim())}/{domainId.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        var query = new Dictionary<string, string?>();
+        if (searchById) query["search_by_id"] = "1";
+        if (includePricesHistory) query["prices_history"] = "1";
+        return GetPageAsync(path, new AuctionsApiWindowRequest(domainId, null, 1, 1), cancellationToken, query);
+    }
+
+    private async Task<AuctionsApiPage> GetPageAsync(string path, AuctionsApiWindowRequest request, CancellationToken cancellationToken, IReadOnlyDictionary<string, string?>? explicitQuery = null)
+    {
+        if (!_options.Enabled)
+            throw new InvalidOperationException("AuctionsAPI is disabled for this job.");
+        if (string.IsNullOrWhiteSpace(_options.ApiKey))
+            throw new InvalidOperationException("AuctionsAPI API key is missing.");
         if (request.DomainId is not (1 or 3))
             throw new ArgumentOutOfRangeException(nameof(request.DomainId), "Only IAAI (1) and Copart (3) are allowed in this adapter.");
         if (request.Minutes is not null and (< 1 or > 4320))
@@ -57,13 +72,16 @@ public sealed class AuctionsApiClient(
             throw new ArgumentOutOfRangeException(nameof(request.Page));
 
         var perPage = Math.Clamp(request.PerPage ?? _options.PageSize, 1, 1000);
-        var query = new Dictionary<string, string?>
-        {
-            ["domain_id"] = request.DomainId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["minutes"] = request.Minutes?.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["page"] = request.Page.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["per_page"] = perPage.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        };
+        var query = explicitQuery is null
+            ? new Dictionary<string, string?>
+            {
+                ["domain_id"] = request.DomainId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["minutes"] = request.Minutes?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["page"] = request.Page.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["per_page"] = perPage.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["prices_history"] = request.IncludePricesHistory ? "1" : null,
+            }
+            : new Dictionary<string, string?>(explicitQuery);
         var uri = QueryHelpers.AddQueryString(path, query);
 
         var transportAttempts = 0;

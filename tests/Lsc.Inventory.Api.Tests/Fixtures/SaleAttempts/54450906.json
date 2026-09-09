@@ -1,0 +1,341 @@
+{
+  "data": {
+    "id": 78520,
+    "lots": [
+      {
+        "id": 20333227,
+        "external_id": null,
+        "lot": "54450906",
+        "domain": {
+          "name": "copart_com",
+          "id": 3
+        },
+        "bid": 38000,
+        "buy_now": 47362,
+        "final_bid": null,
+        "seller_reserve": null,
+        "auction_type": null,
+        "status": {
+          "name": "sale",
+          "id": 3
+        },
+        "sale_date": "2026-09-08T17:00:00.000000Z",
+        "final_bid_updated_at": null,
+        "prices": [
+          {
+            "id": 11861733,
+            "lot_id": 20333227,
+            "bid": 44000,
+            "final_bid_updated_at": "2026-06-16T21:04:01.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-06-16T16:36:44.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12354649,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-03T00:02:30.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-07-02T16:37:23.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 11970903,
+            "lot_id": 20333227,
+            "bid": 44000,
+            "final_bid_updated_at": "2026-06-19T18:01:32.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-06-19T16:35:42.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12070903,
+            "lot_id": 20333227,
+            "bid": 44000,
+            "final_bid_updated_at": "2026-06-23T21:09:44.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-06-23T16:36:42.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 11755994,
+            "lot_id": 20333227,
+            "bid": 49750,
+            "final_bid_updated_at": "2026-06-12T18:01:21.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-06-12T16:35:39.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12176415,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-06-26T21:04:30.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-06-26T16:35:41.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12263985,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-06-30T21:11:32.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-06-30T16:37:42.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12436077,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-07T21:04:55.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-07-07T16:40:10.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12964358,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-17T21:01:55.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-07-17T16:36:07.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12547527,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-10T21:02:31.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-07-10T16:36:17.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 13437371,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-24T17:41:21.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-07-24T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12605600,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-14T18:01:07.000000Z",
+            "buy_now_price": null,
+            "sale_date": "2026-07-14T16:36:43.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 12960512,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-17T19:31:19.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-07-17T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 13098377,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-21T19:25:30.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-07-21T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 13770871,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-28T17:21:27.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-07-28T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 13959506,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-07-31T17:37:55.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-07-31T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14078912,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-08-04T19:44:08.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-04T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14231730,
+            "lot_id": 20333227,
+            "bid": 42750,
+            "final_bid_updated_at": "2026-08-07T19:28:26.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-07T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14351839,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-08-11T21:21:22.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-11T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14492689,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-08-14T17:00:43.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-14T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14605316,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-08-18T17:27:20.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-18T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14768376,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-08-21T18:58:52.000000Z",
+            "buy_now_price": 51309,
+            "sale_date": "2026-08-21T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14876266,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-08-25T18:27:27.000000Z",
+            "buy_now_price": 51309,
+            "sale_date": "2026-08-25T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 15036373,
+            "lot_id": 20333227,
+            "bid": 39000,
+            "final_bid_updated_at": "2026-08-28T19:26:07.000000Z",
+            "buy_now_price": 47362,
+            "sale_date": "2026-08-28T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 15149565,
+            "lot_id": 20333227,
+            "bid": 38000,
+            "final_bid_updated_at": "2026-09-01T20:31:13.000000Z",
+            "buy_now_price": 47362,
+            "sale_date": "2026-09-01T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 15299179,
+            "lot_id": 20333227,
+            "bid": 38000,
+            "final_bid_updated_at": "2026-09-04T17:46:03.000000Z",
+            "buy_now_price": 47362,
+            "sale_date": "2026-09-04T17:00:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -13,6 +13,11 @@ on:
         required: true
         default: true
         type: boolean
+      enable_sale_attempt_intelligence:
+        description: "Enable persisted auction history and Motivated Sellers signals"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -107,6 +112,9 @@ jobs:
               "AuctionsApi__PageSize=1000" \
               "AuctionsApi__DefaultOverlapMinutes=180" \
               "AuctionsApi__RequestIntervalMilliseconds=600" \
+              "SaleAttemptIntelligence__Enabled=${{ inputs.enable_sale_attempt_intelligence }}" \
+              "SaleAttemptIntelligence__AllowWrites=${{ inputs.enable_sale_attempt_intelligence && inputs.allow_auctions_writes }}" \
+              "SaleAttemptIntelligence__IncludePricesHistory=${{ inputs.enable_sale_attempt_intelligence }}" \
               "IaaINational__Enabled=true" \
               "IaaINational__RunOnStartup=true" \
               "IaaINational__PrimaryProvider=auctionsapi" \

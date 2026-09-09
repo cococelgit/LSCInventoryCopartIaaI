@@ -1,0 +1,80 @@
+{
+  "data": {
+    "id": 833738,
+    "lots": [
+      {
+        "id": 860261,
+        "external_id": "38368219~US",
+        "lot": "37887931",
+        "domain": {
+          "name": "iaai_com",
+          "id": 1
+        },
+        "bid": 25,
+        "buy_now": 0,
+        "final_bid": null,
+        "seller_reserve": null,
+        "auction_type": {
+          "name": "live",
+          "id": 4
+        },
+        "status": {
+          "name": "sale",
+          "id": 3
+        },
+        "sale_date": "2026-09-08T13:30:00.000000Z",
+        "final_bid_updated_at": null,
+        "prices": [
+          {
+            "id": 14470471,
+            "lot_id": 860261,
+            "bid": null,
+            "final_bid_updated_at": null,
+            "buy_now_price": 0,
+            "sale_date": "2026-08-14T00:11:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14583185,
+            "lot_id": 860261,
+            "bid": 2150,
+            "final_bid_updated_at": "2026-08-18T14:44:51.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-18T13:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14741177,
+            "lot_id": 860261,
+            "bid": 1500,
+            "final_bid_updated_at": "2026-08-25T14:38:02.000000Z",
+            "buy_now_price": 2750,
+            "sale_date": "2026-08-25T13:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 15032784,
+            "lot_id": 860261,
+            "bid": 1550,
+            "final_bid_updated_at": "2026-09-01T14:04:26.000000Z",
+            "buy_now_price": 2425,
+            "sale_date": "2026-09-01T13:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

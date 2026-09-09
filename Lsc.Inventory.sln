@@ -8,6 +8,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lsc.Inventory.Api", "src\Ls
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lsc.Inventory.Api.Tests", "tests\Lsc.Inventory.Api.Tests\Lsc.Inventory.Api.Tests.csproj", "{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{15B253C8-585D-4F80-B0A3-D919C189AF11}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lsc.Inventory.SaleAttemptDryRun", "tools\Lsc.Inventory.SaleAttemptDryRun\Lsc.Inventory.SaleAttemptDryRun.csproj", "{B948D271-2CF6-4D3B-8ADC-C0E94042B61A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -25,9 +29,14 @@ Global
 		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}.Release|Any CPU.ActiveCfg = Debug|Any CPU
 		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B948D271-2CF6-4D3B-8ADC-C0E94042B61A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B948D271-2CF6-4D3B-8ADC-C0E94042B61A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B948D271-2CF6-4D3B-8ADC-C0E94042B61A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B948D271-2CF6-4D3B-8ADC-C0E94042B61A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{D1A85202-0467-45D5-B7EE-9258A651CBE2} = {9D9C321C-A82D-4707-B64E-BB8235928AE6}
 		{D7E721B1-71AA-4E78-B4BA-37EAECC3476D} = {9D9C321C-A82D-4707-B64E-BB8235928AE6}
+		{B948D271-2CF6-4D3B-8ADC-C0E94042B61A} = {15B253C8-585D-4F80-B0A3-D919C189AF11}
 	EndGlobalSection
 EndGlobal

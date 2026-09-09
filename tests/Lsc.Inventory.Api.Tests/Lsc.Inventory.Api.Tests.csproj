@@ -18,4 +18,8 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Lsc.Inventory.Api/Lsc.Inventory.Api.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures/**/*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../infra/sql/015_sale_attempt_intelligence_v1.sql" Link="Fixtures/Migrations/015_sale_attempt_intelligence_v1.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

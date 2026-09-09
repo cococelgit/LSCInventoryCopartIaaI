@@ -46,6 +46,8 @@ public interface IInventorySnapshotStore
     Task ReleaseLeaseAsync(string leaseName, Guid ownerRunId, DateTimeOffset releasedAt, CancellationToken cancellationToken);
     Task<NationalSyncCheckpoint> GetNationalSyncCheckpointAsync(string streamName, CancellationToken cancellationToken);
     Task<NationalSyncOperationalStatus> GetNationalSyncOperationalStatusAsync(string streamName, CancellationToken cancellationToken);
+    Task<MotivatedSellerDetail?> GetMotivatedSellerDetailAsync(string lotKey, CancellationToken cancellationToken);
+    Task<MotivatedSellerReport> GetMotivatedSellerReportAsync(CancellationToken cancellationToken);
     Task PersistNationalSyncBatchAsync(NationalSyncBatch batch, CancellationToken cancellationToken);
     Task<InventoryReconciliationResult> CompleteNationalSyncCycleAsync(string streamName, Guid cycleId, DateTimeOffset completedAt, CancellationToken cancellationToken, Guid? runId = null);
 }
@@ -1136,6 +1138,18 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             .OrderByDescending(snapshot => snapshot.ObservedAt)
             .FirstOrDefault(snapshot => string.Equals(snapshot.Vehicle.LotNumber, lotNumber, StringComparison.OrdinalIgnoreCase));
         return Task.FromResult(snapshot is null ? null : AttachScoring(snapshot));
+    }
+
+    public Task<MotivatedSellerDetail?> GetMotivatedSellerDetailAsync(string lotKey, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<MotivatedSellerDetail?>(null);
+    }
+
+    public Task<MotivatedSellerReport> GetMotivatedSellerReportAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new MotivatedSellerReport(0, 0, 0, new Dictionary<string, long>(), new Dictionary<string, long>()));
     }
 
     public Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken)

@@ -23,7 +23,8 @@ public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
     IOptions<BlobAuditOptions> blobOptions,
     ILogger<PostgresSnapshotStore> logger,
-    IFacetsV2SharedCache? facetsV2SharedCache = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore
+    IFacetsV2SharedCache? facetsV2SharedCache = null,
+    IOptions<SaleAttemptIntelligenceOptions>? saleAttemptOptions = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static readonly SemaphoreSlim AuditSchemaLock = new(1, 1);
@@ -41,6 +42,8 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _nationalSyncSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly BlobAuditOptions _blob = blobOptions.Value;
+    private readonly SaleAttemptIntelligenceOptions _saleAttempts = saleAttemptOptions?.Value ?? new SaleAttemptIntelligenceOptions();
+    private Func<CancellationToken, Task<NpgsqlConnection>>? _connectionFactoryForTests;
     private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
     private AccessToken _cachedDatabaseAccessToken;
@@ -3385,8 +3388,14 @@ public sealed partial class PostgresSnapshotStore(
         await blobClient.UploadAsync(BinaryData.FromString(rawJson), overwrite: false, cancellationToken: cancellationToken);
     }
 
-    private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
-        await OpenConnectionAsync(_persistence.Database, cancellationToken);
+    private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
+    {
+        if (_connectionFactoryForTests is not null) return await _connectionFactoryForTests(cancellationToken);
+        return await OpenConnectionAsync(_persistence.Database, cancellationToken);
+    }
+
+    internal void UseConnectionFactoryForTests(Func<CancellationToken, Task<NpgsqlConnection>> connectionFactory) =>
+        _connectionFactoryForTests = connectionFactory ?? throw new ArgumentNullException(nameof(connectionFactory));
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(string database, CancellationToken cancellationToken)
     {

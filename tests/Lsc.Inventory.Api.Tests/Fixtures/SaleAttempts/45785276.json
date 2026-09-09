@@ -1,0 +1,92 @@
+{
+  "data": {
+    "id": 405277,
+    "lots": [
+      {
+        "id": 21645306,
+        "external_id": "46284100~US",
+        "lot": "45785276",
+        "domain": {
+          "name": "iaai_com",
+          "id": 1
+        },
+        "bid": null,
+        "buy_now": 1500,
+        "final_bid": null,
+        "seller_reserve": null,
+        "auction_type": {
+          "name": "live",
+          "id": 4
+        },
+        "status": {
+          "name": "sale",
+          "id": 3
+        },
+        "sale_date": "2026-09-10T14:30:00.000000Z",
+        "final_bid_updated_at": null,
+        "prices": [
+          {
+            "id": 14172848,
+            "lot_id": 21645306,
+            "bid": 600,
+            "final_bid_updated_at": "2026-08-06T15:21:33.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-06T14:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14292444,
+            "lot_id": 21645306,
+            "bid": 1500,
+            "final_bid_updated_at": "2026-08-10T21:02:50.000000Z",
+            "buy_now_price": 1500,
+            "sale_date": "2026-08-13T14:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14707045,
+            "lot_id": 21645306,
+            "bid": 500,
+            "final_bid_updated_at": "2026-08-20T15:15:28.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-20T14:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 14971560,
+            "lot_id": 21645306,
+            "bid": 650,
+            "final_bid_updated_at": "2026-08-27T15:23:25.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-08-27T14:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          },
+          {
+            "id": 15235080,
+            "lot_id": 21645306,
+            "bid": 700,
+            "final_bid_updated_at": "2026-09-03T15:08:28.000000Z",
+            "buy_now_price": 0,
+            "sale_date": "2026-09-03T14:30:00.000000Z",
+            "status": {
+              "name": "not_sold",
+              "id": 8
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

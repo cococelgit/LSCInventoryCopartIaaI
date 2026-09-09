@@ -133,7 +133,7 @@ jobs:
             --registry-identity "$API_UAI_RESOURCE_ID" \
             --mi-user-assigned "$API_UAI_RESOURCE_ID" \
             --command dotnet \
-            --args Lsc.Inventory.Api.dll search-projection-migration \
+            --args Lsc.Inventory.Api.dll production-migration \
             --env-vars \
               "Persistence__Provider=Postgres" \
               "Persistence__PostgreSqlHost=$POSTGRES_HOST" \
@@ -142,7 +142,7 @@ jobs:
               "Persistence__DatabaseUser=$POSTGRES_DATABASE_USER" \
               "Persistence__RuntimePrincipalName=$RUNTIME_PRINCIPAL_NAME" \
               "Persistence__RuntimePrincipalObjectId=$RUNTIME_PRINCIPAL_OBJECT_ID" \
-              "Persistence__RunMigrations=false" \
+              "Persistence__RunMigrations=true" \
               "Sync__Enabled=false" \
               "BlobAudit__AccountUrl=$BLOB_ACCOUNT_URL" \
               "BlobAudit__ContainerName=$BLOB_CONTAINER_NAME" \
@@ -154,7 +154,15 @@ jobs:
             status="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$job" --query '[0].properties.status' -o tsv 2>/dev/null || true)"
             echo "migration attempt=$attempt execution=$execution status=$status"
             [[ "$status" == "Succeeded" ]] && break
-            [[ "$status" == "Failed" || "$status" == "Stopped" ]] && { az containerapp job logs show -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --container lsc-inventory-engine --tail 100 --format text || true; exit 1; }
+            if [[ "$status" == "Failed" || "$status" == "Stopped" ]]; then
+              replica="$(az containerapp job replica list -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].name' -o tsv 2>/dev/null || true)"
+              container="$(az containerapp job replica list -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].properties.containers[0].name' -o tsv 2>/dev/null || true)"
+              echo "production migration replica=$replica container=$container"
+              if [[ -n "$replica" && -n "$container" ]]; then
+                az containerapp job logs show -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --replica "$replica" --container "$container" --tail 100 --format text || true
+              fi
+              exit 1
+            fi
             sleep 10
           done
           test "${status:-}" = "Succeeded"
@@ -192,6 +200,7 @@ jobs:
               "SearchProjection__WarmupOnStartup=true" \
               "Persistence__UseDenormalizedScoringSearch=false" \
               "Persistence__RunBrowseCountAndItemsInParallel=false" \
+              "MotivatedSellers__ReadEnabled=false" \
             --only-show-errors >/dev/null
           NEW_REVISION="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_NAME" --query properties.latestRevisionName -o tsv)"
           test "$NEW_REVISION" != "$CURRENT_API_REVISION"
@@ -230,6 +239,7 @@ jobs:
               "SearchProjection__WarmupOnStartup=true" \
               "Persistence__UseDenormalizedScoringSearch=true" \
               "Persistence__RunBrowseCountAndItemsInParallel=true" \
+              "MotivatedSellers__ReadEnabled=true" \
             --only-show-errors >/dev/null
           ENABLED_REVISION="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_NAME" --query properties.latestRevisionName -o tsv)"
           test "$ENABLED_REVISION" != "$NEW_REVISION"

@@ -38,6 +38,30 @@ public sealed class AuctionsApiClientTests
     }
 
     [Fact]
+    public async Task Builds_a_directed_iaai_lot_request_with_documented_parameters()
+    {
+        var handler = new CapturingHandler("{\"data\":{\"lot\":\"12345678\"},\"meta\":{}}" );
+        var client = CreateClient(handler, enabled: true);
+
+        await client.GetLotAsync("12345678", 1, searchById: true, includePricesHistory: true, CancellationToken.None);
+
+        Assert.Equal(1, handler.Requests);
+        Assert.Equal("/api/search-lot/12345678/1?search_by_id=1&prices_history=1", handler.LastRequest!.RequestUri!.PathAndQuery);
+        Assert.Equal("test-key", handler.LastRequest.Headers.GetValues("x-api-key").Single());
+    }
+
+    [Fact]
+    public async Task Adds_prices_history_to_a_window_only_when_explicitly_requested()
+    {
+        var handler = new CapturingHandler("{\"data\":[],\"meta\":{\"current_page\":1}}" );
+        var client = CreateClient(handler, enabled: true);
+
+        await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(3, 140, 1, 20, IncludePricesHistory: true), CancellationToken.None);
+
+        Assert.Equal("/api/cars?domain_id=3&minutes=140&page=1&per_page=20&prices_history=1", handler.LastRequest!.RequestUri!.PathAndQuery);
+    }
+
+    [Fact]
     public async Task Restricts_domains_and_windows_before_network_io()
     {
         var handler = new CapturingHandler();

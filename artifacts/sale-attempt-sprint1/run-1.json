@@ -1,0 +1,110 @@
+{
+  "generatedAt": "2026-09-08T10:09:08.5331529+00:00",
+  "mode": "read-only-auctionsapi-plus-in-memory-idempotency",
+  "pricesHistoryRequested": true,
+  "postgresWrites": false,
+  "jobsModified": false,
+  "perPlatform": 20,
+  "minutes": 4320,
+  "signalFingerprint": "cc18a5c0e094eef249fd85d35161425913855b298cbaa51e3827412de426cfe0",
+  "platforms": [
+    {
+      "platform": "iaai",
+      "requested": 20,
+      "LotsExamined": 20,
+      "lotsAccepted": 20,
+      "sourceLotsAccepted": 20,
+      "AttemptsExamined": 11,
+      "AttemptsAccepted": 11,
+      "MissingSaleDateSkipped": 0,
+      "DuplicateAttemptSkipped": 0,
+      "withHistory": 6,
+      "high": 0,
+      "medium": 0,
+      "followUp": 3,
+      "none": 17,
+      "firstPassInserted": 11,
+      "firstPassUpdated": 0,
+      "secondPassInserted": 0,
+      "secondPassUpdated": 0,
+      "secondPassUnchanged": 11,
+      "examples": [
+        {
+          "LotNumber": "45896904",
+          "SignalLevel": "follow_up",
+          "NotSoldCount": 3,
+          "HistoricalMaxBidUsd": 2125,
+          "CurrentAskUsd": 5000,
+          "AskGapPercent": 135.29,
+          "ConfidencePercent": 90,
+          "ReasonCodes": [
+            "MULTIPLE_NOT_SOLD",
+            "ASK_GAP_ABOVE_THRESHOLD"
+          ]
+        },
+        {
+          "LotNumber": "45343877",
+          "SignalLevel": "follow_up",
+          "NotSoldCount": 3,
+          "HistoricalMaxBidUsd": 400,
+          "CurrentAskUsd": 875,
+          "AskGapPercent": 118.75,
+          "ConfidencePercent": 90,
+          "ReasonCodes": [
+            "MULTIPLE_NOT_SOLD",
+            "ASK_GAP_ABOVE_THRESHOLD"
+          ]
+        },
+        {
+          "LotNumber": "44295724",
+          "SignalLevel": "follow_up",
+          "NotSoldCount": 2,
+          "HistoricalMaxBidUsd": 1600,
+          "CurrentAskUsd": 3800,
+          "AskGapPercent": 137.50,
+          "ConfidencePercent": 90,
+          "ReasonCodes": [
+            "MULTIPLE_NOT_SOLD",
+            "ASK_GAP_ABOVE_THRESHOLD"
+          ]
+        }
+      ]
+    },
+    {
+      "platform": "copart",
+      "requested": 20,
+      "LotsExamined": 20,
+      "lotsAccepted": 20,
+      "sourceLotsAccepted": 20,
+      "AttemptsExamined": 2,
+      "AttemptsAccepted": 2,
+      "MissingSaleDateSkipped": 0,
+      "DuplicateAttemptSkipped": 0,
+      "withHistory": 1,
+      "high": 0,
+      "medium": 0,
+      "followUp": 1,
+      "none": 19,
+      "firstPassInserted": 2,
+      "firstPassUpdated": 0,
+      "secondPassInserted": 0,
+      "secondPassUpdated": 0,
+      "secondPassUnchanged": 2,
+      "examples": [
+        {
+          "LotNumber": "64679886",
+          "SignalLevel": "follow_up",
+          "NotSoldCount": 2,
+          "HistoricalMaxBidUsd": 6300,
+          "CurrentAskUsd": 15000,
+          "AskGapPercent": 138.10,
+          "ConfidencePercent": 90,
+          "ReasonCodes": [
+            "MULTIPLE_NOT_SOLD",
+            "ASK_GAP_ABOVE_THRESHOLD"
+          ]
+        }
+      ]
+    }
+  ]
+}
