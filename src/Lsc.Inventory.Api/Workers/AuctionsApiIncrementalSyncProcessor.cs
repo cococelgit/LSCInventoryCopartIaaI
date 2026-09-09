@@ -85,6 +85,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             requests += activeWindow.Requests;
             foreach (var vehicle in MapRows(activeWindow.Rows, normalizedPlatform))
             {
+                if (_options.CanonicalShadowEnabled)
+                    LogCanonicalShadowComparison(vehicle, normalizedPlatform);
                 if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
                 if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
                 {
@@ -223,6 +225,19 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         }
         result = 0;
         return false;
+    }
+
+    private void LogCanonicalShadowComparison(AuctionVehicle legacy, string platform)
+    {
+        if (legacy.RawSource is not { ValueKind: JsonValueKind.Object } raw || !raw.TryGetProperty("vehicle", out var vehicleRow)) return;
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(vehicleRow, platform);
+        if (provider is null) return;
+        var canonical = AuctionsApiCanonicalMapper.ToAuctionVehicles(provider)
+            .FirstOrDefault(item => string.Equals(item.LotNumber, legacy.LotNumber, StringComparison.OrdinalIgnoreCase));
+        if (canonical is null) return;
+        var comparison = AuctionsApiCanonicalShadowComparer.Compare(legacy, canonical);
+        if (comparison.HasDifferences)
+            logger.LogInformation("AuctionsAPI canonical shadow difference platform={Platform} lot={LotNumber} fields={Fields}", platform, comparison.LotNumber, string.Join(',', comparison.Differences));
     }
 
     private static int DomainId(string platform) => platform == "iaai" ? 1 : 3;
