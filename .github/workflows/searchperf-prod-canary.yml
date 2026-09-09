@@ -72,10 +72,11 @@ jobs:
           test -n "$api_revision" && test "$api_revision" != "null"
           test "$ready_revision" = "$api_revision"
           test "$active_mode" = "Single"
+          test -n "$ingress_fqdn" && test "$ingress_fqdn" != "null"
           test "$sync" = "false"
           test "$migrations" = "false"
           test "$warmup" = "true"
-          curl --fail --silent --show-error --retry 6 --retry-delay 5 "https://$ingress_fqdn/healthz" >/dev/null
+          curl --fail-with-body --silent --show-error --retry 6 --retry-delay 5 "https://$ingress_fqdn/healthz"
           api_uai_resource_id="$(jq -r '.identity.userAssignedIdentities | keys[0] // empty' <<<"$app_json")"
           test -n "$api_uai_resource_id"
           app_env() { jq -r --arg n "$1" '.properties.template.containers[0].env[]? | select(.name==$n) | (.value // empty)' <<<"$app_json"; }
@@ -106,7 +107,7 @@ jobs:
             echo "BLOB_CONTAINER_NAME=$blob_container"
             echo "CONTAINER_ENVIRONMENT_ID=$env_id"
           } >> "$GITHUB_ENV"
-          echo "Production prechecks passed for revision=$api_revision image=$api_image"
+          echo "Production prechecks passed for revision=$api_revision image=$api_image fqdn=$ingress_fqdn"
 
       - name: Build immutable candidate image
         shell: bash
