@@ -34,34 +34,39 @@ jobs:
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
 
-      - name: Start one Copart AuctionsAPI dry-run
+      - name: Inject temporary read-only env and start one Copart AuctionsAPI dry-run
         shell: bash
+        env:
+          MAXIMUM: ${{ inputs.maximum }}
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
-          image="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
-          trigger="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+          [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "maximum must be an integer from 1 to 9999" >&2; exit 1; }
+          test -n "$AUCTIONS_API_KEY"
+          job_json="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          echo "$job_json" > "$RUNNER_TEMP/copart-job-before.json"
+          image="$(echo "$job_json" | jq -r '.properties.template.containers[0].image')"
+          trigger="$(echo "$job_json" | jq -r '.properties.configuration.triggerType')"
           test -n "$image" && test "$image" != "None"
           echo "IMAGE=$image"
           echo "TRIGGER_BEFORE=$trigger"
-          job_json="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
-          patch_body="$(echo "$job_json" | jq '
-            .properties.template.containers[0] |= del(.imageType)
-            | .properties.template.containers[0].command = ["/app/run-auctionsapi-dry-run.sh"]
-            | .properties.template.containers[0].args = ["copart"]
-            | {properties:{template:{containers:[.properties.template.containers[0]]}}}' )"
+          patch_body="$(echo "$job_json" | jq --arg key "$AUCTIONS_API_KEY" --arg maximum "$MAXIMUM" '
+            .properties.template.containers[0] |= (del(.imageType)
+              | .command=["/app/run-auctionsapi-dry-run.sh"]
+              | .args=["copart","dry-run","--maximum",$maximum]
+              | .env=((.env // [])
+                | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites"))
+                + [{name:"AuctionsApi__ApiKey",value:$key},{name:"AuctionsApi__Enabled",value:"true"},{name:"AuctionsApi__AllowWrites",value:"false"}]))
+            | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
           uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${COPART_API_JOB_NAME}?api-version=2024-03-01"
           az rest --method patch --uri "$uri" --body "$patch_body" --output none
-          execution="$(az containerapp job start \
-            --name "$COPART_API_JOB_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            -o json)"
+          execution="$(az containerapp job start --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
           echo "$execution" | jq .
           execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
           test -n "$execution_name"
           echo "COPART_API_EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
           echo "COPART_API_TRIGGER_BEFORE=$trigger" >> "$GITHUB_ENV"
           echo "COPART_API_IMAGE_BEFORE=$image" >> "$GITHUB_ENV"
-
       - name: Wait and collect execution logs
         shell: bash
         run: |
@@ -90,15 +95,21 @@ jobs:
           echo "Timed out waiting for Copart API dry-run" >&2
           exit 1
 
-      - name: Verify job configuration was unchanged
+      - name: Restore original Copart job template
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
+          test -f "$RUNNER_TEMP/copart-job-before.json"
+          original="$(cat "$RUNNER_TEMP/copart-job-before.json")"
+          restore_body="$(echo "$original" | jq '{properties:{template:{containers:(.properties.template.containers | map(del(.imageType)))}}}')"
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${COPART_API_JOB_NAME}?api-version=2024-03-01"
+          az rest --method patch --uri "$uri" --body "$restore_body" --output none
           trigger_after="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
           image_after="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
           test "$trigger_after" = "$COPART_API_TRIGGER_BEFORE"
           test "$image_after" = "$COPART_API_IMAGE_BEFORE"
-          echo "COPART_API_DRY_RUN_CONFIGURATION_UNCHANGED=true"
+          echo "COPART_API_DRY_RUN_CONFIGURATION_RESTORED=true"
           echo "TRIGGER=$trigger_after"
           echo "IMAGE=$image_after"
           echo "WRITES=false"
