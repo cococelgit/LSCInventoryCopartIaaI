@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Workers;
 using Xunit;
 
 namespace Lsc.Inventory.Api.Tests;
@@ -100,6 +101,21 @@ public sealed class AuctionsApiCanonicalMapperTests
         Assert.Contains("body_style", result.Differences);
         Assert.Contains("primary_damage", result.Differences);
         Assert.DoesNotContain("vehicle_type", result.Differences);
+    }
+
+    [Fact]
+    public void Shadow_comparison_against_real_copart_fixture_exposes_current_mapping_gaps()
+    {
+        var payload = ReadFixture("copart_cars_page1.json");
+        var row = payload.GetProperty("data")[0];
+        var legacy = AuctionsApiIncrementalSyncProcessor.MapRows(new[] { row }, "copart").Single();
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(row, "copart");
+        var canonical = AuctionsApiCanonicalMapper.ToAuctionVehicles(provider!).Single();
+
+        var result = AuctionsApiCanonicalShadowComparer.Compare(legacy, canonical);
+
+        Assert.Contains("body_style", result.Differences);
+        Assert.Contains("primary_damage", result.Differences);
     }
 
     private static JsonElement ReadFixture(string name)
