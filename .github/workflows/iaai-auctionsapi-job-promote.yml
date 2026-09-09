@@ -154,7 +154,7 @@ jobs:
           if [[ "${{ inputs.activate_schedule }}" == "true" ]]; then
             test "$trigger_after" = "Schedule"
           else
-            test "$trigger_after" = "Manual"
+            test "$trigger_after" = "$CURRENT_JOB_TRIGGER"
           fi
           echo "IAAI_JOB_PROMOTION_COMPLETED"
           echo "IMAGE=$image_after"
