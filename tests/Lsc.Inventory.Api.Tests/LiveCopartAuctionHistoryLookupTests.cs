@@ -25,7 +25,7 @@ public sealed class LiveCopartAuctionHistoryLookupTests
         Assert.Equal("auctionsapi_live", result.Source);
         Assert.Equal(5, result.Signal.AttemptCount);
         Assert.Equal(5, result.Signal.NotSoldObservedCount);
-        Assert.Equal(5, result.Signal.RelistedInferredCount);
+        Assert.Equal(0, result.Signal.RelistedInferredCount);
         Assert.Equal("high", result.Signal.Level);
         Assert.All(result.Attempts, attempt => Assert.Equal("not_sold_observed", attempt.Outcome));
         Assert.Equal(4850m, result.Signal.HistoricalMaximumBidUsd);

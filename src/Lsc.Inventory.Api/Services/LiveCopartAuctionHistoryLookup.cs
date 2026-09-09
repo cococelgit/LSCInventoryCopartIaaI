@@ -137,6 +137,7 @@ internal static class LiveCopartAuctionHistoryParser
         var score = hasConfirmedSale ? 0 : Math.Min(notSold, 3) * 25;
         if (!hasConfirmedSale && attempts.Count >= 3) score += 20;
         if (!hasConfirmedSale && notSold > 0 && ageDays >= 14) score += 15;
+        score = Math.Min(score, 100);
         var level = score switch
         {
             >= 60 => "high",
@@ -153,7 +154,7 @@ internal static class LiveCopartAuctionHistoryParser
                 level,
                 score,
                 attempts.Count,
-                notSold,
+                0,
                 notSold,
                 first,
                 last,
