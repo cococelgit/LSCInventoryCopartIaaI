@@ -340,6 +340,11 @@ jobs:
           test "$status" = "200"
           jq '{generatedAt, count, signalLevels: ([.samples[] | select(.signalLevel != null) | .signalLevel] | sort | group_by(.) | map({key: .[0], value: length}) | from_entries), withSignal: ([.samples[] | select(.hasSignal == true)] | length), maxAttempts: ([.samples[].attemptCount] | max // 0)}' "$response_file"
           echo "STAGING_HISTORY_SAMPLE_HTTP=$status"
+          report_file="$(mktemp)"
+          report_status="$(curl -sS --connect-timeout 5 --max-time 60 -o "$report_file" -w '%{http_code}' -H "Authorization: Bearer $STAGING_INVENTORY_TOKEN" "https://$fqdn/internal/copart/auction-history-report")"
+          test "$report_status" = "200"
+          jq '{observations, distinctSnapshots, attempts, signals, attemptsByOutcome, attemptsByEvidence, signalsByLevel}' "$report_file"
+          echo "STAGING_HISTORY_REPORT_HTTP=$report_status"
 
       - name: Verify Staging API and Production unchanged
         shell: bash
