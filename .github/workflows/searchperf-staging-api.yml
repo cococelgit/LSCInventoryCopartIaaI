@@ -279,7 +279,7 @@ jobs:
             --registry-password "$acr_password" \
             --mi-user-assigned "$STAGING_IDENTITY_ID" \
             --command dotnet \
-            --args "${runner_args[@]}" \
+            --args "${runner_args[*]}" \
             --env-vars \
               "Persistence__Provider=Postgres" \
               "Persistence__PostgreSqlHost=psql-lsc-inventory-staging.postgres.database.azure.com" \
