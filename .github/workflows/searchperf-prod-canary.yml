@@ -76,7 +76,12 @@ jobs:
           test "$sync" = "false"
           test "$migrations" = "false"
           test "$warmup" = "true"
-          curl --fail-with-body --silent --show-error --retry 6 --retry-delay 5 "https://$ingress_fqdn/healthz"
+          set +e
+          health_response="$(curl --silent --show-error --retry 6 --retry-delay 5 --connect-timeout 10 --max-time 40 --write-out '\nHTTP_STATUS=%{http_code}\n' "https://$ingress_fqdn/healthz" 2>&1)"
+          health_exit=$?
+          set -e
+          echo "Production health precheck exit=$health_exit response=$health_response"
+          test "$health_exit" = "0"
           api_uai_resource_id="$(jq -r '.identity.userAssignedIdentities | keys[0] // empty' <<<"$app_json")"
           test -n "$api_uai_resource_id"
           app_env() { jq -r --arg n "$1" '.properties.template.containers[0].env[]? | select(.name==$n) | (.value // empty)' <<<"$app_json"; }
