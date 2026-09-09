@@ -170,7 +170,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          inventory_token="$(openssl rand -hex 32)"
+          inventory_token="$(az containerapp secret show -g "$PROD_RESOURCE_GROUP" -n "$PROD_API_NAME" --secret-name inventory-api-token --query value -o tsv)"
+          test -n "$inventory_token" && test "$inventory_token" != "None"
           echo "::add-mask::$inventory_token"
           echo "STAGING_INVENTORY_TOKEN=$inventory_token" >> "$GITHUB_ENV"
           if ! az containerapp show -g "$STAGING_RESOURCE_GROUP" -n "$STAGING_API_NAME" --only-show-errors >/dev/null 2>&1; then
