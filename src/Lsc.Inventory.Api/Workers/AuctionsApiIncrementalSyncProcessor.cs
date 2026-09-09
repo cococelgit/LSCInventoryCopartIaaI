@@ -88,9 +88,11 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 : MapRows(activeWindow.Rows, normalizedPlatform);
             foreach (var vehicle in activeVehicles)
             {
+                // Apply the requested observation cap before shadow comparison as well as before ingestion.
+                // Otherwise the comparer can log an extra row while ChangedObserved remains capped.
+                if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
                 if (_options.CanonicalShadowEnabled)
                     LogCanonicalShadowComparison(vehicle, normalizedPlatform);
-                if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
                 if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
                 {
                     failures.Add("changed:missing-lot");
