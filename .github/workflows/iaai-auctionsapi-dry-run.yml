@@ -40,24 +40,32 @@ jobs:
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
 
-      - name: Guard current job and start dry run
+      - name: Guard current job, inject temporary read-only env and start dry run
         shell: bash
         env:
           MAXIMUM: ${{ inputs.maximum }}
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
           [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]] || { echo "maximum must be an integer from 1 to 9999" >&2; exit 1; }
-          trigger_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
-          image_before="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
+          test -n "$AUCTIONS_API_KEY"
+          job_json="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
+          echo "$job_json" > "$RUNNER_TEMP/iaai-job-before.json"
+          trigger_before="$(echo "$job_json" | jq -r '.properties.configuration.triggerType')"
+          image_before="$(echo "$job_json" | jq -r '.properties.template.containers[0].image')"
           echo "Trigger before: $trigger_before"
           echo "Image before: $image_before"
-          execution="$(az containerapp job start \
-            --name "$IAAI_JOB_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            --image "$image_before" \
-            --command=/app/run-iaai-dry-run.sh \
-            --args="$MAXIMUM" \
-            -o json)"
+          patch_body="$(echo "$job_json" | jq --arg key "$AUCTIONS_API_KEY" --arg maximum "$MAXIMUM" '
+            .properties.template.containers[0] |= (del(.imageType)
+              | .command=["/app/run-iaai-dry-run.sh"]
+              | .args=[$maximum]
+              | .env=((.env // [])
+                | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites"))
+                + [{name:"AuctionsApi__ApiKey",value:$key},{name:"AuctionsApi__Enabled",value:"true"},{name:"AuctionsApi__AllowWrites",value:"false"}]))
+            | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${IAAI_JOB_NAME}?api-version=2024-03-01"
+          az rest --method patch --uri "$uri" --body "$patch_body" --output none
+          execution="$(az containerapp job start --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
           echo "$execution" | jq .
           execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
           test -n "$execution_name"
@@ -93,14 +101,20 @@ jobs:
           echo "Timed out waiting for dry run" >&2
           exit 1
 
-      - name: Verify job configuration was not changed
+      - name: Restore original IAAI job template
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
+          test -f "$RUNNER_TEMP/iaai-job-before.json"
+          original="$(cat "$RUNNER_TEMP/iaai-job-before.json")"
+          restore_body="$(echo "$original" | jq '{properties:{template:{containers:.properties.template.containers}}}')"
+          uri="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${IAAI_JOB_NAME}?api-version=2024-03-01"
+          az rest --method patch --uri "$uri" --body "$restore_body" --output none
           trigger_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
           image_after="$(az containerapp job show --name "$IAAI_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
           test "$trigger_after" = "$IAAI_TRIGGER_BEFORE"
           test "$image_after" = "$IAAI_IMAGE_BEFORE"
-          echo "IAAI_DRY_RUN_CONFIGURATION_UNCHANGED=true"
+          echo "IAAI_DRY_RUN_CONFIGURATION_RESTORED=true"
           echo "TRIGGER=$trigger_after"
           echo "IMAGE=$image_after"
