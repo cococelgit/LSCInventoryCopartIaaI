@@ -1,0 +1,81 @@
+name: Production health diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_NAME: ca-lsc-inventory-api-prod
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Read Production app state
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_json="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_NAME" -o json)"
+          fqdn="$(jq -r '.properties.configuration.ingress.fqdn // empty' <<<"$app_json")"
+          latest="$(jq -r '.properties.latestRevisionName // empty' <<<"$app_json")"
+          mode="$(jq -r '.properties.configuration.activeRevisionsMode // empty' <<<"$app_json")"
+          running="$(jq -r '.properties.runningStatus // empty' <<<"$app_json")"
+          traffic="$(jq -c '.properties.configuration.ingress.traffic // []' <<<"$app_json")"
+          replicas="$(jq -c '.properties.template.scale // {}' <<<"$app_json")"
+          test -n "$fqdn"
+          {
+            echo "PROD_FQDN=$fqdn"
+            echo "PROD_LATEST_REVISION=$latest"
+            echo "PROD_ACTIVE_MODE=$mode"
+            echo "PROD_RUNNING_STATUS=$running"
+            echo "PROD_TRAFFIC=$traffic"
+            echo "PROD_SCALE=$replicas"
+          } >> "$GITHUB_ENV"
+          printf '%s\n' "FQDN=$fqdn" "LATEST_REVISION=$latest" "ACTIVE_MODE=$mode" "RUNNING_STATUS=$running" "TRAFFIC=$traffic" "SCALE=$replicas"
+
+      - name: DNS and TLS diagnostics
+        shell: bash
+        run: |
+          set -u
+          echo '=== DNS ==='
+          getent ahosts "$PROD_FQDN" || true
+          nslookup "$PROD_FQDN" || true
+          echo '=== TLS ==='
+          echo | openssl s_client -connect "$PROD_FQDN:443" -servername "$PROD_FQDN" -brief 2>&1 | sed -n '1,25p' || true
+
+      - name: HTTP health diagnostics
+        shell: bash
+        run: |
+          set -u
+          for path in /healthz /health /; do
+            echo "=== HTTPS $path ==="
+            curl --silent --show-error --connect-timeout 10 --max-time 30 --location --write-out '\nHTTP_STATUS=%{http_code}\nTOTAL_SECONDS=%{time_total}\n' "https://$PROD_FQDN$path" 2>&1 | head -c 4000 || true
+            echo
+          done
+
+      - name: Read revisions and recent logs
+        shell: bash
+        run: |
+          set -u
+          echo '=== REVISIONS ==='
+          az containerapp revision list -g "$RESOURCE_GROUP" -n "$API_NAME" --all -o json | jq '[.[] | {name,active,trafficWeight,healthState,runningState,replicas,createdTime}]' || true
+          echo '=== RECENT LOGS ==='
+          az containerapp logs show -g "$RESOURCE_GROUP" -n "$API_NAME" --tail 80 --format text 2>&1 | tail -120 || true
