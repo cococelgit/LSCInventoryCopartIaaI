@@ -71,7 +71,10 @@ jobs:
           test -n "$api_image" && test "$api_image" != "null"
           test -n "$api_revision" && test "$api_revision" != "null"
           test "$ready_revision" = "$api_revision"
-          test "$active_mode" = "Single"
+          case "$active_mode" in
+            Single|Multiple) ;;
+            *) echo "Unsupported active revisions mode: $active_mode"; exit 1 ;;
+          esac
           test -n "$ingress_fqdn" && test "$ingress_fqdn" != "null"
           test "$sync" = "false"
           test "$migrations" = "false"
