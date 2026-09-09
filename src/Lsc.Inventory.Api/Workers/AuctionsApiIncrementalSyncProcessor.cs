@@ -258,6 +258,20 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         }
     }
 
+    internal static IEnumerable<AuctionVehicle> MapRowsCanonical(IEnumerable<JsonElement> rows, string platform, bool trustRequestedDomain = false)
+    {
+        var expectedDomain = DomainId(platform).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var row in rows)
+        {
+            if (row.ValueKind != JsonValueKind.Object) continue;
+            var provider = AuctionsApiCanonicalMapper.MapVehicle(row, platform);
+            if (provider is null) continue;
+            if (!string.Equals(provider.DomainId, expectedDomain, StringComparison.OrdinalIgnoreCase) && !trustRequestedDomain) continue;
+            foreach (var vehicle in AuctionsApiCanonicalMapper.ToAuctionVehicles(provider))
+                if (!string.IsNullOrWhiteSpace(vehicle.LotNumber)) yield return vehicle;
+        }
+    }
+
     internal static IEnumerable<AuctionVehicle> MapRows(IEnumerable<JsonElement> rows, string platform, bool trustRequestedDomain = false)
     {
         foreach (var row in rows)
