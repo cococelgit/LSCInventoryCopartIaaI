@@ -313,6 +313,20 @@ jobs:
             sleep 10
           done
           test "${status:-}" = "Succeeded"
+          if [[ "$operation" == "report" ]]; then
+            replica="$(az containerapp job replica list -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].name' -o tsv 2>/dev/null || true)"
+            container="$(az containerapp job replica list -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].properties.containers[0].name' -o tsv 2>/dev/null || true)"
+            if [[ -n "$replica" && -n "$container" ]]; then
+              report_log="$(az containerapp job logs show -g "$STAGING_RESOURCE_GROUP" -n "$job" --execution "$execution" --replica "$replica" --container "$container" --tail 100 --format text 2>/dev/null || true)"
+              printf '%s\n' "$report_log"
+              {
+                echo "### Copart auction-history report"
+                printf '%s\n' '```text'
+                printf '%s\n' "$report_log"
+                printf '%s\n' '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
           echo "STAGING_MIGRATION_RUNNER=Succeeded" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify Staging API and Production unchanged
