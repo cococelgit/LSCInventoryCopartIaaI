@@ -76,12 +76,17 @@ jobs:
           test "$sync" = "false"
           test "$migrations" = "false"
           test "$warmup" = "true"
-          set +e
-          health_response="$(curl --silent --show-error --retry 6 --retry-delay 5 --connect-timeout 10 --max-time 40 --write-out '\nHTTP_STATUS=%{http_code}\n' "https://$ingress_fqdn/healthz" 2>&1)"
-          health_exit=$?
-          set -e
-          echo "Production health precheck exit=$health_exit response=$health_response"
-          test "$health_exit" = "0"
+          health_ok=false
+          for health_attempt in $(seq 1 12); do
+            health_response="$(curl --silent --show-error --retry 3 --retry-all-errors --retry-delay 5 --connect-timeout 10 --max-time 40 --write-out '\nHTTP_STATUS=%{http_code}\n' "https://$ingress_fqdn/healthz" 2>&1 || true)"
+            echo "Production health precheck attempt=$health_attempt response=$health_response"
+            if grep -q 'HTTP_STATUS=200' <<<"$health_response"; then
+              health_ok=true
+              break
+            fi
+            sleep 10
+          done
+          test "$health_ok" = "true"
           api_uai_resource_id="$(jq -r '.identity.userAssignedIdentities | keys[0] // empty' <<<"$app_json")"
           test -n "$api_uai_resource_id"
           app_env() { jq -r --arg n "$1" '.properties.template.containers[0].env[]? | select(.name==$n) | (.value // empty)' <<<"$app_json"; }
@@ -219,7 +224,7 @@ jobs:
             sleep 10
           done
           test "${state:-}" = "Running"
-          curl --fail --silent --show-error --retry 10 --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
           echo "NEW_REVISION=$NEW_REVISION" >> "$GITHUB_ENV"
           trap - ERR
 
@@ -229,7 +234,7 @@ jobs:
           set -euo pipefail
           az containerapp ingress traffic set -g "$RESOURCE_GROUP" -n "$API_NAME" --revision-weight "$CURRENT_API_REVISION=50" "$NEW_REVISION=50" --only-show-errors
           sleep 20
-          curl --fail --silent --show-error --retry 8 --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
+          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
 
       - name: Activate optimization in a second canary revision
         shell: bash
@@ -259,7 +264,7 @@ jobs:
             sleep 10
           done
           test "${state:-}" = "Running"
-          curl --fail --silent --show-error --retry 10 --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
           echo "ENABLED_REVISION=$ENABLED_REVISION" >> "$GITHUB_ENV"
 
       - name: Promote enabled optimization revision
@@ -268,7 +273,7 @@ jobs:
           set -euo pipefail
           az containerapp ingress traffic set -g "$RESOURCE_GROUP" -n "$API_NAME" --revision-weight "$CURRENT_API_REVISION=50" "$NEW_REVISION=0" "$ENABLED_REVISION=50" --only-show-errors
           sleep 30
-          curl --fail --silent --show-error --retry 8 --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
+          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
           az containerapp ingress traffic set -g "$RESOURCE_GROUP" -n "$API_NAME" --revision-weight "$CURRENT_API_REVISION=0" "$NEW_REVISION=0" "$ENABLED_REVISION=100" --only-show-errors
           echo "CANARY_PROMOTION_COMPLETED=true" >> "$GITHUB_STEP_SUMMARY"
           echo "Enabled optimization revision=$ENABLED_REVISION now receives 100%; previous revision=$CURRENT_API_REVISION remains active at 0% for rollback." >> "$GITHUB_STEP_SUMMARY"
