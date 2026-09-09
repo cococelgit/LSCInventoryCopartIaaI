@@ -251,12 +251,14 @@ jobs:
           set -Eeuo pipefail
           job="job-lsc-spmig-stg-${GITHUB_RUN_NUMBER}"
           operation="${{ inputs.operation }}"
+          runner_command=/bin/sh
+          runner_first_arg=-c
           if [[ "$operation" == "report" ]]; then
-            runner_args='["Lsc.Inventory.Api.dll","--copart-auction-history-report"]'
+            runner_second_arg='exec dotnet Lsc.Inventory.Api.dll --copart-auction-history-report'
           elif [[ "$operation" == "sample" ]]; then
-            runner_args='["Lsc.Inventory.Api.dll","copart-auction-history-sample"]'
+            runner_second_arg='exec dotnet Lsc.Inventory.Api.dll copart-auction-history-sample'
           else
-            runner_args='["Lsc.Inventory.Api.dll","search-projection-migration"]'
+            runner_second_arg='exec dotnet Lsc.Inventory.Api.dll search-projection-migration'
           fi
           cleanup() {
             az containerapp job delete -g "$STAGING_RESOURCE_GROUP" -n "$job" --yes --only-show-errors >/dev/null 2>&1 || true
@@ -278,8 +280,8 @@ jobs:
             --registry-username "$acr_user" \
             --registry-password "$acr_password" \
             --mi-user-assigned "$STAGING_IDENTITY_ID" \
-            --command dotnet \
-            --args "$runner_args" \
+            --command "$runner_command" \
+            --args "$runner_first_arg" "$runner_second_arg" \
             --env-vars \
               "Persistence__Provider=Postgres" \
               "Persistence__PostgreSqlHost=psql-lsc-inventory-staging.postgres.database.azure.com" \
