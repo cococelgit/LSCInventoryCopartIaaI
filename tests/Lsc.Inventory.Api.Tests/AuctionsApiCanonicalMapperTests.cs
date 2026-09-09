@@ -75,6 +75,33 @@ public sealed class AuctionsApiCanonicalMapperTests
         Assert.Equal(JsonValueKind.Null, priceHistory[1].GetProperty("bid").ValueKind);
     }
 
+    [Fact]
+    public void Shadow_comparison_identifies_legacy_damage_and_body_mapping_gaps()
+    {
+        var legacy = new AuctionVehicle
+        {
+            Platform = "copart",
+            LotNumber = "64679886",
+            VehicleSpecs = new VehicleSpecs { BodyStyle = "automobile" },
+            VehicleType = "automobile",
+            Condition = new VehicleCondition { PrimaryDamage = null, SecondaryDamage = null },
+        };
+        var canonical = new AuctionVehicle
+        {
+            Platform = "copart",
+            LotNumber = "64679886",
+            VehicleSpecs = new VehicleSpecs { BodyStyle = "Pickup" },
+            VehicleType = "automobile",
+            Condition = new VehicleCondition { PrimaryDamage = "Minor Dent/Scratches", SecondaryDamage = null },
+        };
+
+        var result = AuctionsApiCanonicalShadowComparer.Compare(legacy, canonical);
+
+        Assert.Contains("body_style", result.Differences);
+        Assert.Contains("primary_damage", result.Differences);
+        Assert.DoesNotContain("vehicle_type", result.Differences);
+    }
+
     private static JsonElement ReadFixture(string name)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", name);

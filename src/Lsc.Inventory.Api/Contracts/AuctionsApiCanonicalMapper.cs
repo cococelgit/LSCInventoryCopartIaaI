@@ -215,4 +215,53 @@ public static class AuctionsApiCanonicalMapper
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value)
         ? null
         : value.Trim().ToLowerInvariant().Replace(' ', '_').Replace('-', '_');
+
+    public static IReadOnlyList<AuctionVehicle> ToAuctionVehicles(AuctionsApiProviderVehicle provider)
+    {
+        return provider.Lots.Select(lot => new AuctionVehicle
+        {
+            Platform = provider.Platform,
+            SourceProvider = AuctionsApiCanonicalContract.Source,
+            LotNumber = lot.LotNumber,
+            Vin = lot.Vin,
+            Year = provider.Year,
+            Make = provider.Manufacturer?.Name,
+            Model = provider.Model?.Name,
+            VehicleType = provider.VehicleType?.Name,
+            VehicleSpecs = new VehicleSpecs
+            {
+                BodyStyle = provider.BodyType?.Name,
+                FuelType = provider.Fuel?.Name,
+                Transmission = provider.Transmission?.Name,
+                DriveType = provider.DriveWheel?.Name,
+                Engine = provider.Engine is null ? null : new VehicleEngine { Raw = provider.Engine.Name },
+            },
+            Condition = new VehicleCondition
+            {
+                PrimaryDamage = lot.DamageMain?.Name,
+                SecondaryDamage = lot.DamageSecond?.Name,
+                RunCondition = new RunConditionInfo { Value = lot.Status?.Name, Label = lot.Status?.Name },
+            },
+            Seller = new AuctionSeller
+            {
+                Name = lot.SellerName,
+                RawType = lot.SellerType?.Name,
+                Type = lot.SellerType?.NormalizedValue,
+            },
+            OdometerInfo = lot.OdometerStatus is null ? null : new OdometerInfo { Status = lot.OdometerStatus.Name },
+            Auction = new AuctionInfo
+            {
+                LotStatus = lot.Status?.Name,
+                AuctionAt = lot.SaleDate?.Value,
+                IsBuyNow = lot.BuyNow?.Value is not null,
+            },
+            Pricing = new PricingInfo
+            {
+                CurrentBidUsd = lot.Bid?.Value,
+                BuyNowUsd = lot.BuyNow?.Value,
+                SalePriceUsd = lot.SalePrice?.Value ?? lot.FinalBid?.Value,
+            },
+            RawSource = provider.Raw,
+        }).ToArray();
+    }
 }
