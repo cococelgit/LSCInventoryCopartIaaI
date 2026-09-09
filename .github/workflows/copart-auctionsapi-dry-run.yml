@@ -59,7 +59,7 @@ jobs:
           patch_body="$(echo "$job_json" | jq --arg key "$AUCTIONS_API_KEY" --arg maximum "$MAXIMUM" '
             .properties.template.containers[0] |= (del(.imageType)
               | .command=["/app/run-auctionsapi-dry-run.sh"]
-              | .args=["copart","dry-run","--maximum",$maximum]
+              | .args=["copart","dry-run",$maximum]
               | .env=((.env // [])
                 | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites"))
                 + [{name:"AuctionsApi__ApiKey",value:$key},{name:"AuctionsApi__Enabled",value:"true"},{name:"AuctionsApi__AllowWrites",value:"false"}]))
