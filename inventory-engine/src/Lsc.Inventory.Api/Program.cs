@@ -627,7 +627,8 @@ if (args.Contains("--copart-auction-history-backfill", StringComparer.OrdinalIgn
     return;
 }
 
-if (args.Contains("--copart-auction-history-report", StringComparer.OrdinalIgnoreCase))
+if (args.Contains("--copart-auction-history-report", StringComparer.OrdinalIgnoreCase) ||
+    args.Contains("copart-auction-history-report", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
     var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
