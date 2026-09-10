@@ -85,7 +85,7 @@ jobs:
           [[ "$(jq -r '.properties.configuration.triggerType' <<<"$active_copart")" == "Schedule" ]] || fail "Active Copart AuctionsAPI job is not scheduled"
           [[ "$(jq -r '.properties.configuration.triggerType' <<<"$active_iaai")" == "Schedule" ]] || fail "Active IAAI job is not scheduled"
           jq -e '[.properties.template.containers[].env[]? | select(.name=="AuctionsApi__Enabled" and .value=="true")] | length > 0' <<<"$active_copart" >/dev/null || fail "Active Copart job does not prove AuctionsAPI is enabled"
-          jq -e '[.properties.template.containers[].env[]? | select(.name=="AllowWrites" and .value=="true")] | length > 0' <<<"$active_copart" >/dev/null || fail "Active Copart job does not prove writes are enabled"
+          jq -e '[.properties.template.containers[].env[]? | select(.name=="AuctionsApi__AllowWrites" and .value=="true")] | length > 0' <<<"$active_copart" >/dev/null || fail "Active Copart job does not prove AuctionsAPI writes are enabled"
 
           for protected in "$ACTIVE_COPART_JOB" "$ACTIVE_IAAI_JOB"; do
             payload="$(az containerapp job show --name "$protected" --resource-group "$RESOURCE_GROUP" -o json)"
