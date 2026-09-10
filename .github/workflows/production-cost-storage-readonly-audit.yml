@@ -81,6 +81,12 @@ jobs:
           capture diagnostic-settings az monitor diagnostic-settings subscription list -o json
           capture cost-by-resource az rest --method post --url "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CostManagement/query?api-version=2023-11-01" --body @audit/cost-query.json -o json
 
+          jq -r '.[].name' audit/container-jobs.sorted.json 2>/dev/null | while read -r job; do
+            [ -n "$job" ] || continue
+            safe="${job//[^A-Za-z0-9_-]/_}"
+            capture "job-$safe-executions" az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query '[0:60].{name:name,status:properties.status,start:properties.startTime,end:properties.endTime,conditions:properties.conditions,replicaStatuses:properties.replicaStatuses}' -o json
+          done
+
           jq -r '.[].name' audit/storage-accounts.sorted.json 2>/dev/null | while read -r account; do
             [ -n "$account" ] || continue
             safe="${account//[^A-Za-z0-9_-]/_}"
