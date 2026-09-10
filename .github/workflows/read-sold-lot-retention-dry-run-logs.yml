@@ -42,7 +42,7 @@ jobs:
           environment_id="$(az containerapp job show --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --query 'properties.environmentId' -o tsv)"
           workspace_id="$(az resource show --ids "$environment_id" --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' -o tsv)"
           test -n "$workspace_id" && test "$workspace_id" != None
-          query="union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL | where TimeGenerated between (datetime(2026-09-10T13:14:00Z) .. datetime(2026-09-10T13:16:00Z)) | where ContainerGroupName_s startswith '$EXECUTION_NAME' | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s, Reason_s | order by TimeGenerated asc | take 500"
+          query="union isfuzzy=true ContainerAppConsoleLogs_CL, ContainerAppSystemLogs_CL | where TimeGenerated > ago(24h) | where ContainerGroupName_s startswith '$EXECUTION_NAME' | project TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s, Reason_s | order by TimeGenerated asc | take 500"
           az monitor log-analytics query --workspace "$workspace_id" --analytics-query "$query" -o json > retention-dry-run-logs.json
           jq '[.[] | {TimeGenerated, ContainerGroupName_s, ContainerName_s, Log_s, Reason_s}]' retention-dry-run-logs.json
 
