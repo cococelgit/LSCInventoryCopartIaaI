@@ -71,7 +71,7 @@ jobs:
           api_job_before="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
           api_image_before="$(echo "$api_job_before" | jq -r '.properties.template.containers[0].image')"
           api_trigger_before="$(echo "$api_job_before" | jq -r '.properties.configuration.triggerType')"
-          api_without_image_before="$(echo "$api_job_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
+          api_without_image_before="$(echo "$api_job_before" | jq -S -c '{configuration: (.properties.configuration | del(.identitySettings)), identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
           test -n "$api_image_before" && test "$api_image_before" != "None"
           echo "API_IMAGE_BEFORE=$api_image_before" >> "$GITHUB_ENV"
           echo "API_TRIGGER_BEFORE=$api_trigger_before" >> "$GITHUB_ENV"
