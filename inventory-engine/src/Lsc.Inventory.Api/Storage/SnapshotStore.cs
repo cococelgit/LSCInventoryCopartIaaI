@@ -299,11 +299,11 @@ public sealed record BlobReferenceCrosscheckReport(
     long DistinctLots,
     long DistinctReferencedBlobs,
     long AdditionalVersionReferencesToSameBlob,
-    long ReferencedPostgresPayloadBytes,
+    long? ReferencedPostgresPayloadBytes,
     long EligibleInactiveLots,
     long EligibleVersionRows,
     long EligibleDistinctReferencedBlobs,
-    long EligiblePostgresPayloadBytes,
+    long? EligiblePostgresPayloadBytes,
     IReadOnlyList<string> RawBlobNameSamples,
     bool ReadOnly);
 
