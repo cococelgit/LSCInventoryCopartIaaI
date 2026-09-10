@@ -1,0 +1,86 @@
+name: Blob Physical Inventory Readonly
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: blob-physical-inventory-readonly
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  INVENTORY_API_APP: ca-lsc-inventory-api-prod
+  STORAGE_ACCOUNT: stlscinvprodeus2
+  STORAGE_CONTAINER: raw-apibara
+
+jobs:
+  audit:
+    name: Enumerate physical snapshot blobs without mutation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Locate a healthy Production replica
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(az containerapp show -g "$RESOURCE_GROUP" -n "$INVENTORY_API_APP" --query 'properties.latestReadyRevisionName' -o tsv)"
+          test -n "$revision"
+          replica="$(az containerapp replica list -g "$RESOURCE_GROUP" -n "$INVENTORY_API_APP" --revision "$revision" --query '[0].name' -o tsv)"
+          container="$(az containerapp replica list -g "$RESOURCE_GROUP" -n "$INVENTORY_API_APP" --revision "$revision" --query '[0].properties.containers[0].name' -o tsv)"
+          test -n "$replica"
+          test -n "$container"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "replica=$replica" >> "$GITHUB_OUTPUT"
+          echo "container=$container" >> "$GITHUB_OUTPUT"
+          echo "TARGET_REVISION=$revision"
+          echo "TARGET_REPLICA=$replica"
+          echo "TARGET_CONTAINER=$container"
+
+      - name: Run read-only physical Blob inventory inside Production network
+        shell: bash
+        env:
+          REVISION: ${{ steps.target.outputs.revision }}
+          REPLICA: ${{ steps.target.outputs.replica }}
+          CONTAINER: ${{ steps.target.outputs.container }}
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          raw_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/readonly_blob_inventory.sh"
+          command="sh -c \"curl -fsSL '$raw_url' -o /tmp/lsc-blob-audit.sh && BLOB_ACCOUNT='$STORAGE_ACCOUNT' BLOB_CONTAINER='$STORAGE_CONTAINER' sh /tmp/lsc-blob-audit.sh\""
+          az containerapp exec \
+            -g "$RESOURCE_GROUP" \
+            -n "$INVENTORY_API_APP" \
+            --revision "$REVISION" \
+            --replica "$REPLICA" \
+            --container "$CONTAINER" \
+            --command "$command" | tee diagnostics/blob-physical-inventory.txt
+
+      - name: Upload read-only inventory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-physical-inventory-${{ github.run_id }}
+          path: diagnostics
+          if-no-files-found: warn
+          retention-days: 30
