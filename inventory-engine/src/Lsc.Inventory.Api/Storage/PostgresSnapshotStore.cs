@@ -183,11 +183,19 @@ public sealed partial class PostgresSnapshotStore(
         vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
-
-        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
-
+        var blobName = BuildBlobName(identity, payloadHash);
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        var snapshotVersionExists = false;
+        await using (var existing = connection.CreateCommand())
+        {
+            existing.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            existing.CommandText = "select exists(select 1 from auction_lot_versions where lot_key = @lot_key and payload_hash = @payload_hash);";
+            AddParameter(existing, "lot_key", identity);
+            AddParameter(existing, "payload_hash", payloadHash);
+            snapshotVersionExists = (bool)(await existing.ExecuteScalarAsync(cancellationToken) ?? false);
+        }
+        if (!snapshotVersionExists)
+            await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
@@ -309,7 +317,7 @@ public sealed partial class PostgresSnapshotStore(
         vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
         var policyVersion = LscScoringPolicy.ResolveVersion(vehicle.Platform);
         var scoreInputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
         var scoringDuration = TimeSpan.Zero;
@@ -614,7 +622,7 @@ public sealed partial class PostgresSnapshotStore(
         var enriched = vehicle with { AdditionalData = additional };
         var rawJson = JsonSerializer.Serialize(enriched);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
 
         await EnsureSchemaAsync(cancellationToken);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
@@ -754,7 +762,7 @@ public sealed partial class PostgresSnapshotStore(
         var observedAtUtc = expectedObservedAt.ToUniversalTime();
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
         await EnsureSchemaAsync(cancellationToken);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -853,7 +861,7 @@ public sealed partial class PostgresSnapshotStore(
         var observedAtUtc = expectedObservedAt.ToUniversalTime();
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
         await EnsureSchemaAsync(cancellationToken);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -2985,9 +2993,9 @@ public sealed partial class PostgresSnapshotStore(
         vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
         vehicle.LotNumber?.Trim() ?? vehicle.Vin?.Trim() ?? throw new InvalidOperationException("Apibara vehicle has neither lot number nor VIN."));
 
-    private static string BuildBlobName(string identity, DateTimeOffset observedAt, string payloadHash)
+    internal static string BuildBlobName(string identity, string payloadHash)
     {
         var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
-        return $"snapshots/{observedAt:yyyy/MM/dd}/{safeIdentity}/{observedAt:HHmmssfff}-{payloadHash[..12]}.json";
+        return $"snapshots/{safeIdentity}/{payloadHash}.json";
     }
 }
