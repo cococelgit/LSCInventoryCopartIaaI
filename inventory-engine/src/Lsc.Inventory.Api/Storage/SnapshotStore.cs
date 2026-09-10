@@ -320,6 +320,53 @@ public sealed record RetentionCandidateBlobInventoryReport(
 public sealed record RetentionCandidateLotSummary(string SafeLotIdentity, long PhysicalBlobs, long PhysicalBytes);
 
 /// <summary>
+/// In-memory, deterministic deletion plan for a limited retention pilot. It contains only inactive lifecycle lots
+/// and legacy raw Blob names; it never includes inventory rows, titles, scores, observations, or seller signals.
+/// </summary>
+public sealed record RetentionPurgePilotManifest(
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    int RequestedLotLimit,
+    DateTimeOffset CreatedAt,
+    IReadOnlyList<RetentionPurgePilotLot> Lots,
+    IReadOnlyList<RetentionPurgePilotBlob> Blobs,
+    long MotivationSignalsPreserved,
+    string ManifestSha256,
+    bool ReadOnly);
+
+public sealed record RetentionPurgePilotLot(string LotKey, DateTimeOffset DeactivatedAt);
+public sealed record RetentionPurgePilotBlob(string LotKey, string BlobName, long ContentLength, DateTimeOffset LastModified);
+
+public sealed record RetentionPurgePilotManifestReport(
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    int RequestedLotLimit,
+    int SelectedLots,
+    long EligibleBlobs,
+    long EligibleBytes,
+    long MotivationSignalsPreserved,
+    string ManifestSha256,
+    bool ReadOnly);
+
+public sealed record RetentionPurgePilotExecutionReport(
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    int SelectedLots,
+    long PlannedBlobs,
+    long PlannedBytes,
+    long DeletedBlobs,
+    long DeletedBytes,
+    long SkippedMissingBlobs,
+    long SkippedChangedBlobs,
+    long PreservedInventoryRows,
+    long PreservedLifecycleRows,
+    long PreservedVersionRows,
+    long PreservedMotivationSignals,
+    IReadOnlyList<string> FailureSamples,
+    string ManifestSha256,
+    bool ReadOnly);
+
+/// <summary>
 /// Read-only reconciliation between version rows and Blob references. It measures duplicate references precisely but
 /// never assumes that distinct versions of the same lot are identical payloads or safe to delete.
 /// </summary>

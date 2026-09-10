@@ -507,6 +507,30 @@ if (args.Contains("--retention-candidate-blob-inventory", StringComparer.Ordinal
     return;
 }
 
+if (args.Contains("--retention-purge-pilot", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+    {
+        throw new InvalidOperationException("Retention purge pilot requires Persistence:Provider=Postgres.");
+    }
+
+    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
+    var lotLimit = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:PurgePilotLotLimit") ?? 500, 1, 500);
+    var execute = builder.Configuration.GetValue<bool?>("Retention:PurgePilotExecute") ?? false;
+    var manifest = await postgresStore.CreateRetentionPurgePilotManifestAsync(retentionDays, lotLimit, CancellationToken.None);
+    if (!execute)
+    {
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(PostgresSnapshotStore.ToPilotManifestReport(manifest)));
+        return;
+    }
+
+    var report = await postgresStore.ExecuteRetentionPurgePilotAsync(manifest, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
+    return;
+}
+
 if (args.Contains("--blob-reference-crosscheck", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

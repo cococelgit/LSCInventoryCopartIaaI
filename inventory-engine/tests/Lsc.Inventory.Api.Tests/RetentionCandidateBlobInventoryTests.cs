@@ -38,4 +38,21 @@ public sealed class RetentionCandidateBlobInventoryTests
     {
         Assert.Equal(expected, PostgresSnapshotStore.ShouldUploadRawSnapshot(versionExists, reactivatingInactiveLot, canonicalBlobExists));
     }
+
+    [Fact]
+    public void PilotManifest_OnlyAcceptsLegacyBlobForTheSelectedLot()
+    {
+        var selected = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["copart-41621576"] = "copart:41621576"
+        };
+
+        Assert.True(PostgresSnapshotStore.TryGetPilotLegacyBlobLotKey(
+            "snapshots/2026/08/25/copart-41621576/153814322-6f0b9e4203a4.json", selected, out var lotKey));
+        Assert.Equal("copart:41621576", lotKey);
+        Assert.False(PostgresSnapshotStore.TryGetPilotLegacyBlobLotKey(
+            "snapshots/2026/08/25/copart-41623946/153814322-73d9189de460.json", selected, out _));
+        Assert.False(PostgresSnapshotStore.TryGetPilotLegacyBlobLotKey(
+            "snapshots/copart-41621576/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json", selected, out _));
+    }
 }
