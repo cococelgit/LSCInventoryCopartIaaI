@@ -33,6 +33,7 @@ while :; do
   url="https://${ACCOUNT}.blob.core.windows.net/${CONTAINER}?${query}"
   xml="$TMP/page.xml"
   curl -fsS --max-time 120 -H "Authorization: Bearer $TOKEN" -H "x-ms-version: $API_VERSION" "$url" -o "$xml"
+  if [ $((page % 10)) -eq 0 ]; then printf 'PROGRESS_PAGE|%s\n' "$page"; fi
 
   # Normalize the XML to one tag/value per line. Only metadata is read.
   tr '<' '\n<' < "$xml" | sed 's/>/>&\n/g' > "$TMP/page.tags"
