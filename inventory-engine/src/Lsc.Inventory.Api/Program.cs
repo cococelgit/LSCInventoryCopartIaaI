@@ -455,7 +455,7 @@ if (args.Contains("--sold-lot-retention-dry-run", StringComparer.OrdinalIgnoreCa
 {
     await using var scope = app.Services.CreateAsyncScope();
     var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
-    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 30, 1, 3650);
+    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
     var report = await store.GetSoldLotRetentionDryRunAsync(retentionDays, CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
     return;
@@ -500,7 +500,7 @@ if (args.Contains("--blob-reference-crosscheck", StringComparer.OrdinalIgnoreCas
         throw new InvalidOperationException("Blob reference crosscheck requires Persistence:Provider=Postgres.");
     }
 
-    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 30, 1, 3650);
+    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
     var report = await postgresStore.GetBlobReferenceCrosscheckAsync(retentionDays, CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
     return;
