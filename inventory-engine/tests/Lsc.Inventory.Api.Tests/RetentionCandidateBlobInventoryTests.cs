@@ -27,4 +27,15 @@ public sealed class RetentionCandidateBlobInventoryTests
     {
         Assert.Equal(expected, PostgresSnapshotStore.ToSafeBlobIdentity(lotKey));
     }
+
+    [Theory]
+    [InlineData(false, false, false, true)]
+    [InlineData(true, false, false, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, true, false, true)]
+    public void RawSnapshotUpload_RecreatesOnlyPurgedSnapshotOnReactivation(
+        bool versionExists, bool reactivatingInactiveLot, bool canonicalBlobExists, bool expected)
+    {
+        Assert.Equal(expected, PostgresSnapshotStore.ShouldUploadRawSnapshot(versionExists, reactivatingInactiveLot, canonicalBlobExists));
+    }
 }
