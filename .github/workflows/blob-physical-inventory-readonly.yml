@@ -2,6 +2,15 @@ name: Blob Physical Inventory Readonly
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'inventory enumera blobs; recover solo recupera el resumen persistido'
+        required: true
+        default: inventory
+        type: choice
+        options:
+          - inventory
+          - recover
 
 permissions:
   contents: read
@@ -58,6 +67,7 @@ jobs:
           echo "TARGET_CONTAINER=$container"
 
       - name: Run read-only physical Blob inventory inside Production network
+        if: inputs.mode == 'inventory'
         shell: bash
         env:
           REVISION: ${{ steps.target.outputs.revision }}
