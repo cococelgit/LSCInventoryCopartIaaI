@@ -3096,7 +3096,8 @@ public sealed partial class PostgresSnapshotStore(
                    coalesce(nullif(trim(lots.lot_status), ''), '(empty)') as lot_status,
                    coalesce(nullif(trim(lots.lot_sub_status), ''), '(empty)') as lot_sub_status
             from auction_lots lots
-            where lots.observed_at <= @cutoff_at
+            where lots.auction_at is not null
+              and lots.auction_at <= @cutoff_at
         ), historical_versions as (
             select lots.lot_status,
                    lots.lot_sub_status,
