@@ -254,7 +254,20 @@ public sealed record SoldLotRetentionDryRunReport(
     long PostgresPayloadBytesRecoverable,
     long ReferencedRawBlobsEligible,
     long EstimatedRawBlobBytesRecoverable,
+    IReadOnlyList<HistoricalLotStatusBucket> HistoricalStatusBuckets,
     bool ReadOnly);
+
+/// <summary>
+/// Historical inventory grouped by the source-provided lot outcome. These buckets are review data,
+/// not purge instructions: only an approved terminal status may later become eligible for deletion.
+/// </summary>
+public sealed record HistoricalLotStatusBucket(
+    string LotStatus,
+    string LotSubStatus,
+    long Lots,
+    long Versions,
+    long PostgresPayloadBytes,
+    long ReferencedRawBlobs);
 
 public sealed record InventoryBrowseQuery(
     string? Platform,
