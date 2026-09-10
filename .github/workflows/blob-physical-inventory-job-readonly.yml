@@ -16,6 +16,7 @@ on:
         options:
           - physical
           - references
+          - path-sample
 
 permissions:
   contents: read
@@ -45,7 +46,7 @@ jobs:
         shell: bash
         run: |
           test '${{ inputs.confirmation }}' = 'RUN_READ_ONLY_BLOB_AUDIT'
-          case '${{ inputs.audit_mode }}' in physical|references) ;; *) exit 1 ;; esac
+          case '${{ inputs.audit_mode }}' in physical|references|path-sample) ;; *) exit 1 ;; esac
 
       - name: Checkout exact audit source
         uses: actions/checkout@v4
@@ -91,6 +92,7 @@ jobs:
           case '${{ inputs.audit_mode }}' in
             physical) audit_flag='--physical-blob-inventory' ;;
             references) audit_flag='--blob-reference-crosscheck' ;;
+            path-sample) audit_flag='--blob-path-sample' ;;
             *) exit 1 ;;
           esac
 

@@ -476,6 +476,21 @@ if (args.Contains("--physical-blob-inventory", StringComparer.OrdinalIgnoreCase)
     return;
 }
 
+if (args.Contains("--blob-path-sample", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+    {
+        throw new InvalidOperationException("Blob path sample requires Persistence:Provider=Postgres.");
+    }
+
+    var sampleSize = Math.Clamp(builder.Configuration.GetValue<int?>("BlobAudit:PathSampleSize") ?? 10, 1, 25);
+    var report = await postgresStore.GetBlobPathSampleAsync(sampleSize, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
+    return;
+}
+
 if (args.Contains("--blob-reference-crosscheck", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
