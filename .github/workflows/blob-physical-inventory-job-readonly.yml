@@ -70,20 +70,23 @@ jobs:
           test "$trigger" = 'Manual'
           test "$active" = 0
           echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-before.json
+          echo "$current" | jq -S '.properties.configuration.manualTriggerConfig' > report/manual-trigger-before.json
 
-          restore_body="$(echo "$current" | jq '{properties:{template:{containers:[.properties.template.containers[0] | del(.imageType)]}}}')"
+          restore_body="$(echo "$current" | jq '{properties:{configuration:{manualTriggerConfig:.properties.configuration.manualTriggerConfig},template:{containers:[.properties.template.containers[0] | del(.imageType)]}}}')"
           restore() {
             az rest --method patch --uri "$uri" --body "$restore_body" --output none
           }
           trap restore EXIT
 
           body="$(echo "$current" | jq --arg image "$AUDIT_IMAGE" '
+            .properties.configuration.manualTriggerConfig.replicaTimeout = 3300
+            |
             .properties.template.containers[0]
             |= (del(.imageType)
                 | .image = $image
                 | .command = ["dotnet"]
                 | .args = ["Lsc.Inventory.Api.dll", "--physical-blob-inventory"])
-            | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+            | {properties:{configuration:{manualTriggerConfig:.properties.configuration.manualTriggerConfig},template:{containers:[.properties.template.containers[0]]}}}')"
           az rest --method patch --uri "$uri" --body "$body" --output none
 
           execution="$(az containerapp job start --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
@@ -122,10 +125,12 @@ jobs:
           uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMPORARY_JOB?api-version=2024-03-01"
           current="$(az rest --method get --uri "$uri" -o json)"
           echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-after.json
+          echo "$current" | jq -S '.properties.configuration.manualTriggerConfig' > report/manual-trigger-after.json
           diff -u report/template-before.json report/template-after.json
+          diff -u report/manual-trigger-before.json report/manual-trigger-after.json
           trigger="$(echo "$current" | jq -r '.properties.configuration.triggerType')"
           test "$trigger" = 'Manual'
-          echo 'BLOB_AUDIT_TEMPLATE_RESTORED=true'
+          echo 'BLOB_AUDIT_TEMPLATE_AND_TIMEOUT_RESTORED=true'
 
       - name: Upload read-only evidence
         if: always()
