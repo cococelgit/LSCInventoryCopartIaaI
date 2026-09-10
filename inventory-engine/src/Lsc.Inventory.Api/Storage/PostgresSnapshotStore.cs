@@ -1802,62 +1802,50 @@ public sealed partial class PostgresSnapshotStore(
             await readOnly.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = SoldLotRetentionDryRunSql;
-        AddParameter(command, "cutoff_at", cutoffAt);
-
         long eligibleInactiveLots;
         long eligibleVersions;
         long? postgresPayloadBytesRecoverable = null;
         long referencedRawBlobsEligible;
         long? estimatedRawBlobBytesRecoverable = null;
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        await using (var eligibleLotsCommand = connection.CreateCommand())
         {
-            await reader.ReadAsync(cancellationToken);
-            eligibleInactiveLots = reader.GetInt64(0);
-            eligibleVersions = reader.GetInt64(1);
-            referencedRawBlobsEligible = reader.GetInt64(2);
+            eligibleLotsCommand.Transaction = transaction;
+            eligibleLotsCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            eligibleLotsCommand.CommandText = """
+                select count(*)::bigint
+                from inventory_lot_lifecycle
+                where not is_active
+                  and deactivated_at is not null
+                  and deactivated_at <= @cutoff_at;
+                """;
+            AddParameter(eligibleLotsCommand, "cutoff_at", cutoffAt);
+            eligibleInactiveLots = (long)(await eligibleLotsCommand.ExecuteScalarAsync(cancellationToken) ?? 0L);
         }
 
-        var historicalStatusBuckets = new List<HistoricalLotStatusBucket>();
-        await using (var statusCommand = connection.CreateCommand())
+        eligibleVersions = 0;
+        referencedRawBlobsEligible = 0;
+        if (eligibleInactiveLots > 0)
         {
-            statusCommand.Transaction = transaction;
-            statusCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            statusCommand.CommandText = HistoricalLotStatusInventorySql;
-            AddParameter(statusCommand, "cutoff_at", cutoffAt);
-            await using var reader = await statusCommand.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                historicalStatusBuckets.Add(new HistoricalLotStatusBucket(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetInt64(2),
-                    reader.GetInt64(3),
-                    reader.IsDBNull(4) ? null : reader.GetInt64(4),
-                    reader.GetInt64(5)));
-            }
-        }
-
-        HistoricalRetentionInventoryDiagnostics historicalDiagnostics;
-        await using (var diagnosticCommand = connection.CreateCommand())
-        {
-            diagnosticCommand.Transaction = transaction;
-            diagnosticCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            diagnosticCommand.CommandText = HistoricalRetentionDiagnosticsSql;
-            AddParameter(diagnosticCommand, "cutoff_at", cutoffAt);
-            await using var reader = await diagnosticCommand.ExecuteReaderAsync(cancellationToken);
+            await using var versionsCommand = connection.CreateCommand();
+            versionsCommand.Transaction = transaction;
+            versionsCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
+            versionsCommand.CommandText = """
+                with eligible_lots as materialized (
+                    select lot_key
+                    from inventory_lot_lifecycle
+                    where not is_active
+                      and deactivated_at is not null
+                      and deactivated_at <= @cutoff_at
+                )
+                select count(*)::bigint, count(distinct versions.raw_blob_name)::bigint
+                from eligible_lots eligible
+                join auction_lot_versions versions on versions.lot_key = eligible.lot_key;
+                """;
+            AddParameter(versionsCommand, "cutoff_at", cutoffAt);
+            await using var reader = await versionsCommand.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
-            historicalDiagnostics = new HistoricalRetentionInventoryDiagnostics(
-                reader.GetInt64(0),
-                reader.GetInt64(1),
-                reader.GetInt64(2),
-                ReadNullableDateTimeOffset(reader, 3),
-                ReadNullableDateTimeOffset(reader, 4),
-                reader.GetInt64(5),
-                reader.GetInt64(6));
+            eligibleVersions = reader.GetInt64(0);
+            referencedRawBlobsEligible = reader.GetInt64(1);
         }
 
         var report = new SoldLotRetentionDryRunReport(
@@ -1868,8 +1856,8 @@ public sealed partial class PostgresSnapshotStore(
             postgresPayloadBytesRecoverable,
             referencedRawBlobsEligible,
             estimatedRawBlobBytesRecoverable,
-            historicalStatusBuckets,
-            historicalDiagnostics,
+            Array.Empty<HistoricalLotStatusBucket>(),
+            HistoricalDiagnostics: null,
             ReadOnly: true);
         await transaction.RollbackAsync(cancellationToken);
         return report;
