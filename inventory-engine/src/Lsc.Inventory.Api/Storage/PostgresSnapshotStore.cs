@@ -1958,6 +1958,32 @@ public sealed partial class PostgresSnapshotStore(
     }
 
     /// <summary>
+    /// Lists only the first paths and metadata from the legacy prefix. It stops immediately after the bounded sample
+    /// and never opens a Blob stream or mutates Blob Storage.
+    /// </summary>
+    public async Task<BlobPathSampleReport> GetBlobPathSampleAsync(int maximum, CancellationToken cancellationToken)
+    {
+        const string prefix = "snapshots/";
+        var sampleSize = Math.Clamp(maximum, 1, 25);
+        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
+        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
+        var samples = new List<BlobPathSample>(sampleSize);
+
+        await foreach (var page in containerClient
+            .GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, cancellationToken)
+            .AsPages(pageSizeHint: sampleSize))
+        {
+            foreach (var blob in page.Values)
+            {
+                samples.Add(new BlobPathSample(blob.Name, blob.Properties.ContentLength ?? 0, blob.Properties.LastModified));
+                if (samples.Count == sampleSize) return new BlobPathSampleReport(prefix, samples, ReadOnly: true);
+            }
+        }
+
+        return new BlobPathSampleReport(prefix, samples, ReadOnly: true);
+    }
+
+    /// <summary>
     /// Reconciles PostgreSQL's raw_blob_name references without accessing Blob payloads. It is deliberately separate
     /// from the physical listing because old historical names do not use the current content-addressed path layout.
     /// </summary>

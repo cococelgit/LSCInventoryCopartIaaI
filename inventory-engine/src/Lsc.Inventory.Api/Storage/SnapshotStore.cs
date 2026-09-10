@@ -289,6 +289,16 @@ public sealed record PhysicalBlobLotSummary(
     long IdenticalHashExcessBytes);
 
 /// <summary>
+/// Small metadata-only sample of Blob paths used exclusively to identify an historical path convention.
+/// </summary>
+public sealed record BlobPathSampleReport(
+    string Prefix,
+    IReadOnlyList<BlobPathSample> Samples,
+    bool ReadOnly);
+
+public sealed record BlobPathSample(string Name, long ContentLength, DateTimeOffset? LastModified);
+
+/// <summary>
 /// Read-only reconciliation between version rows and Blob references. It measures duplicate references precisely but
 /// never assumes that distinct versions of the same lot are identical payloads or safe to delete.
 /// </summary>
