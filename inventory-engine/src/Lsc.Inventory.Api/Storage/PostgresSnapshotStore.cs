@@ -1976,7 +1976,7 @@ public sealed partial class PostgresSnapshotStore(
                     """;
                 AddParameter(command, "cutoff_at", cutoffAt);
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-                while (await reader.ReadAsync(cancellationToken)) candidates.Add(reader.GetString(0));
+                while (await reader.ReadAsync(cancellationToken)) candidates.Add(ToSafeBlobIdentity(reader.GetString(0)));
             }
             await transaction.RollbackAsync(cancellationToken);
         }
@@ -3373,9 +3373,12 @@ public sealed partial class PostgresSnapshotStore(
 
     internal static string BuildBlobName(string identity, string payloadHash)
     {
-        var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
+        var safeIdentity = ToSafeBlobIdentity(identity);
         return $"snapshots/{safeIdentity}/{payloadHash}.json";
     }
+
+    internal static string ToSafeBlobIdentity(string identity) =>
+        string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
 
     private static bool TryParseContentAddressedBlobName(string blobName, out string safeLotIdentity, out string payloadHash)
     {
