@@ -9,7 +9,7 @@ public sealed class AuctionsApiIncrementalShadowLimitTests
     {
         var source = File.ReadAllText(FindRepositoryFile("../Workers/AuctionsApiIncrementalSyncProcessor.cs"));
         var loopStart = source.IndexOf("foreach (var vehicle in activeVehicles)", StringComparison.Ordinal);
-        var loopEnd = source.IndexOf("var archivedWindow", loopStart, StringComparison.Ordinal);
+        var loopEnd = source.IndexOf("var archivedKeys", loopStart, StringComparison.Ordinal);
         Assert.True(loopStart >= 0 && loopEnd > loopStart);
 
         var loop = source[loopStart..loopEnd];
@@ -19,6 +19,17 @@ public sealed class AuctionsApiIncrementalShadowLimitTests
         Assert.True(capCheck >= 0);
         Assert.True(shadowCall >= 0);
         Assert.True(capCheck < shadowCall);
+    }
+
+    [Fact]
+    public void Incremental_windows_are_streamed_page_by_page()
+    {
+        var source = File.ReadAllText(FindRepositoryFile("../Workers/AuctionsApiIncrementalSyncProcessor.cs"));
+        Assert.Contains("ReadWindowPagesAsync", source, StringComparison.Ordinal);
+        Assert.Contains("IAsyncEnumerable<WindowPage>", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadWindowAsync", source, StringComparison.Ordinal);
+        Assert.Contains("var rows = ExtractRows(response.Data).ToArray();", source, StringComparison.Ordinal);
+        Assert.Contains("yield return new WindowPage(rows);", source, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryFile(string fileName)
