@@ -1957,6 +1957,125 @@ public sealed partial class PostgresSnapshotStore(
             ReadOnly: true);
     }
 
+    /// <summary>
+    /// Reconciles PostgreSQL's raw_blob_name references without accessing Blob payloads. It is deliberately separate
+    /// from the physical listing because old historical names do not use the current content-addressed path layout.
+    /// </summary>
+    public async Task<BlobReferenceCrosscheckReport> GetBlobReferenceCrosscheckAsync(int retentionDays, CancellationToken cancellationToken)
+    {
+        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
+        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var readOnly = connection.CreateCommand())
+        {
+            readOnly.Transaction = transaction;
+            readOnly.CommandText = "set transaction read only;";
+            await readOnly.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        long versionRows;
+        long distinctLots;
+        long distinctReferencedBlobs;
+        long additionalVersionReferencesToSameBlob;
+        long referencedPostgresPayloadBytes;
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+                select
+                    count(*)::bigint,
+                    count(distinct lot_key)::bigint,
+                    count(distinct raw_blob_name)::bigint,
+                    (count(*) - count(distinct raw_blob_name))::bigint,
+                    coalesce(sum(octet_length(payload::text)), 0)::bigint
+                from auction_lot_versions
+                where raw_blob_name is not null
+                  and raw_blob_name like 'snapshots/%';
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            versionRows = reader.GetInt64(0);
+            distinctLots = reader.GetInt64(1);
+            distinctReferencedBlobs = reader.GetInt64(2);
+            additionalVersionReferencesToSameBlob = reader.GetInt64(3);
+            referencedPostgresPayloadBytes = reader.GetInt64(4);
+        }
+
+        long eligibleInactiveLots;
+        long eligibleVersionRows;
+        long eligibleDistinctReferencedBlobs;
+        long eligiblePostgresPayloadBytes;
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+                with eligible_lots as (
+                    select lot_key
+                    from inventory_lot_lifecycle
+                    where not is_active
+                      and deactivated_at is not null
+                      and deactivated_at <= @cutoff_at
+                ), eligible_versions as (
+                    select versions.lot_key, versions.raw_blob_name, versions.payload
+                    from auction_lot_versions versions
+                    join eligible_lots eligible on eligible.lot_key = versions.lot_key
+                    where versions.raw_blob_name is not null
+                      and versions.raw_blob_name like 'snapshots/%'
+                )
+                select
+                    (select count(*)::bigint from eligible_lots),
+                    count(*)::bigint,
+                    count(distinct raw_blob_name)::bigint,
+                    coalesce(sum(octet_length(payload::text)), 0)::bigint
+                from eligible_versions;
+                """;
+            AddParameter(command, "cutoff_at", cutoffAt);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            eligibleInactiveLots = reader.GetInt64(0);
+            eligibleVersionRows = reader.GetInt64(1);
+            eligibleDistinctReferencedBlobs = reader.GetInt64(2);
+            eligiblePostgresPayloadBytes = reader.GetInt64(3);
+        }
+
+        var samples = new List<string>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+                select raw_blob_name
+                from auction_lot_versions
+                where raw_blob_name is not null
+                  and raw_blob_name like 'snapshots/%'
+                order by id
+                limit 5;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) samples.Add(reader.GetString(0));
+        }
+
+        await transaction.RollbackAsync(cancellationToken);
+        return new BlobReferenceCrosscheckReport(
+            safeRetentionDays,
+            cutoffAt,
+            versionRows,
+            distinctLots,
+            distinctReferencedBlobs,
+            additionalVersionReferencesToSameBlob,
+            referencedPostgresPayloadBytes,
+            eligibleInactiveLots,
+            eligibleVersionRows,
+            eligibleDistinctReferencedBlobs,
+            eligiblePostgresPayloadBytes,
+            samples,
+            ReadOnly: true);
+    }
+
     public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
