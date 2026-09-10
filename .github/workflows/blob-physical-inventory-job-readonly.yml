@@ -1,0 +1,122 @@
+name: Blob Physical Inventory Job Readonly
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RUN_READ_ONLY_BLOB_AUDIT to run the physical metadata inventory
+        required: true
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: blob-physical-inventory-job-readonly
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  TEMPORARY_JOB: job-lsc-copart-catchup-prod
+  STORAGE_ACCOUNT: stlscinvprodeus2
+  STORAGE_CONTAINER: raw-apibara
+
+jobs:
+  audit:
+    name: Enumerate Blob metadata through isolated read-only job
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Run temporary physical metadata inventory and restore job template
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'RUN_READ_ONLY_BLOB_AUDIT'
+          mkdir -p report
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMPORARY_JOB?api-version=2024-03-01"
+          current="$(az rest --method get --uri "$uri" -o json)"
+          trigger="$(echo "$current" | jq -r '.properties.configuration.triggerType')"
+          active="$(az containerapp job execution list --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+          test "$trigger" = 'Manual'
+          test "$active" = 0
+          echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-before.json
+
+          restore_body="$(echo "$current" | jq '{properties:{template:{containers:[.properties.template.containers[0] | del(.imageType)]}}}')"
+          restore() {
+            az rest --method patch --uri "$uri" --body "$restore_body" --output none
+          }
+          trap restore EXIT
+
+          script_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/readonly_blob_inventory.sh"
+          audit_command="curl -fsSL '$script_url' -o /tmp/lsc-blob-audit.sh && BLOB_ACCOUNT='$STORAGE_ACCOUNT' BLOB_CONTAINER='$STORAGE_CONTAINER' sh /tmp/lsc-blob-audit.sh"
+          body="$(echo "$current" | jq --arg command "$audit_command" '
+            .properties.template.containers[0]
+            |= (del(.imageType) | .command = ["/bin/sh"] | .args = ["-c", $command])
+            | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+          az rest --method patch --uri "$uri" --body "$body" --output none
+
+          execution="$(az containerapp job start --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+          test -n "$execution_name"
+          echo "$execution" | jq . > report/execution-start.json
+          echo "BLOB_AUDIT_EXECUTION=$execution_name" >> "$GITHUB_ENV"
+
+          deadline=$((SECONDS + 2700))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            status_json="$(az containerapp job execution show --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution_name" -o json)"
+            status="$(echo "$status_json" | jq -r '.properties.status // .properties.runningState // "Unknown"')"
+            echo "Blob metadata audit status: $status"
+            case "$status" in
+              Succeeded|Failed|Canceled)
+                echo "$status_json" | jq . > report/execution-final.json
+                replicas="$(az containerapp job replica list --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" -o json || true)"
+                echo "$replicas" | jq . > report/replicas.json
+                replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+                container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+                if [ -n "$replica" ] && [ -n "$container" ]; then
+                  az containerapp job logs show --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" --replica "$replica" --container "$container" --tail 300 --format text | tee report/blob-physical-inventory.log || true
+                fi
+                test "$status" = Succeeded
+                break
+                ;;
+            esac
+            sleep 15
+          done
+          test "$SECONDS" -lt "$deadline"
+
+      - name: Verify temporary job was restored
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMPORARY_JOB?api-version=2024-03-01"
+          current="$(az rest --method get --uri "$uri" -o json)"
+          echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-after.json
+          diff -u report/template-before.json report/template-after.json
+          trigger="$(echo "$current" | jq -r '.properties.configuration.triggerType')"
+          test "$trigger" = 'Manual'
+          echo 'BLOB_AUDIT_TEMPLATE_RESTORED=true'
+
+      - name: Upload read-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-physical-inventory-job-${{ github.run_id }}
+          path: report
+          if-no-files-found: warn
+          retention-days: 30
