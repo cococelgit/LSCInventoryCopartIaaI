@@ -1807,20 +1807,51 @@ public sealed partial class PostgresSnapshotStore(
         command.CommandText = SoldLotRetentionDryRunSql;
         AddParameter(command, "cutoff_at", cutoffAt);
 
-        SoldLotRetentionDryRunReport report;
+        long eligibleInactiveLots;
+        long eligibleVersions;
+        long postgresPayloadBytesRecoverable;
+        long referencedRawBlobsEligible;
+        long estimatedRawBlobBytesRecoverable;
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             await reader.ReadAsync(cancellationToken);
-            report = new SoldLotRetentionDryRunReport(
-                safeRetentionDays,
-                cutoffAt,
-                reader.GetInt64(0),
-                reader.GetInt64(1),
-                reader.GetInt64(2),
-                reader.GetInt64(3),
-                reader.GetInt64(4),
-                ReadOnly: true);
+            eligibleInactiveLots = reader.GetInt64(0);
+            eligibleVersions = reader.GetInt64(1);
+            postgresPayloadBytesRecoverable = reader.GetInt64(2);
+            referencedRawBlobsEligible = reader.GetInt64(3);
+            estimatedRawBlobBytesRecoverable = reader.GetInt64(4);
         }
+
+        var historicalStatusBuckets = new List<HistoricalLotStatusBucket>();
+        await using (var statusCommand = connection.CreateCommand())
+        {
+            statusCommand.Transaction = transaction;
+            statusCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            statusCommand.CommandText = HistoricalLotStatusInventorySql;
+            AddParameter(statusCommand, "cutoff_at", cutoffAt);
+            await using var reader = await statusCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                historicalStatusBuckets.Add(new HistoricalLotStatusBucket(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt64(2),
+                    reader.GetInt64(3),
+                    reader.GetInt64(4),
+                    reader.GetInt64(5)));
+            }
+        }
+
+        var report = new SoldLotRetentionDryRunReport(
+            safeRetentionDays,
+            cutoffAt,
+            eligibleInactiveLots,
+            eligibleVersions,
+            postgresPayloadBytesRecoverable,
+            referencedRawBlobsEligible,
+            estimatedRawBlobBytesRecoverable,
+            historicalStatusBuckets,
+            ReadOnly: true);
         await transaction.RollbackAsync(cancellationToken);
         return report;
     }
@@ -3057,5 +3088,33 @@ public sealed partial class PostgresSnapshotStore(
             count(distinct raw_blob_name)::bigint as referenced_raw_blobs_eligible,
             coalesce(sum(postgres_payload_bytes), 0)::bigint as estimated_raw_blob_bytes_recoverable
         from eligible_versions;
+        """;
+
+    internal const string HistoricalLotStatusInventorySql = """
+        with historical_lots as (
+            select lots.lot_key,
+                   coalesce(nullif(trim(lots.lot_status), ''), '(empty)') as lot_status,
+                   coalesce(nullif(trim(lots.lot_sub_status), ''), '(empty)') as lot_sub_status
+            from auction_lots lots
+            where lots.observed_at <= @cutoff_at
+        ), historical_versions as (
+            select lots.lot_status,
+                   lots.lot_sub_status,
+                   versions.lot_key,
+                   versions.raw_blob_name,
+                   octet_length(versions.payload::text)::bigint as postgres_payload_bytes
+            from historical_lots lots
+            join auction_lot_versions versions on versions.lot_key = lots.lot_key
+        )
+        select lot_status,
+               lot_sub_status,
+               count(distinct lot_key)::bigint as lots,
+               count(*)::bigint as versions,
+               coalesce(sum(postgres_payload_bytes), 0)::bigint as postgres_payload_bytes,
+               count(distinct raw_blob_name)::bigint as referenced_raw_blobs
+        from historical_versions
+        group by lot_status, lot_sub_status
+        order by postgres_payload_bytes desc, lot_status, lot_sub_status
+        limit 100;
         """;
 }
