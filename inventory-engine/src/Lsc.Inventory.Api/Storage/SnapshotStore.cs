@@ -259,6 +259,36 @@ public sealed record SoldLotRetentionDryRunReport(
     bool ReadOnly);
 
 /// <summary>
+/// Physical, metadata-only enumeration of the content-addressed Blob prefix. The report does not read blob bodies,
+/// mutate Storage, or treat multiple legitimate versions of a lot as removable duplicates.
+/// </summary>
+public sealed record PhysicalBlobInventoryReport(
+    string Prefix,
+    long TotalBlobs,
+    long TotalBlobBytes,
+    long ContentAddressedBlobs,
+    long ContentAddressedBytes,
+    long UnparsedLegacyOrUnknownBlobs,
+    long UnparsedLegacyOrUnknownBytes,
+    long DistinctContentAddressedLotIdentities,
+    long LotsWithMultiplePhysicalBlobs,
+    long AdditionalPhysicalBlobsBeyondFirstPerLot,
+    long IdenticalHashExcessBlobs,
+    long IdenticalHashExcessBytes,
+    IReadOnlyList<PhysicalBlobLotSummary> TopLots,
+    bool ReadOnly);
+
+/// <summary>
+/// Uses the safe content-addressed identity encoded in the Blob path, not customer or vehicle payload data.
+/// </summary>
+public sealed record PhysicalBlobLotSummary(
+    string SafeLotIdentity,
+    long PhysicalBlobs,
+    long PhysicalBytes,
+    long IdenticalHashExcessBlobs,
+    long IdenticalHashExcessBytes);
+
+/// <summary>
 /// Historical inventory grouped by the source-provided lot outcome. These buckets are review data,
 /// not purge instructions: only an approved terminal status may later become eligible for deletion.
 /// </summary>

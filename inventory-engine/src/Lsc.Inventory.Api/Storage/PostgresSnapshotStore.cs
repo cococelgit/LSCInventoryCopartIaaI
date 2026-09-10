@@ -8,6 +8,7 @@ using Azure;
 using Azure.Core;
 using Azure.Identity;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
@@ -1876,6 +1877,113 @@ public sealed partial class PostgresSnapshotStore(
         return report;
     }
 
+    /// <summary>
+    /// Lists metadata under snapshots/ through the managed identity. It does not download Blob content or make any
+    /// Blob/PostgreSQL mutation. Only the new content-addressed path is attributed to a vehicle identity; legacy
+    /// paths are explicitly reported as unparsed until they are reconciled through PostgreSQL references.
+    /// </summary>
+    public async Task<PhysicalBlobInventoryReport> GetPhysicalBlobInventoryAsync(int top, CancellationToken cancellationToken)
+    {
+        const string prefix = "snapshots/";
+        var topN = Math.Clamp(top, 1, 100);
+        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
+        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
+        var lots = new Dictionary<string, PhysicalBlobLotCounter>(StringComparer.Ordinal);
+        var hashes = new Dictionary<string, PhysicalBlobHashCounter>(StringComparer.Ordinal);
+
+        long totalBlobs = 0;
+        long totalBytes = 0;
+        long contentAddressedBlobs = 0;
+        long contentAddressedBytes = 0;
+        long unparsedBlobs = 0;
+        long unparsedBytes = 0;
+
+        await foreach (var page in containerClient
+            .GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, cancellationToken)
+            .AsPages(pageSizeHint: 5_000))
+        {
+            foreach (var blob in page.Values)
+            {
+                var bytes = blob.Properties.ContentLength ?? 0;
+                totalBlobs++;
+                totalBytes += bytes;
+
+                if (!TryParseContentAddressedBlobName(blob.Name, out var safeLotIdentity, out var payloadHash))
+                {
+                    unparsedBlobs++;
+                    unparsedBytes += bytes;
+                    continue;
+                }
+
+                contentAddressedBlobs++;
+                contentAddressedBytes += bytes;
+                if (!lots.TryGetValue(safeLotIdentity, out var lot))
+                {
+                    lot = new PhysicalBlobLotCounter();
+                    lots.Add(safeLotIdentity, lot);
+                }
+
+                lot.PhysicalBlobs++;
+                lot.PhysicalBytes += bytes;
+                var hashKey = string.Concat(safeLotIdentity, '\u001f', payloadHash);
+                if (!hashes.TryGetValue(hashKey, out var hash))
+                {
+                    hash = new PhysicalBlobHashCounter(safeLotIdentity, bytes);
+                    hashes.Add(hashKey, hash);
+                }
+                else
+                {
+                    hash.PhysicalBlobs++;
+                    hash.PhysicalBytes += bytes;
+                    if (bytes < hash.MinimumBytes) hash.MinimumBytes = bytes;
+                }
+            }
+        }
+
+        long identicalHashExcessBlobs = 0;
+        long identicalHashExcessBytes = 0;
+        foreach (var hash in hashes.Values.Where(value => value.PhysicalBlobs > 1))
+        {
+            var excessBlobs = hash.PhysicalBlobs - 1;
+            var excessBytes = hash.PhysicalBytes - hash.MinimumBytes;
+            identicalHashExcessBlobs += excessBlobs;
+            identicalHashExcessBytes += excessBytes;
+            var lot = lots[hash.SafeLotIdentity];
+            lot.IdenticalHashExcessBlobs += excessBlobs;
+            lot.IdenticalHashExcessBytes += excessBytes;
+        }
+
+        var topLots = lots
+            .OrderByDescending(pair => pair.Value.IdenticalHashExcessBytes)
+            .ThenByDescending(pair => pair.Value.PhysicalBytes)
+            .ThenByDescending(pair => pair.Value.PhysicalBlobs)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Take(topN)
+            .Select(pair => new PhysicalBlobLotSummary(
+                pair.Key,
+                pair.Value.PhysicalBlobs,
+                pair.Value.PhysicalBytes,
+                pair.Value.IdenticalHashExcessBlobs,
+                pair.Value.IdenticalHashExcessBytes))
+            .ToArray();
+
+        return new PhysicalBlobInventoryReport(
+            prefix,
+            totalBlobs,
+            totalBytes,
+            contentAddressedBlobs,
+            contentAddressedBytes,
+            unparsedBlobs,
+            unparsedBytes,
+            lots.Count,
+            lots.Values.LongCount(value => value.PhysicalBlobs > 1),
+            lots.Values.Sum(value => Math.Max(0, value.PhysicalBlobs - 1)),
+            identicalHashExcessBlobs,
+            identicalHashExcessBytes,
+            topLots,
+            ReadOnly: true);
+    }
+
     public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -3086,6 +3194,39 @@ public sealed partial class PostgresSnapshotStore(
     {
         var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
         return $"snapshots/{safeIdentity}/{payloadHash}.json";
+    }
+
+    private static bool TryParseContentAddressedBlobName(string blobName, out string safeLotIdentity, out string payloadHash)
+    {
+        safeLotIdentity = string.Empty;
+        payloadHash = string.Empty;
+        var segments = blobName.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 3 || !string.Equals(segments[0], "snapshots", StringComparison.Ordinal)) return false;
+        if (!segments[2].EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return false;
+
+        var candidateHash = segments[2][..^".json".Length];
+        if (candidateHash.Length != 64 || candidateHash.Any(character => !Uri.IsHexDigit(character))) return false;
+        if (string.IsNullOrWhiteSpace(segments[1])) return false;
+
+        safeLotIdentity = segments[1];
+        payloadHash = candidateHash.ToLowerInvariant();
+        return true;
+    }
+
+    private sealed class PhysicalBlobLotCounter
+    {
+        public long PhysicalBlobs { get; set; }
+        public long PhysicalBytes { get; set; }
+        public long IdenticalHashExcessBlobs { get; set; }
+        public long IdenticalHashExcessBytes { get; set; }
+    }
+
+    private sealed class PhysicalBlobHashCounter(string safeLotIdentity, long bytes)
+    {
+        public string SafeLotIdentity { get; } = safeLotIdentity;
+        public long PhysicalBlobs { get; set; } = 1;
+        public long PhysicalBytes { get; set; } = bytes;
+        public long MinimumBytes { get; set; } = bytes;
     }
 
     internal const string SoldLotRetentionDryRunSql = """

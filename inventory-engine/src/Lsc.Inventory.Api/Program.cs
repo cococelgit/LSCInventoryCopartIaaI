@@ -461,6 +461,21 @@ if (args.Contains("--sold-lot-retention-dry-run", StringComparer.OrdinalIgnoreCa
     return;
 }
 
+if (args.Contains("--physical-blob-inventory", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+    {
+        throw new InvalidOperationException("Physical Blob inventory requires Persistence:Provider=Postgres.");
+    }
+
+    var top = Math.Clamp(builder.Configuration.GetValue<int?>("BlobAudit:PhysicalInventoryTop") ?? 100, 1, 100);
+    var report = await postgresStore.GetPhysicalBlobInventoryAsync(top, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
+    return;
+}
+
 if (args.Contains("--copart-publication-report", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
