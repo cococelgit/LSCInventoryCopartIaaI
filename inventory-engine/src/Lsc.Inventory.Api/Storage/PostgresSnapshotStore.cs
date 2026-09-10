@@ -1963,19 +1963,21 @@ public sealed partial class PostgresSnapshotStore(
                 await readOnly.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            await using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-            command.CommandText = """
-                select lot_key
-                from inventory_lot_lifecycle
-                where not is_active
-                  and deactivated_at is not null
-                  and deactivated_at <= @cutoff_at;
-                """;
-            AddParameter(command, "cutoff_at", cutoffAt);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken)) candidates.Add(reader.GetString(0));
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+                command.CommandText = """
+                    select lot_key
+                    from inventory_lot_lifecycle
+                    where not is_active
+                      and deactivated_at is not null
+                      and deactivated_at <= @cutoff_at;
+                    """;
+                AddParameter(command, "cutoff_at", cutoffAt);
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken)) candidates.Add(reader.GetString(0));
+            }
             await transaction.RollbackAsync(cancellationToken);
         }
 
