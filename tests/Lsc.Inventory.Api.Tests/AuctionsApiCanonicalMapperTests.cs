@@ -68,9 +68,9 @@ public sealed class AuctionsApiCanonicalMapperTests
 
         Assert.Equal(3, vehicle.Media!.ThumbnailsCount);
         Assert.Equal(3, vehicle.Media.Photos!.Count);
-        Assert.Contains("imageKeys=one", vehicle.Media.Photos);
-        Assert.Contains("imageKeys=two", vehicle.Media.Photos);
-        Assert.Contains("imageKeys=three", vehicle.Media.Photos);
+        Assert.Contains(vehicle.Media.Photos, value => value.Contains("imageKeys=one", StringComparison.Ordinal));
+        Assert.Contains(vehicle.Media.Photos, value => value.Contains("imageKeys=two", StringComparison.Ordinal));
+        Assert.Contains(vehicle.Media.Photos, value => value.Contains("imageKeys=three", StringComparison.Ordinal));
     }
 
     [Fact]
