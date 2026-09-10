@@ -33,8 +33,10 @@ public sealed class SoldLotRetentionDryRunTests
         Assert.DoesNotContain("insert ", diagnosticsSql);
 
         var report = new SoldLotRetentionDryRunReport(
-            7, DateTimeOffset.UtcNow, 0, 0, null, 0, null,
+            7, DateTimeOffset.UtcNow, 0, null, null, null, null,
             Array.Empty<HistoricalLotStatusBucket>(), HistoricalDiagnostics: null, ReadOnly: true);
+        Assert.Null(report.EligibleVersions);
+        Assert.Null(report.ReferencedRawBlobsEligible);
         Assert.Null(report.PostgresPayloadBytesRecoverable);
         Assert.Null(report.EstimatedRawBlobBytesRecoverable);
         Assert.Null(report.HistoricalDiagnostics);

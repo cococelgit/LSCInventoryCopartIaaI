@@ -1803,9 +1803,7 @@ public sealed partial class PostgresSnapshotStore(
         }
 
         long eligibleInactiveLots;
-        long eligibleVersions;
         long? postgresPayloadBytesRecoverable = null;
-        long referencedRawBlobsEligible;
         long? estimatedRawBlobBytesRecoverable = null;
         await using (var eligibleLotsCommand = connection.CreateCommand())
         {
@@ -1822,39 +1820,13 @@ public sealed partial class PostgresSnapshotStore(
             eligibleInactiveLots = (long)(await eligibleLotsCommand.ExecuteScalarAsync(cancellationToken) ?? 0L);
         }
 
-        eligibleVersions = 0;
-        referencedRawBlobsEligible = 0;
-        if (eligibleInactiveLots > 0)
-        {
-            await using var versionsCommand = connection.CreateCommand();
-            versionsCommand.Transaction = transaction;
-            versionsCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
-            versionsCommand.CommandText = """
-                with eligible_lots as materialized (
-                    select lot_key
-                    from inventory_lot_lifecycle
-                    where not is_active
-                      and deactivated_at is not null
-                      and deactivated_at <= @cutoff_at
-                )
-                select count(*)::bigint, count(distinct versions.raw_blob_name)::bigint
-                from eligible_lots eligible
-                join auction_lot_versions versions on versions.lot_key = eligible.lot_key;
-                """;
-            AddParameter(versionsCommand, "cutoff_at", cutoffAt);
-            await using var reader = await versionsCommand.ExecuteReaderAsync(cancellationToken);
-            await reader.ReadAsync(cancellationToken);
-            eligibleVersions = reader.GetInt64(0);
-            referencedRawBlobsEligible = reader.GetInt64(1);
-        }
-
         var report = new SoldLotRetentionDryRunReport(
             safeRetentionDays,
             cutoffAt,
             eligibleInactiveLots,
-            eligibleVersions,
+            EligibleVersions: null,
             postgresPayloadBytesRecoverable,
-            referencedRawBlobsEligible,
+            ReferencedRawBlobsEligible: null,
             estimatedRawBlobBytesRecoverable,
             Array.Empty<HistoricalLotStatusBucket>(),
             HistoricalDiagnostics: null,
