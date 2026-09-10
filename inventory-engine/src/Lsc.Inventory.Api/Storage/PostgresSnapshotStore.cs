@@ -1807,17 +1807,20 @@ public sealed partial class PostgresSnapshotStore(
         command.CommandText = SoldLotRetentionDryRunSql;
         AddParameter(command, "cutoff_at", cutoffAt);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        await reader.ReadAsync(cancellationToken);
-        var report = new SoldLotRetentionDryRunReport(
-            safeRetentionDays,
-            cutoffAt,
-            reader.GetInt64(0),
-            reader.GetInt64(1),
-            reader.GetInt64(2),
-            reader.GetInt64(3),
-            reader.GetInt64(4),
-            ReadOnly: true);
+        SoldLotRetentionDryRunReport report;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            await reader.ReadAsync(cancellationToken);
+            report = new SoldLotRetentionDryRunReport(
+                safeRetentionDays,
+                cutoffAt,
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                ReadOnly: true);
+        }
         await transaction.RollbackAsync(cancellationToken);
         return report;
     }
