@@ -1842,6 +1842,25 @@ public sealed partial class PostgresSnapshotStore(
             }
         }
 
+        HistoricalRetentionInventoryDiagnostics historicalDiagnostics;
+        await using (var diagnosticCommand = connection.CreateCommand())
+        {
+            diagnosticCommand.Transaction = transaction;
+            diagnosticCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            diagnosticCommand.CommandText = HistoricalRetentionDiagnosticsSql;
+            AddParameter(diagnosticCommand, "cutoff_at", cutoffAt);
+            await using var reader = await diagnosticCommand.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            historicalDiagnostics = new HistoricalRetentionInventoryDiagnostics(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                ReadNullableDateTimeOffset(reader, 3),
+                ReadNullableDateTimeOffset(reader, 4),
+                reader.GetInt64(5),
+                reader.GetInt64(6));
+        }
+
         var report = new SoldLotRetentionDryRunReport(
             safeRetentionDays,
             cutoffAt,
@@ -1851,6 +1870,7 @@ public sealed partial class PostgresSnapshotStore(
             referencedRawBlobsEligible,
             estimatedRawBlobBytesRecoverable,
             historicalStatusBuckets,
+            historicalDiagnostics,
             ReadOnly: true);
         await transaction.RollbackAsync(cancellationToken);
         return report;
@@ -3117,5 +3137,20 @@ public sealed partial class PostgresSnapshotStore(
         group by lot_status, lot_sub_status
         order by postgres_payload_bytes desc, lot_status, lot_sub_status
         limit 100;
+        """;
+
+    internal const string HistoricalRetentionDiagnosticsSql = """
+        select
+            (select count(*)::bigint from auction_lots) as total_lots,
+            (select count(*)::bigint from auction_lot_versions) as total_versions,
+            count(*) filter (where lots.auction_at is not null)::bigint as lots_with_auction_date,
+            min(lots.auction_at) as minimum_auction_at,
+            max(lots.auction_at) as maximum_auction_at,
+            count(*) filter (where lots.auction_at <= @cutoff_at)::bigint as lots_auctioned_before_cutoff,
+            (select count(*)::bigint
+             from auction_lot_versions versions
+             join auction_lots lots_before_cutoff on lots_before_cutoff.lot_key = versions.lot_key
+             where lots_before_cutoff.auction_at <= @cutoff_at) as versions_for_lots_auctioned_before_cutoff
+        from auction_lots lots;
         """;
 }
