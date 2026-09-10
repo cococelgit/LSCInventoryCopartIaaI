@@ -187,15 +187,24 @@ public sealed partial class PostgresSnapshotStore(
         var blobName = BuildBlobName(identity, payloadHash);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         var snapshotVersionExists = false;
+        var reactivatingInactiveLot = false;
         await using (var existing = connection.CreateCommand())
         {
             existing.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            existing.CommandText = "select exists(select 1 from auction_lot_versions where lot_key = @lot_key and payload_hash = @payload_hash);";
+            existing.CommandText = """
+                select
+                    exists(select 1 from auction_lot_versions where lot_key = @lot_key and payload_hash = @payload_hash),
+                    coalesce((select not is_active from inventory_lot_lifecycle where lot_key = @lot_key), false);
+                """;
             AddParameter(existing, "lot_key", identity);
             AddParameter(existing, "payload_hash", payloadHash);
-            snapshotVersionExists = (bool)(await existing.ExecuteScalarAsync(cancellationToken) ?? false);
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            snapshotVersionExists = reader.GetBoolean(0);
+            reactivatingInactiveLot = reader.GetBoolean(1);
         }
-        if (!snapshotVersionExists)
+        var canonicalBlobExists = !snapshotVersionExists || !reactivatingInactiveLot || await RawPayloadExistsAsync(blobName, cancellationToken);
+        if (ShouldUploadRawSnapshot(snapshotVersionExists, reactivatingInactiveLot, canonicalBlobExists))
             await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
@@ -3319,6 +3328,15 @@ public sealed partial class PostgresSnapshotStore(
         }
     }
 
+    private async Task<bool> RawPayloadExistsAsync(string blobName, CancellationToken cancellationToken)
+    {
+        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
+        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
+        var blobClient = containerClient.GetBlobClient(blobName);
+        var response = await blobClient.ExistsAsync(cancellationToken);
+        return response.Value;
+    }
+
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
         await OpenConnectionAsync(_persistence.Database, cancellationToken);
 
@@ -3379,6 +3397,9 @@ public sealed partial class PostgresSnapshotStore(
 
     internal static string ToSafeBlobIdentity(string identity) =>
         string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
+
+    internal static bool ShouldUploadRawSnapshot(bool snapshotVersionExists, bool reactivatingInactiveLot, bool canonicalBlobExists) =>
+        !snapshotVersionExists || (reactivatingInactiveLot && !canonicalBlobExists);
 
     private static bool TryParseContentAddressedBlobName(string blobName, out string safeLotIdentity, out string payloadHash)
     {
