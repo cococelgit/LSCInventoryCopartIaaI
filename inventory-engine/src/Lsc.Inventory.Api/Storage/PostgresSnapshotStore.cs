@@ -2060,6 +2060,178 @@ public sealed partial class PostgresSnapshotStore(
     }
 
     /// <summary>
+    /// Builds a deterministic, metadata-only plan for a narrow retention pilot. The candidate selection happens in a
+    /// read-only transaction and blob properties are fetched only for legacy paths belonging to the selected lots.
+    /// </summary>
+    public async Task<RetentionPurgePilotManifest> CreateRetentionPurgePilotManifestAsync(int retentionDays, int lotLimit, CancellationToken cancellationToken)
+    {
+        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
+        var safeLotLimit = Math.Clamp(lotLimit, 1, 500);
+        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
+        var lots = new List<RetentionPurgePilotLot>(safeLotLimit);
+        long motivationSignals;
+
+        await using (var connection = await OpenConnectionAsync(cancellationToken))
+        await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
+        {
+            await using (var readOnly = connection.CreateCommand())
+            {
+                readOnly.Transaction = transaction;
+                readOnly.CommandText = "set transaction read only;";
+                await readOnly.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+                command.CommandText = """
+                    select lot_key, deactivated_at
+                    from inventory_lot_lifecycle
+                    where not is_active
+                      and deactivated_at is not null
+                      and deactivated_at <= @cutoff_at
+                    order by deactivated_at asc, lot_key asc
+                    limit @lot_limit;
+                    """;
+                AddParameter(command, "cutoff_at", cutoffAt);
+                AddParameter(command, "lot_limit", safeLotLimit);
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                    lots.Add(new RetentionPurgePilotLot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1)));
+            }
+
+            var lotKeys = lots.Select(lot => lot.LotKey).ToArray();
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+                command.CommandText = """
+                    select count(*)::bigint
+                    from copart_lot_motivation_signals
+                    where lot_key = any(@lot_keys);
+                    """;
+                AddParameter(command, "lot_keys", lotKeys);
+                motivationSignals = (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
+            }
+            await transaction.RollbackAsync(cancellationToken);
+        }
+
+        var expectedLotKeysByIdentity = lots.ToDictionary(lot => ToSafeBlobIdentity(lot.LotKey), lot => lot.LotKey, StringComparer.Ordinal);
+        var blobs = new List<RetentionPurgePilotBlob>();
+        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
+        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
+
+        await foreach (var item in containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, "snapshots/", cancellationToken))
+        {
+            if (!TryGetPilotLegacyBlobLotKey(item.Name, expectedLotKeysByIdentity, out var lotKey)) continue;
+            blobs.Add(new RetentionPurgePilotBlob(lotKey, item.Name, item.Properties.ContentLength ?? 0, item.Properties.LastModified ?? DateTimeOffset.MinValue));
+        }
+
+        var createdAt = DateTimeOffset.UtcNow;
+        var fingerprint = string.Join('\n', blobs.OrderBy(blob => blob.BlobName, StringComparer.Ordinal).Select(blob => $"{blob.LotKey}|{blob.BlobName}|{blob.ContentLength}|{blob.LastModified:O}"));
+        var manifestSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint))).ToLowerInvariant();
+        return new RetentionPurgePilotManifest(safeRetentionDays, cutoffAt, safeLotLimit, createdAt, lots, blobs, motivationSignals, manifestSha256, ReadOnly: true);
+    }
+
+    /// <summary>
+    /// Deletes only the Blob paths already frozen in an approved manifest. It rechecks lifecycle status before any
+    /// delete and intentionally never issues DELETE/UPDATE statements against PostgreSQL.
+    /// </summary>
+    public async Task<RetentionPurgePilotExecutionReport> ExecuteRetentionPurgePilotAsync(RetentionPurgePilotManifest manifest, CancellationToken cancellationToken)
+    {
+        if (!manifest.ReadOnly) throw new InvalidOperationException("A pilot purge requires a manifest generated by the read-only planner.");
+        var lotKeys = manifest.Lots.Select(lot => lot.LotKey).ToArray();
+        var eligibleLots = await CountStillEligibleRetentionLotsAsync(lotKeys, manifest.CutoffAt, cancellationToken);
+        if (eligibleLots != lotKeys.Length)
+            throw new InvalidOperationException($"Pilot manifest no longer matches lifecycle eligibility. Expected {lotKeys.Length} inactive lots before {manifest.CutoffAt:O}; found {eligibleLots}.");
+
+        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
+        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
+        var deletedBlobs = 0L;
+        var deletedBytes = 0L;
+        var skippedMissing = 0L;
+        var skippedChanged = 0L;
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        await Parallel.ForEachAsync(manifest.Blobs, new ParallelOptions { MaxDegreeOfParallelism = 16, CancellationToken = cancellationToken }, async (blob, token) =>
+        {
+            var client = containerClient.GetBlobClient(blob.BlobName);
+            try
+            {
+                var properties = await client.GetPropertiesAsync(cancellationToken: token);
+                if (properties.Value.ContentLength != blob.ContentLength || properties.Value.LastModified != blob.LastModified)
+                {
+                    Interlocked.Increment(ref skippedChanged);
+                    return;
+                }
+
+                if (await client.DeleteIfExistsAsync(DeleteSnapshotsOption.None, cancellationToken: token))
+                {
+                    Interlocked.Increment(ref deletedBlobs);
+                    Interlocked.Add(ref deletedBytes, blob.ContentLength);
+                }
+                else Interlocked.Increment(ref skippedMissing);
+            }
+            catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status404NotFound)
+            {
+                Interlocked.Increment(ref skippedMissing);
+            }
+            catch (Exception exception)
+            {
+                if (failures.Count < 20) failures.Enqueue($"{blob.BlobName}: {exception.GetType().Name}");
+            }
+        });
+
+        var preservation = await GetPilotPreservationCountsAsync(lotKeys, cancellationToken);
+        return new RetentionPurgePilotExecutionReport(
+            manifest.RetentionDays, manifest.CutoffAt, manifest.Lots.Count, manifest.Blobs.Count,
+            manifest.Blobs.Sum(blob => blob.ContentLength), deletedBlobs, deletedBytes, skippedMissing, skippedChanged,
+            preservation.InventoryRows, preservation.LifecycleRows, preservation.VersionRows, preservation.MotivationSignals,
+            failures.OrderBy(value => value, StringComparer.Ordinal).ToArray(), manifest.ManifestSha256, ReadOnly: false);
+    }
+
+    public static RetentionPurgePilotManifestReport ToPilotManifestReport(RetentionPurgePilotManifest manifest) =>
+        new(manifest.RetentionDays, manifest.CutoffAt, manifest.RequestedLotLimit, manifest.Lots.Count, manifest.Blobs.Count,
+            manifest.Blobs.Sum(blob => blob.ContentLength), manifest.MotivationSignalsPreserved, manifest.ManifestSha256, ReadOnly: true);
+
+    private async Task<long> CountStillEligibleRetentionLotsAsync(string[] lotKeys, DateTimeOffset cutoffAt, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+        command.CommandText = """
+            select count(*)::bigint
+            from inventory_lot_lifecycle
+            where lot_key = any(@lot_keys)
+              and not is_active
+              and deactivated_at is not null
+              and deactivated_at <= @cutoff_at;
+            """;
+        AddParameter(command, "lot_keys", lotKeys);
+        AddParameter(command, "cutoff_at", cutoffAt);
+        return (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
+    }
+
+    private async Task<(long InventoryRows, long LifecycleRows, long VersionRows, long MotivationSignals)> GetPilotPreservationCountsAsync(string[] lotKeys, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+        command.CommandText = """
+            select
+                (select count(*)::bigint from auction_lots where lot_key = any(@lot_keys)),
+                (select count(*)::bigint from inventory_lot_lifecycle where lot_key = any(@lot_keys)),
+                (select count(*)::bigint from auction_lot_versions where lot_key = any(@lot_keys)),
+                (select count(*)::bigint from copart_lot_motivation_signals where lot_key = any(@lot_keys));
+            """;
+        AddParameter(command, "lot_keys", lotKeys);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
+    }
+
+    /// <summary>
     /// Reconciles PostgreSQL's raw_blob_name references without accessing Blob payloads. It is deliberately separate
     /// from the physical listing because old historical names do not use the current content-addressed path layout.
     /// </summary>
@@ -3400,6 +3572,19 @@ public sealed partial class PostgresSnapshotStore(
 
     internal static bool ShouldUploadRawSnapshot(bool snapshotVersionExists, bool reactivatingInactiveLot, bool canonicalBlobExists) =>
         !snapshotVersionExists || (reactivatingInactiveLot && !canonicalBlobExists);
+
+    internal static bool TryGetPilotLegacyBlobLotKey(
+        string blobName,
+        IReadOnlyDictionary<string, string> lotKeysBySafeIdentity,
+        out string lotKey)
+    {
+        lotKey = string.Empty;
+        if (!TryParseLegacyBlobName(blobName, out var safeIdentity) ||
+            !lotKeysBySafeIdentity.TryGetValue(safeIdentity, out var selectedLotKey) ||
+            string.IsNullOrWhiteSpace(selectedLotKey)) return false;
+        lotKey = selectedLotKey;
+        return true;
+    }
 
     private static bool TryParseContentAddressedBlobName(string blobName, out string safeLotIdentity, out string payloadHash)
     {
