@@ -1942,6 +1942,113 @@ public sealed partial class PostgresSnapshotStore(
     }
 
     /// <summary>
+    /// Enumerates Blob metadata only and matches the two known path conventions against lifecycle candidates. It is a
+    /// pre-deletion aggregate, not a destructive manifest: no Blob stream is opened and no storage mutation occurs.
+    /// </summary>
+    public async Task<RetentionCandidateBlobInventoryReport> GetRetentionCandidateBlobInventoryAsync(int retentionDays, int top, CancellationToken cancellationToken)
+    {
+        const string prefix = "snapshots/";
+        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
+        var topN = Math.Clamp(top, 1, 100);
+        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
+        var candidates = new HashSet<string>(StringComparer.Ordinal);
+
+        await using (var connection = await OpenConnectionAsync(cancellationToken))
+        await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
+        {
+            await using (var readOnly = connection.CreateCommand())
+            {
+                readOnly.Transaction = transaction;
+                readOnly.CommandText = "set transaction read only;";
+                await readOnly.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            command.CommandText = """
+                select lot_key
+                from inventory_lot_lifecycle
+                where not is_active
+                  and deactivated_at is not null
+                  and deactivated_at <= @cutoff_at;
+                """;
+            AddParameter(command, "cutoff_at", cutoffAt);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) candidates.Add(reader.GetString(0));
+            await transaction.RollbackAsync(cancellationToken);
+        }
+
+        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
+        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
+        var byLot = new Dictionary<string, PhysicalBlobLotCounter>(StringComparer.Ordinal);
+        long matchedBlobs = 0;
+        long matchedBytes = 0;
+        long legacyBlobs = 0;
+        long legacyBytes = 0;
+        long contentAddressedBlobs = 0;
+        long contentAddressedBytes = 0;
+        long unmatchedBlobs = 0;
+        long unmatchedBytes = 0;
+
+        await foreach (var page in containerClient
+            .GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, cancellationToken)
+            .AsPages(pageSizeHint: 5_000))
+        {
+            foreach (var blob in page.Values)
+            {
+                var bytes = blob.Properties.ContentLength ?? 0;
+                var parsed = TryParseContentAddressedBlobName(blob.Name, out var currentIdentity, out _)
+                    ? (Identity: currentIdentity, Legacy: false, Parsed: true)
+                    : TryParseLegacyBlobName(blob.Name, out var legacyIdentity)
+                        ? (Identity: legacyIdentity, Legacy: true, Parsed: true)
+                        : (Identity: string.Empty, Legacy: false, Parsed: false);
+
+                if (!parsed.Parsed || !candidates.Contains(parsed.Identity))
+                {
+                    unmatchedBlobs++;
+                    unmatchedBytes += bytes;
+                    continue;
+                }
+
+                matchedBlobs++;
+                matchedBytes += bytes;
+                if (parsed.Legacy)
+                {
+                    legacyBlobs++;
+                    legacyBytes += bytes;
+                }
+                else
+                {
+                    contentAddressedBlobs++;
+                    contentAddressedBytes += bytes;
+                }
+
+                if (!byLot.TryGetValue(parsed.Identity, out var lot))
+                {
+                    lot = new PhysicalBlobLotCounter();
+                    byLot.Add(parsed.Identity, lot);
+                }
+                lot.PhysicalBlobs++;
+                lot.PhysicalBytes += bytes;
+            }
+        }
+
+        var topLots = byLot
+            .OrderByDescending(pair => pair.Value.PhysicalBytes)
+            .ThenByDescending(pair => pair.Value.PhysicalBlobs)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Take(topN)
+            .Select(pair => new RetentionCandidateLotSummary(pair.Key, pair.Value.PhysicalBlobs, pair.Value.PhysicalBytes))
+            .ToArray();
+
+        return new RetentionCandidateBlobInventoryReport(
+            safeRetentionDays, cutoffAt, candidates.Count, matchedBlobs, matchedBytes,
+            legacyBlobs, legacyBytes, contentAddressedBlobs, contentAddressedBytes,
+            unmatchedBlobs, unmatchedBytes, topLots, ReadOnly: true);
+    }
+
+    /// <summary>
     /// Reconciles PostgreSQL's raw_blob_name references without accessing Blob payloads. It is deliberately separate
     /// from the physical listing because old historical names do not use the current content-addressed path layout.
     /// </summary>
@@ -3282,6 +3389,17 @@ public sealed partial class PostgresSnapshotStore(
 
         safeLotIdentity = segments[1];
         payloadHash = candidateHash.ToLowerInvariant();
+        return true;
+    }
+
+    private static bool TryParseLegacyBlobName(string blobName, out string safeLotIdentity)
+    {
+        safeLotIdentity = string.Empty;
+        var parts = blobName.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 6 || !string.Equals(parts[0], "snapshots", StringComparison.Ordinal)) return false;
+        if (parts[1].Length != 4 || parts[2].Length != 2 || parts[3].Length != 2) return false;
+        if (string.IsNullOrWhiteSpace(parts[4]) || !parts[5].EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return false;
+        safeLotIdentity = parts[4];
         return true;
     }
 

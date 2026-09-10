@@ -491,6 +491,22 @@ if (args.Contains("--blob-path-sample", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--retention-candidate-blob-inventory", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+    {
+        throw new InvalidOperationException("Retention candidate Blob inventory requires Persistence:Provider=Postgres.");
+    }
+
+    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
+    var top = Math.Clamp(builder.Configuration.GetValue<int?>("BlobAudit:TopLots") ?? 20, 1, 100);
+    var report = await postgresStore.GetRetentionCandidateBlobInventoryAsync(retentionDays, top, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
+    return;
+}
+
 if (args.Contains("--blob-reference-crosscheck", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
