@@ -43,6 +43,37 @@ public sealed class AuctionsApiCanonicalMapperTests
     }
 
     [Fact]
+    public void Maps_nested_auction_images_into_canonical_media()
+    {
+        using var document = JsonDocument.Parse("""
+        {
+          "domain_id": 1,
+          "year": 2023,
+          "manufacturer": { "name": "Honda" },
+          "model": { "name": "Odyssey" },
+          "lots": [{
+            "lot": "45891879",
+            "vin": "1TESTVIN123456789",
+            "images": [
+              { "large": "https://vis.iaai.com/resizer?imageKeys=one&width=640" },
+              { "thumb": "https://vis.iaai.com/resizer?imageKeys=two&width=320" },
+              "https://vis.iaai.com/resizer?imageKeys=three&width=640"
+            ]
+          }]
+        }
+        """);
+
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(document.RootElement, "iaai");
+        var vehicle = Assert.Single(AuctionsApiCanonicalMapper.ToAuctionVehicles(provider!));
+
+        Assert.Equal(3, vehicle.Media!.ThumbnailsCount);
+        Assert.Equal(3, vehicle.Media.Photos!.Count);
+        Assert.Contains("imageKeys=one", vehicle.Media.Photos);
+        Assert.Contains("imageKeys=two", vehicle.Media.Photos);
+        Assert.Contains("imageKeys=three", vehicle.Media.Photos);
+    }
+
+    [Fact]
     public void MapsArchivedOutcomeWithoutTreatingArchivedAsSoldByDefault()
     {
         var payload = ReadFixture("copart_archived_page1.json");
