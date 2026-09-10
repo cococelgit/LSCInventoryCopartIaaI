@@ -1787,6 +1787,41 @@ public sealed partial class PostgresSnapshotStore(
             samples);
     }
 
+    public async Task<SoldLotRetentionDryRunReport> GetSoldLotRetentionDryRunAsync(int retentionDays, CancellationToken cancellationToken)
+    {
+        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
+        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var readOnly = connection.CreateCommand())
+        {
+            readOnly.Transaction = transaction;
+            readOnly.CommandText = "set transaction read only;";
+            await readOnly.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = SoldLotRetentionDryRunSql;
+        AddParameter(command, "cutoff_at", cutoffAt);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        var report = new SoldLotRetentionDryRunReport(
+            safeRetentionDays,
+            cutoffAt,
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            reader.GetInt64(4),
+            ReadOnly: true);
+        await transaction.RollbackAsync(cancellationToken);
+        return report;
+    }
+
     public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -2998,4 +3033,26 @@ public sealed partial class PostgresSnapshotStore(
         var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
         return $"snapshots/{safeIdentity}/{payloadHash}.json";
     }
+
+    internal const string SoldLotRetentionDryRunSql = """
+        with eligible_lots as (
+            select lifecycle.lot_key
+            from inventory_lot_lifecycle lifecycle
+            where not lifecycle.is_active
+              and lifecycle.deactivated_at is not null
+              and lifecycle.deactivated_at <= @cutoff_at
+        ), eligible_versions as (
+            select versions.raw_blob_name,
+                   octet_length(versions.payload::text)::bigint as postgres_payload_bytes
+            from auction_lot_versions versions
+            join eligible_lots eligible on eligible.lot_key = versions.lot_key
+        )
+        select
+            (select count(*)::bigint from eligible_lots) as eligible_inactive_lots,
+            count(*)::bigint as eligible_versions,
+            coalesce(sum(postgres_payload_bytes), 0)::bigint as postgres_payload_bytes_recoverable,
+            count(distinct raw_blob_name)::bigint as referenced_raw_blobs_eligible,
+            coalesce(sum(postgres_payload_bytes), 0)::bigint as estimated_raw_blob_bytes_recoverable
+        from eligible_versions;
+        """;
 }
