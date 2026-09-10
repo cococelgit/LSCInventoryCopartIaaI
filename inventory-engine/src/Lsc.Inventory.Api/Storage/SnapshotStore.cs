@@ -255,7 +255,7 @@ public sealed record SoldLotRetentionDryRunReport(
     long ReferencedRawBlobsEligible,
     long? EstimatedRawBlobBytesRecoverable,
     IReadOnlyList<HistoricalLotStatusBucket> HistoricalStatusBuckets,
-    HistoricalRetentionInventoryDiagnostics HistoricalDiagnostics,
+    HistoricalRetentionInventoryDiagnostics? HistoricalDiagnostics,
     bool ReadOnly);
 
 /// <summary>
