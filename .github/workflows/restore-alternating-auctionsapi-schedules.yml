@@ -75,7 +75,7 @@ jobs:
               cron='0 0-22/2 * * *'
               is_iaai=false
             fi
-            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" --arg provider "$persistence_provider" --arg postgresHost "$persistence_postgres_host" --arg database "$persistence_database" --arg managedIdentity "$persistence_managed_identity" --arg databaseUser "$persistence_database_user" --arg runtimeName "$persistence_runtime_name" --arg runtimeObjectId "$persistence_runtime_object_id" --arg blobUrl "$blob_account_url" --arg blobContainer "$blob_container_name" --argjson isIaai "$is_iaai" --argjson removeNames '["Persistence__Provider","Persistence__PostgreSqlHost","Persistence__Database","Persistence__ManagedIdentityClientId","Persistence__DatabaseUser","Persistence__RuntimePrincipalName","Persistence__RuntimePrincipalObjectId","Persistence__RunMigrations","BlobAudit__AccountUrl","BlobAudit__ContainerName","AuctionsApi__DefaultOverlapMinutes","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__ApiKey","IaaINational__Enabled","IaaINational__RunOnStartup","IaaINational__PrimaryProvider","IaaINational__FallbackProvider","IaaINational__UpdatedWithinMinutes","IaaINational__RequireInitialImportCompleted","IaaINational__EnforceScheduleWindow","IaaINational__ScheduleIntervalHours"]' '
+            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" --arg provider "$persistence_provider" --arg postgresHost "$persistence_postgres_host" --arg database "$persistence_database" --arg managedIdentity "$persistence_managed_identity" --arg databaseUser "$persistence_database_user" --arg runtimeName "$persistence_runtime_name" --arg runtimeObjectId "$persistence_runtime_object_id" --arg blobUrl "$blob_account_url" --arg blobContainer "$blob_container_name" --argjson isIaai "$is_iaai" --argjson removeNames '["Persistence__Provider","Persistence__PostgreSqlHost","Persistence__Database","Persistence__ManagedIdentityClientId","Persistence__DatabaseUser","Persistence__RuntimePrincipalName","Persistence__RuntimePrincipalObjectId","Persistence__RunMigrations","BlobAudit__AccountUrl","BlobAudit__ContainerName","AuctionsApi__DefaultOverlapMinutes","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalShadowEnabled","AuctionsApi__CanonicalMapperEnabled","AuctionsApi__ApiKey","IaaINational__Enabled","IaaINational__RunOnStartup","IaaINational__PrimaryProvider","IaaINational__FallbackProvider","IaaINational__UpdatedWithinMinutes","IaaINational__RequireInitialImportCompleted","IaaINational__EnforceScheduleWindow","IaaINational__ScheduleIntervalHours"]' '
               .properties.template.containers[0] |= (
                 del(.imageType)
                 | if $isIaai then
@@ -101,6 +101,8 @@ jobs:
                         {name:"AuctionsApi__DefaultOverlapMinutes",value:$minutes},
                         {name:"AuctionsApi__Enabled",value:"true"},
                         {name:"AuctionsApi__AllowWrites",value:"true"},
+                        {name:"AuctionsApi__CanonicalShadowEnabled",value:"false"},
+                        {name:"AuctionsApi__CanonicalMapperEnabled",value:"true"},
                         {name:"AuctionsApi__ApiKey",value:$apiKey}
                       ]
                     + (if $isIaai then [
@@ -137,6 +139,8 @@ jobs:
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes")][0].value // ""')" = 140
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
+            test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__CanonicalShadowEnabled")][0].value // ""')" = false
+            test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__CanonicalMapperEnabled")][0].value // ""')" = true
             test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
             if [ "$job" = "$IAAI_JOB" ]; then
               test "$(echo "$json" | jq -r '.properties.template.containers[0].args | join(" ")')" = 'Lsc.Inventory.Api.dll --iaai-national'
