@@ -44,7 +44,6 @@ env:
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
   IMAGE_NAME: lsc-inventory-engine
   COPART_API_JOB_NAME: job-lsc-copart-auto-prod
-  COPART_EXCEL_JOB_NAME: job-lsc-copart-excel-prod
 
 jobs:
   promote:
@@ -69,18 +68,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          excel_image_before="$(az containerapp job show --name "$COPART_EXCEL_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
           api_job_before="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
           api_image_before="$(echo "$api_job_before" | jq -r '.properties.template.containers[0].image')"
           api_trigger_before="$(echo "$api_job_before" | jq -r '.properties.configuration.triggerType')"
           api_without_image_before="$(echo "$api_job_before" | jq -S -c '{configuration: .properties.configuration, identity: .identity, template: (.properties.template | del(.containers[0].image))}')"
-          test -n "$excel_image_before" && test "$excel_image_before" != "None"
           test -n "$api_image_before" && test "$api_image_before" != "None"
-          echo "EXCEL_IMAGE_BEFORE=$excel_image_before" >> "$GITHUB_ENV"
           echo "API_IMAGE_BEFORE=$api_image_before" >> "$GITHUB_ENV"
           echo "API_TRIGGER_BEFORE=$api_trigger_before" >> "$GITHUB_ENV"
           echo "API_WITHOUT_IMAGE_BEFORE=$api_without_image_before" >> "$GITHUB_ENV"
-          echo "Excel job remains protected: $excel_image_before"
           echo "Copart API job image before: $api_image_before"
           echo "Copart API job trigger before: $api_trigger_before"
 
@@ -132,20 +127,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          excel_image_after="$(az containerapp job show --name "$COPART_EXCEL_JOB_NAME" --resource-group "$RESOURCE_GROUP" --query 'properties.template.containers[0].image' -o tsv)"
           api_after="$(az containerapp job show --name "$COPART_API_JOB_NAME" --resource-group "$RESOURCE_GROUP" -o json)"
           api_image_after="$(echo "$api_after" | jq -r '.properties.template.containers[0].image')"
           api_trigger_after="$(echo "$api_after" | jq -r '.properties.configuration.triggerType')"
           enabled_after="$(echo "$api_after" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')"
           allow_writes_after="$(echo "$api_after" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')"
           has_key_after="$(echo "$api_after" | jq -r 'any(.properties.template.containers[0].env[]?; .name=="AuctionsApi__ApiKey" and ((.value // "") != "" or (.secretRef // "") != ""))')"
-          test "$excel_image_after" = "$EXCEL_IMAGE_BEFORE"
           test "$api_image_after" = "$COPART_API_IMAGE"
           test "$enabled_after" = "true"
           test "$allow_writes_after" = "${{ inputs.allow_auctions_writes }}"
           test "$has_key_after" = "true"
           if [[ "${{ inputs.activate_schedule }}" == "true" ]]; then test "$api_trigger_after" = "Schedule"; else test "$api_trigger_after" = "$API_TRIGGER_BEFORE"; fi
-          echo "COPART_EXCEL_UNCHANGED=true"
           echo "COPART_API_IMAGE=$api_image_after"
           echo "COPART_API_TRIGGER=$api_trigger_after"
           echo "COPART_API_WRITES=${{ inputs.allow_auctions_writes }}"
