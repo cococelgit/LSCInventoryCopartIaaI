@@ -299,6 +299,27 @@ public sealed record BlobPathSampleReport(
 public sealed record BlobPathSample(string Name, long ContentLength, DateTimeOffset? LastModified);
 
 /// <summary>
+/// Bounded, metadata-only inventory for the lifecycle candidates of a retention review. It proves the potential
+/// Blob impact by matching names to lot identities, but it is not a deletion manifest and contains no payload body.
+/// </summary>
+public sealed record RetentionCandidateBlobInventoryReport(
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    long EligibleInactiveLots,
+    long MatchedPhysicalBlobs,
+    long MatchedPhysicalBytes,
+    long LegacyMatchedPhysicalBlobs,
+    long LegacyMatchedPhysicalBytes,
+    long ContentAddressedMatchedPhysicalBlobs,
+    long ContentAddressedMatchedPhysicalBytes,
+    long UnmatchedPhysicalBlobs,
+    long UnmatchedPhysicalBytes,
+    IReadOnlyList<RetentionCandidateLotSummary> TopLots,
+    bool ReadOnly);
+
+public sealed record RetentionCandidateLotSummary(string SafeLotIdentity, long PhysicalBlobs, long PhysicalBytes);
+
+/// <summary>
 /// Read-only reconciliation between version rows and Blob references. It measures duplicate references precisely but
 /// never assumes that distinct versions of the same lot are identical payloads or safe to delete.
 /// </summary>
