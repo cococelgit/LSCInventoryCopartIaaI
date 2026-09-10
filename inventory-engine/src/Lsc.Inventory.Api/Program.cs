@@ -451,6 +451,16 @@ if (args.Contains("--validation-report", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--sold-lot-retention-dry-run", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 30, 1, 3650);
+    var report = await store.GetSoldLotRetentionDryRunAsync(retentionDays, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
+    return;
+}
+
 if (args.Contains("--copart-publication-report", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

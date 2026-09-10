@@ -54,6 +54,7 @@ public interface IInventorySnapshotStore
     Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken);
+    Task<SoldLotRetentionDryRunReport> GetSoldLotRetentionDryRunAsync(int retentionDays, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<SellerAuditReport> GetSellerAuditReportAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
@@ -240,6 +241,20 @@ public sealed record CopartAuctionHistoryReport(
     IReadOnlyDictionary<string, long> AttemptsByOutcome,
     IReadOnlyDictionary<string, long> AttemptsByEvidenceLevel,
     IReadOnlyDictionary<string, long> SignalsByLevel);
+
+/// <summary>
+/// Aggregate-only, read-only estimate for a future retention run. It does not list lot identifiers,
+/// access Blob payloads, archive records, or modify PostgreSQL.
+/// </summary>
+public sealed record SoldLotRetentionDryRunReport(
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    long EligibleInactiveLots,
+    long EligibleVersions,
+    long PostgresPayloadBytesRecoverable,
+    long ReferencedRawBlobsEligible,
+    long EstimatedRawBlobBytesRecoverable,
+    bool ReadOnly);
 
 public sealed record InventoryBrowseQuery(
     string? Platform,
