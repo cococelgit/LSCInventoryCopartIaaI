@@ -22,16 +22,24 @@ env:
   AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
-  TEMPORARY_JOB: job-lsc-copart-catchup-prod
-  STORAGE_ACCOUNT: stlscinvprodeus2
-  STORAGE_CONTAINER: raw-apibara
+  API_NAME: ca-lsc-inventory-api-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
 
 jobs:
   audit:
-    name: Enumerate Blob metadata through isolated read-only job
+    name: Enumerate Blob metadata through disposable read-only job
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 70
     steps:
+      - name: Guard explicit read-only confirmation
+        shell: bash
+        run: test '${{ inputs.confirmation }}' = 'RUN_READ_ONLY_BLOB_AUDIT'
+
+      - name: Checkout exact audit source
+        uses: actions/checkout@v4
+
       - name: Login to Azure through federated identity
         uses: azure/login@v2
         with:
@@ -42,54 +50,86 @@ jobs:
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
 
-      - name: Run temporary physical metadata inventory and restore job template
+      - name: Capture read-only job configuration from Production API
         shell: bash
         run: |
           set -euo pipefail
-          test '${{ inputs.confirmation }}' = 'RUN_READ_ONLY_BLOB_AUDIT'
+          app_json="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_NAME" -o json)"
+          identity_id="$(jq -r '.identity.userAssignedIdentities | keys[0] // empty' <<<"$app_json")"
+          environment_id="$(jq -r '.properties.environmentId // empty' <<<"$app_json")"
+          app_env() { jq -r --arg name "$1" '.properties.template.containers[0].env[]? | select(.name == $name) | (.value // empty)' <<<"$app_json"; }
+          database_host="$(app_env Persistence__PostgreSqlHost)"
+          database_name="$(app_env Persistence__Database)"
+          identity_client_id="$(app_env Persistence__ManagedIdentityClientId)"
+          database_user="$(app_env Persistence__DatabaseUser)"
+          blob_url="$(app_env BlobAudit__AccountUrl)"
+          blob_container="$(app_env BlobAudit__ContainerName)"
+          for value in "$identity_id" "$environment_id" "$database_host" "$database_name" "$identity_client_id" "$database_user" "$blob_url" "$blob_container"; do test -n "$value"; done
+          {
+            echo "API_UAI_RESOURCE_ID=$identity_id"
+            echo "CONTAINER_ENVIRONMENT_ID=$environment_id"
+            echo "POSTGRES_HOST=$database_host"
+            echo "POSTGRES_DATABASE=$database_name"
+            echo "POSTGRES_CLIENT_ID=$identity_client_id"
+            echo "POSTGRES_DATABASE_USER=$database_user"
+            echo "BLOB_ACCOUNT_URL=$blob_url"
+            echo "BLOB_CONTAINER_NAME=$blob_container"
+          } >> "$GITHUB_ENV"
+
+      - name: Build immutable read-only audit image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="blob-physical-readonly-${GITHUB_SHA}"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$image_tag" --file inventory-engine/Dockerfile inventory-engine
+          echo "AUDIT_IMAGE=$ACR_SERVER/$IMAGE_NAME:$image_tag" >> "$GITHUB_ENV"
+
+      - name: Run disposable physical metadata inventory
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p report
-          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMPORARY_JOB?api-version=2024-03-01"
-          current="$(az rest --method get --uri "$uri" -o json)"
-          trigger="$(echo "$current" | jq -r '.properties.configuration.triggerType')"
-          active="$(az containerapp job execution list --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
-          test "$trigger" = 'Manual'
-          test "$active" = 0
-          echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-before.json
+          job="job-lsc-blob-audit-${GITHUB_RUN_NUMBER}"
+          echo "BLOB_AUDIT_JOB=$job" >> "$GITHUB_ENV"
+          az containerapp job create \
+            -g "$RESOURCE_GROUP" -n "$job" \
+            --environment "$CONTAINER_ENVIRONMENT_ID" \
+            --trigger-type Manual \
+            --replica-timeout 3000 \
+            --parallelism 1 \
+            --replica-completion-count 1 \
+            --image "$AUDIT_IMAGE" \
+            --registry-server "$ACR_SERVER" \
+            --registry-identity "$API_UAI_RESOURCE_ID" \
+            --mi-user-assigned "$API_UAI_RESOURCE_ID" \
+            --command dotnet \
+            --args Lsc.Inventory.Api.dll --physical-blob-inventory \
+            --env-vars \
+              "Persistence__Provider=Postgres" \
+              "Persistence__PostgreSqlHost=$POSTGRES_HOST" \
+              "Persistence__Database=$POSTGRES_DATABASE" \
+              "Persistence__ManagedIdentityClientId=$POSTGRES_CLIENT_ID" \
+              "Persistence__DatabaseUser=$POSTGRES_DATABASE_USER" \
+              "Persistence__RunMigrations=false" \
+              "Sync__Enabled=false" \
+              "BlobAudit__AccountUrl=$BLOB_ACCOUNT_URL" \
+              "BlobAudit__ContainerName=$BLOB_CONTAINER_NAME" \
+            --only-show-errors >/dev/null
+          az containerapp job start -g "$RESOURCE_GROUP" -n "$job" --only-show-errors >/dev/null
 
-          restore_body="$(echo "$current" | jq '{properties:{template:{containers:[.properties.template.containers[0] | del(.imageType)]}}}')"
-          restore() {
-            az rest --method patch --uri "$uri" --body "$restore_body" --output none
-          }
-          trap restore EXIT
-
-          script_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/readonly_blob_inventory.sh"
-          audit_command="curl -fsSL '$script_url' -o /tmp/lsc-blob-audit.sh && BLOB_ACCOUNT='$STORAGE_ACCOUNT' BLOB_CONTAINER='$STORAGE_CONTAINER' sh /tmp/lsc-blob-audit.sh"
-          body="$(echo "$current" | jq --arg command "$audit_command" '
-            .properties.template.containers[0]
-            |= (del(.imageType) | .command = ["/bin/sh"] | .args = ["-c", $command])
-            | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
-          az rest --method patch --uri "$uri" --body "$body" --output none
-
-          execution="$(az containerapp job start --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
-          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
-          test -n "$execution_name"
-          echo "$execution" | jq . > report/execution-start.json
-          echo "BLOB_AUDIT_EXECUTION=$execution_name" >> "$GITHUB_ENV"
-
-          deadline=$((SECONDS + 2700))
+          deadline=$((SECONDS + 3300))
+          status="Unknown"
           while [ "$SECONDS" -lt "$deadline" ]; do
-            status_json="$(az containerapp job execution show --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution_name" -o json)"
-            status="$(echo "$status_json" | jq -r '.properties.status // .properties.runningState // "Unknown"')"
-            echo "Blob metadata audit status: $status"
+            execution="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$job" --query '[0].name' -o tsv 2>/dev/null || true)"
+            status="$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$job" --query '[0].properties.status' -o tsv 2>/dev/null || true)"
+            echo "Blob physical audit execution=$execution status=$status"
             case "$status" in
-              Succeeded|Failed|Canceled)
-                echo "$status_json" | jq . > report/execution-final.json
-                replicas="$(az containerapp job replica list --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" -o json || true)"
-                echo "$replicas" | jq . > report/replicas.json
-                replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
-                container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+              Succeeded|Failed|Stopped|Canceled)
+                az containerapp job execution show -g "$RESOURCE_GROUP" -n "$job" --job-execution-name "$execution" -o json > report/execution-final.json || true
+                replica="$(az containerapp job replica list -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].name' -o tsv 2>/dev/null || true)"
+                container="$(az containerapp job replica list -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --query '[0].properties.containers[0].name' -o tsv 2>/dev/null || true)"
                 if [ -n "$replica" ] && [ -n "$container" ]; then
-                  az containerapp job logs show --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" --replica "$replica" --container "$container" --tail 300 --format text | tee report/blob-physical-inventory.log || true
+                  az containerapp job logs show -g "$RESOURCE_GROUP" -n "$job" --execution "$execution" --replica "$replica" --container "$container" --tail 500 --format text | tee report/blob-physical-inventory.log || true
                 fi
                 test "$status" = Succeeded
                 break
@@ -99,18 +139,14 @@ jobs:
           done
           test "$SECONDS" -lt "$deadline"
 
-      - name: Verify temporary job was restored
+      - name: Remove disposable audit job
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMPORARY_JOB?api-version=2024-03-01"
-          current="$(az rest --method get --uri "$uri" -o json)"
-          echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-after.json
-          diff -u report/template-before.json report/template-after.json
-          trigger="$(echo "$current" | jq -r '.properties.configuration.triggerType')"
-          test "$trigger" = 'Manual'
-          echo 'BLOB_AUDIT_TEMPLATE_RESTORED=true'
+          if [ -n "${BLOB_AUDIT_JOB:-}" ]; then
+            az containerapp job delete -g "$RESOURCE_GROUP" -n "$BLOB_AUDIT_JOB" --yes --only-show-errors >/dev/null || true
+          fi
 
       - name: Upload read-only evidence
         if: always()
