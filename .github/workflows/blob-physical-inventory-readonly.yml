@@ -68,13 +68,9 @@ jobs:
           mkdir -p diagnostics
           raw_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/readonly_blob_inventory.sh"
           command="sh -c \"curl -fsSL '$raw_url' -o /tmp/lsc-blob-audit.sh && BLOB_ACCOUNT='$STORAGE_ACCOUNT' BLOB_CONTAINER='$STORAGE_CONTAINER' sh /tmp/lsc-blob-audit.sh\""
-          az containerapp exec \
-            -g "$RESOURCE_GROUP" \
-            -n "$INVENTORY_API_APP" \
-            --revision "$REVISION" \
-            --replica "$REPLICA" \
-            --container "$CONTAINER" \
-            --command "$command" | tee diagnostics/blob-physical-inventory.txt
+          # Azure CLI requires a TTY for Container Apps exec; `script` supplies one without changing the container.
+          exec_line="az containerapp exec -g '$RESOURCE_GROUP' -n '$INVENTORY_API_APP' --revision '$REVISION' --replica '$REPLICA' --container '$CONTAINER' --command \"$command\""
+          script -qec "$exec_line" /dev/null | tee diagnostics/blob-physical-inventory.txt
 
       - name: Upload read-only inventory evidence
         if: always()
