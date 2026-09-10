@@ -261,7 +261,51 @@ public static class AuctionsApiCanonicalMapper
                 BuyNowUsd = lot.BuyNow?.Value,
                 SalePriceUsd = lot.SalePrice?.Value ?? lot.FinalBid?.Value,
             },
+            Media = MapMedia(lot.Raw, provider.Raw),
             RawSource = provider.Raw,
         }).ToArray();
+    }
+
+    private static MediaInfo? MapMedia(params JsonElement[] rows)
+    {
+        var urls = new List<string>();
+        foreach (var row in rows)
+        {
+            var images = At(row, "images");
+            if (images is null) continue;
+            CollectImageUrls(images.Value, urls);
+        }
+
+        var photos = urls
+            .Where(static value => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        return photos.Length == 0 ? null : new MediaInfo
+        {
+            ThumbnailsCount = photos.Length,
+            Photos = photos,
+        };
+    }
+
+    private static void CollectImageUrls(JsonElement value, ICollection<string> urls)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.String:
+                var candidate = value.GetString();
+                if (!string.IsNullOrWhiteSpace(candidate)) urls.Add(candidate);
+                return;
+            case JsonValueKind.Array:
+                foreach (var item in value.EnumerateArray()) CollectImageUrls(item, urls);
+                return;
+            case JsonValueKind.Object:
+                foreach (var property in new[] { "big", "normal", "small", "exterior", "interior", "url", "src", "large", "thumb" })
+                {
+                    if (value.TryGetProperty(property, out var nested)) CollectImageUrls(nested, urls);
+                }
+                return;
+        }
     }
 }
