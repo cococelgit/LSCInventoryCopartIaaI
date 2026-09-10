@@ -67,10 +67,22 @@ jobs:
           set -euo pipefail
           mkdir -p diagnostics
           raw_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/readonly_blob_inventory.sh"
-          command="curl -fsSL '$raw_url' -o /tmp/lsc-blob-audit.sh && BLOB_ACCOUNT='$STORAGE_ACCOUNT' BLOB_CONTAINER='$STORAGE_CONTAINER' sh /tmp/lsc-blob-audit.sh; exit"
+          command="curl -fsSL '$raw_url' -o /tmp/lsc-blob-audit.sh && BLOB_ACCOUNT='$STORAGE_ACCOUNT' BLOB_CONTAINER='$STORAGE_CONTAINER' sh /tmp/lsc-blob-audit.sh > /tmp/lsc-blob-audit-output.txt 2>&1; exit"
           # Azure CLI requires a TTY and accepts one command argument; feed the shell through the allocated TTY.
           exec_line="az containerapp exec -g '$RESOURCE_GROUP' -n '$INVENTORY_API_APP' --revision '$REVISION' --replica '$REPLICA' --container '$CONTAINER' --command sh"
-          printf '%s\n' "$command" | script -qec "$exec_line" /dev/null | tee diagnostics/blob-physical-inventory.txt
+          printf '%s\n' "$command" | script -qec "$exec_line" /dev/null | tee diagnostics/blob-physical-inventory-exec.txt
+
+      - name: Retrieve persisted read-only summary from the same replica
+        if: always()
+        shell: bash
+        env:
+          REVISION: ${{ steps.target.outputs.revision }}
+          REPLICA: ${{ steps.target.outputs.replica }}
+          CONTAINER: ${{ steps.target.outputs.container }}
+        run: |
+          set -euo pipefail
+          exec_line="az containerapp exec -g '$RESOURCE_GROUP' -n '$INVENTORY_API_APP' --revision '$REVISION' --replica '$REPLICA' --container '$CONTAINER' --command sh"
+          printf '%s\n' 'cat /tmp/lsc-blob-audit-output.txt; exit' | script -qec "$exec_line" /dev/null | tee diagnostics/blob-physical-inventory.txt
 
       - name: Upload read-only inventory evidence
         if: always()
