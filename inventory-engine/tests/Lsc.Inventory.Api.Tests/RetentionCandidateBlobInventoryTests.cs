@@ -18,4 +18,13 @@ public sealed class RetentionCandidateBlobInventoryTests
         Assert.Equal(1024, report.MatchedPhysicalBytes);
         Assert.Single(report.TopLots);
     }
+
+    [Theory]
+    [InlineData("copart:64206406", "copart-64206406")]
+    [InlineData("iaai:12345678", "iaai-12345678")]
+    [InlineData("copart-41621576", "copart-41621576")]
+    public void SafeBlobIdentity_NormalizesLifecycleKeysToBlobPathConvention(string lotKey, string expected)
+    {
+        Assert.Equal(expected, PostgresSnapshotStore.ToSafeBlobIdentity(lotKey));
+    }
 }
