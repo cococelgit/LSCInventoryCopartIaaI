@@ -1810,17 +1810,15 @@ public sealed partial class PostgresSnapshotStore(
 
         long eligibleInactiveLots;
         long eligibleVersions;
-        long postgresPayloadBytesRecoverable;
+        long? postgresPayloadBytesRecoverable = null;
         long referencedRawBlobsEligible;
-        long estimatedRawBlobBytesRecoverable;
+        long? estimatedRawBlobBytesRecoverable = null;
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             await reader.ReadAsync(cancellationToken);
             eligibleInactiveLots = reader.GetInt64(0);
             eligibleVersions = reader.GetInt64(1);
-            postgresPayloadBytesRecoverable = reader.GetInt64(2);
-            referencedRawBlobsEligible = reader.GetInt64(3);
-            estimatedRawBlobBytesRecoverable = reader.GetInt64(4);
+            referencedRawBlobsEligible = reader.GetInt64(2);
         }
 
         var historicalStatusBuckets = new List<HistoricalLotStatusBucket>();
@@ -1838,7 +1836,7 @@ public sealed partial class PostgresSnapshotStore(
                     reader.GetString(1),
                     reader.GetInt64(2),
                     reader.GetInt64(3),
-                    reader.GetInt64(4),
+                    reader.IsDBNull(4) ? null : reader.GetInt64(4),
                     reader.GetInt64(5)));
             }
         }
@@ -3341,17 +3339,14 @@ public sealed partial class PostgresSnapshotStore(
               and lifecycle.deactivated_at is not null
               and lifecycle.deactivated_at <= @cutoff_at
         ), eligible_versions as (
-            select versions.raw_blob_name,
-                   octet_length(versions.payload::text)::bigint as postgres_payload_bytes
+            select versions.raw_blob_name
             from auction_lot_versions versions
             join eligible_lots eligible on eligible.lot_key = versions.lot_key
         )
         select
             (select count(*)::bigint from eligible_lots) as eligible_inactive_lots,
             count(*)::bigint as eligible_versions,
-            coalesce(sum(postgres_payload_bytes), 0)::bigint as postgres_payload_bytes_recoverable,
-            count(distinct raw_blob_name)::bigint as referenced_raw_blobs_eligible,
-            coalesce(sum(postgres_payload_bytes), 0)::bigint as estimated_raw_blob_bytes_recoverable
+            count(distinct raw_blob_name)::bigint as referenced_raw_blobs_eligible
         from eligible_versions;
         """;
 
@@ -3367,8 +3362,7 @@ public sealed partial class PostgresSnapshotStore(
             select lots.lot_status,
                    lots.lot_sub_status,
                    versions.lot_key,
-                   versions.raw_blob_name,
-                   octet_length(versions.payload::text)::bigint as postgres_payload_bytes
+                   versions.raw_blob_name
             from historical_lots lots
             join auction_lot_versions versions on versions.lot_key = lots.lot_key
         )
@@ -3376,11 +3370,11 @@ public sealed partial class PostgresSnapshotStore(
                lot_sub_status,
                count(distinct lot_key)::bigint as lots,
                count(*)::bigint as versions,
-               coalesce(sum(postgres_payload_bytes), 0)::bigint as postgres_payload_bytes,
+               null::bigint as postgres_payload_bytes,
                count(distinct raw_blob_name)::bigint as referenced_raw_blobs
         from historical_versions
         group by lot_status, lot_sub_status
-        order by postgres_payload_bytes desc, lot_status, lot_sub_status
+        order by versions desc, lot_status, lot_sub_status
         limit 100;
         """;
 

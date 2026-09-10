@@ -251,9 +251,9 @@ public sealed record SoldLotRetentionDryRunReport(
     DateTimeOffset CutoffAt,
     long EligibleInactiveLots,
     long EligibleVersions,
-    long PostgresPayloadBytesRecoverable,
+    long? PostgresPayloadBytesRecoverable,
     long ReferencedRawBlobsEligible,
-    long EstimatedRawBlobBytesRecoverable,
+    long? EstimatedRawBlobBytesRecoverable,
     IReadOnlyList<HistoricalLotStatusBucket> HistoricalStatusBuckets,
     HistoricalRetentionInventoryDiagnostics HistoricalDiagnostics,
     bool ReadOnly);
@@ -326,7 +326,7 @@ public sealed record HistoricalLotStatusBucket(
     string LotSubStatus,
     long Lots,
     long Versions,
-    long PostgresPayloadBytes,
+    long? PostgresPayloadBytes,
     long ReferencedRawBlobs);
 
 /// <summary>
