@@ -183,11 +183,19 @@ public sealed partial class PostgresSnapshotStore(
         vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
-
-        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
-
+        var blobName = BuildBlobName(identity, payloadHash);
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        var snapshotVersionExists = false;
+        await using (var existing = connection.CreateCommand())
+        {
+            existing.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            existing.CommandText = "select exists(select 1 from auction_lot_versions where lot_key = @lot_key and payload_hash = @payload_hash);";
+            AddParameter(existing, "lot_key", identity);
+            AddParameter(existing, "payload_hash", payloadHash);
+            snapshotVersionExists = (bool)(await existing.ExecuteScalarAsync(cancellationToken) ?? false);
+        }
+        if (!snapshotVersionExists)
+            await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
@@ -309,7 +317,7 @@ public sealed partial class PostgresSnapshotStore(
         vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
         var policyVersion = LscScoringPolicy.ResolveVersion(vehicle.Platform);
         var scoreInputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
         var scoringDuration = TimeSpan.Zero;
@@ -614,7 +622,7 @@ public sealed partial class PostgresSnapshotStore(
         var enriched = vehicle with { AdditionalData = additional };
         var rawJson = JsonSerializer.Serialize(enriched);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
 
         await EnsureSchemaAsync(cancellationToken);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
@@ -754,7 +762,7 @@ public sealed partial class PostgresSnapshotStore(
         var observedAtUtc = expectedObservedAt.ToUniversalTime();
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
         await EnsureSchemaAsync(cancellationToken);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -853,7 +861,7 @@ public sealed partial class PostgresSnapshotStore(
         var observedAtUtc = expectedObservedAt.ToUniversalTime();
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAtUtc, payloadHash);
+        var blobName = BuildBlobName(identity, payloadHash);
         await EnsureSchemaAsync(cancellationToken);
         await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -1777,6 +1785,95 @@ public sealed partial class PostgresSnapshotStore(
             auctionDatePresent,
             lotsWithPhotos,
             samples);
+    }
+
+    public async Task<SoldLotRetentionDryRunReport> GetSoldLotRetentionDryRunAsync(int retentionDays, CancellationToken cancellationToken)
+    {
+        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
+        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var readOnly = connection.CreateCommand())
+        {
+            readOnly.Transaction = transaction;
+            readOnly.CommandText = "set transaction read only;";
+            await readOnly.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = SoldLotRetentionDryRunSql;
+        AddParameter(command, "cutoff_at", cutoffAt);
+
+        long eligibleInactiveLots;
+        long eligibleVersions;
+        long postgresPayloadBytesRecoverable;
+        long referencedRawBlobsEligible;
+        long estimatedRawBlobBytesRecoverable;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            await reader.ReadAsync(cancellationToken);
+            eligibleInactiveLots = reader.GetInt64(0);
+            eligibleVersions = reader.GetInt64(1);
+            postgresPayloadBytesRecoverable = reader.GetInt64(2);
+            referencedRawBlobsEligible = reader.GetInt64(3);
+            estimatedRawBlobBytesRecoverable = reader.GetInt64(4);
+        }
+
+        var historicalStatusBuckets = new List<HistoricalLotStatusBucket>();
+        await using (var statusCommand = connection.CreateCommand())
+        {
+            statusCommand.Transaction = transaction;
+            statusCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            statusCommand.CommandText = HistoricalLotStatusInventorySql;
+            AddParameter(statusCommand, "cutoff_at", cutoffAt);
+            await using var reader = await statusCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                historicalStatusBuckets.Add(new HistoricalLotStatusBucket(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt64(2),
+                    reader.GetInt64(3),
+                    reader.GetInt64(4),
+                    reader.GetInt64(5)));
+            }
+        }
+
+        HistoricalRetentionInventoryDiagnostics historicalDiagnostics;
+        await using (var diagnosticCommand = connection.CreateCommand())
+        {
+            diagnosticCommand.Transaction = transaction;
+            diagnosticCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            diagnosticCommand.CommandText = HistoricalRetentionDiagnosticsSql;
+            AddParameter(diagnosticCommand, "cutoff_at", cutoffAt);
+            await using var reader = await diagnosticCommand.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            historicalDiagnostics = new HistoricalRetentionInventoryDiagnostics(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                ReadNullableDateTimeOffset(reader, 3),
+                ReadNullableDateTimeOffset(reader, 4),
+                reader.GetInt64(5),
+                reader.GetInt64(6));
+        }
+
+        var report = new SoldLotRetentionDryRunReport(
+            safeRetentionDays,
+            cutoffAt,
+            eligibleInactiveLots,
+            eligibleVersions,
+            postgresPayloadBytesRecoverable,
+            referencedRawBlobsEligible,
+            estimatedRawBlobBytesRecoverable,
+            historicalStatusBuckets,
+            historicalDiagnostics,
+            ReadOnly: true);
+        await transaction.RollbackAsync(cancellationToken);
+        return report;
     }
 
     public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
@@ -2985,9 +3082,75 @@ public sealed partial class PostgresSnapshotStore(
         vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
         vehicle.LotNumber?.Trim() ?? vehicle.Vin?.Trim() ?? throw new InvalidOperationException("Apibara vehicle has neither lot number nor VIN."));
 
-    private static string BuildBlobName(string identity, DateTimeOffset observedAt, string payloadHash)
+    internal static string BuildBlobName(string identity, string payloadHash)
     {
         var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
-        return $"snapshots/{observedAt:yyyy/MM/dd}/{safeIdentity}/{observedAt:HHmmssfff}-{payloadHash[..12]}.json";
+        return $"snapshots/{safeIdentity}/{payloadHash}.json";
     }
+
+    internal const string SoldLotRetentionDryRunSql = """
+        with eligible_lots as (
+            select lifecycle.lot_key
+            from inventory_lot_lifecycle lifecycle
+            where not lifecycle.is_active
+              and lifecycle.deactivated_at is not null
+              and lifecycle.deactivated_at <= @cutoff_at
+        ), eligible_versions as (
+            select versions.raw_blob_name,
+                   octet_length(versions.payload::text)::bigint as postgres_payload_bytes
+            from auction_lot_versions versions
+            join eligible_lots eligible on eligible.lot_key = versions.lot_key
+        )
+        select
+            (select count(*)::bigint from eligible_lots) as eligible_inactive_lots,
+            count(*)::bigint as eligible_versions,
+            coalesce(sum(postgres_payload_bytes), 0)::bigint as postgres_payload_bytes_recoverable,
+            count(distinct raw_blob_name)::bigint as referenced_raw_blobs_eligible,
+            coalesce(sum(postgres_payload_bytes), 0)::bigint as estimated_raw_blob_bytes_recoverable
+        from eligible_versions;
+        """;
+
+    internal const string HistoricalLotStatusInventorySql = """
+        with historical_lots as (
+            select lots.lot_key,
+                   coalesce(nullif(trim(lots.lot_status), ''), '(empty)') as lot_status,
+                   coalesce(nullif(trim(lots.lot_sub_status), ''), '(empty)') as lot_sub_status
+            from auction_lots lots
+            where lots.auction_at is not null
+              and lots.auction_at <= @cutoff_at
+        ), historical_versions as (
+            select lots.lot_status,
+                   lots.lot_sub_status,
+                   versions.lot_key,
+                   versions.raw_blob_name,
+                   octet_length(versions.payload::text)::bigint as postgres_payload_bytes
+            from historical_lots lots
+            join auction_lot_versions versions on versions.lot_key = lots.lot_key
+        )
+        select lot_status,
+               lot_sub_status,
+               count(distinct lot_key)::bigint as lots,
+               count(*)::bigint as versions,
+               coalesce(sum(postgres_payload_bytes), 0)::bigint as postgres_payload_bytes,
+               count(distinct raw_blob_name)::bigint as referenced_raw_blobs
+        from historical_versions
+        group by lot_status, lot_sub_status
+        order by postgres_payload_bytes desc, lot_status, lot_sub_status
+        limit 100;
+        """;
+
+    internal const string HistoricalRetentionDiagnosticsSql = """
+        select
+            (select count(*)::bigint from auction_lots) as total_lots,
+            (select count(*)::bigint from auction_lot_versions) as total_versions,
+            count(*) filter (where lots.auction_at is not null)::bigint as lots_with_auction_date,
+            min(lots.auction_at) as minimum_auction_at,
+            max(lots.auction_at) as maximum_auction_at,
+            count(*) filter (where lots.auction_at <= @cutoff_at)::bigint as lots_auctioned_before_cutoff,
+            (select count(*)::bigint
+             from auction_lot_versions versions
+             join auction_lots lots_before_cutoff on lots_before_cutoff.lot_key = versions.lot_key
+             where lots_before_cutoff.auction_at <= @cutoff_at) as versions_for_lots_auctioned_before_cutoff
+        from auction_lots lots;
+        """;
 }

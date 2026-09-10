@@ -18,4 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Lsc.Inventory.Api/Lsc.Inventory.Api.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="Fixtures/**/*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

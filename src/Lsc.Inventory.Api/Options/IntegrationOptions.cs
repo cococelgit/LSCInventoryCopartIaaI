@@ -50,6 +50,12 @@ public sealed class AuctionsApiOptions
     /// <summary>Second gate: even with a valid token, canonical writes stay disabled until explicitly approved.</summary>
     public bool AllowWrites { get; init; }
 
+    /// <summary>When enabled, compares the canonical mapper with the legacy projection without changing writes.</summary>
+    public bool CanonicalShadowEnabled { get; init; }
+
+    /// <summary>When enabled, processors may use the canonical projection; false preserves the legacy path.</summary>
+    public bool CanonicalMapperEnabled { get; init; }
+
     public string ApiKey { get; init; } = string.Empty;
 
     [Range(1, 1000)]

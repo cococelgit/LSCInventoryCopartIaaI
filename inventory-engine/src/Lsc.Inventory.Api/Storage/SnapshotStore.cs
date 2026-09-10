@@ -54,6 +54,7 @@ public interface IInventorySnapshotStore
     Task FinalizeCopartAuctionAttemptsAsync(string snapshotSha256, DateTimeOffset finalizedAt, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken);
+    Task<SoldLotRetentionDryRunReport> GetSoldLotRetentionDryRunAsync(int retentionDays, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<SellerAuditReport> GetSellerAuditReportAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
@@ -240,6 +241,46 @@ public sealed record CopartAuctionHistoryReport(
     IReadOnlyDictionary<string, long> AttemptsByOutcome,
     IReadOnlyDictionary<string, long> AttemptsByEvidenceLevel,
     IReadOnlyDictionary<string, long> SignalsByLevel);
+
+/// <summary>
+/// Aggregate-only, read-only estimate for a future retention run. It does not list lot identifiers,
+/// access Blob payloads, archive records, or modify PostgreSQL.
+/// </summary>
+public sealed record SoldLotRetentionDryRunReport(
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    long EligibleInactiveLots,
+    long EligibleVersions,
+    long PostgresPayloadBytesRecoverable,
+    long ReferencedRawBlobsEligible,
+    long EstimatedRawBlobBytesRecoverable,
+    IReadOnlyList<HistoricalLotStatusBucket> HistoricalStatusBuckets,
+    HistoricalRetentionInventoryDiagnostics HistoricalDiagnostics,
+    bool ReadOnly);
+
+/// <summary>
+/// Historical inventory grouped by the source-provided lot outcome. These buckets are review data,
+/// not purge instructions: only an approved terminal status may later become eligible for deletion.
+/// </summary>
+public sealed record HistoricalLotStatusBucket(
+    string LotStatus,
+    string LotSubStatus,
+    long Lots,
+    long Versions,
+    long PostgresPayloadBytes,
+    long ReferencedRawBlobs);
+
+/// <summary>
+/// Aggregate coverage checks for the historical inventory query. No lot identifiers or payloads are exposed.
+/// </summary>
+public sealed record HistoricalRetentionInventoryDiagnostics(
+    long TotalLots,
+    long TotalVersions,
+    long LotsWithAuctionDate,
+    DateTimeOffset? MinimumAuctionAt,
+    DateTimeOffset? MaximumAuctionAt,
+    long LotsAuctionedBeforeCutoff,
+    long VersionsForLotsAuctionedBeforeCutoff);
 
 public sealed record InventoryBrowseQuery(
     string? Platform,
