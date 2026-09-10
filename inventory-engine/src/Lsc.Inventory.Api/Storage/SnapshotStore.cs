@@ -289,6 +289,25 @@ public sealed record PhysicalBlobLotSummary(
     long IdenticalHashExcessBytes);
 
 /// <summary>
+/// Read-only reconciliation between version rows and Blob references. It measures duplicate references precisely but
+/// never assumes that distinct versions of the same lot are identical payloads or safe to delete.
+/// </summary>
+public sealed record BlobReferenceCrosscheckReport(
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    long VersionRows,
+    long DistinctLots,
+    long DistinctReferencedBlobs,
+    long AdditionalVersionReferencesToSameBlob,
+    long ReferencedPostgresPayloadBytes,
+    long EligibleInactiveLots,
+    long EligibleVersionRows,
+    long EligibleDistinctReferencedBlobs,
+    long EligiblePostgresPayloadBytes,
+    IReadOnlyList<string> RawBlobNameSamples,
+    bool ReadOnly);
+
+/// <summary>
 /// Historical inventory grouped by the source-provided lot outcome. These buckets are review data,
 /// not purge instructions: only an approved terminal status may later become eligible for deletion.
 /// </summary>

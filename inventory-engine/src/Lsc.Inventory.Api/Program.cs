@@ -476,6 +476,21 @@ if (args.Contains("--physical-blob-inventory", StringComparer.OrdinalIgnoreCase)
     return;
 }
 
+if (args.Contains("--blob-reference-crosscheck", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+    {
+        throw new InvalidOperationException("Blob reference crosscheck requires Persistence:Provider=Postgres.");
+    }
+
+    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 30, 1, 3650);
+    var report = await postgresStore.GetBlobReferenceCrosscheckAsync(retentionDays, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
+    return;
+}
+
 if (args.Contains("--copart-publication-report", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
