@@ -5,6 +5,7 @@ using Lsc.Inventory.Api.Options;
 using Lsc.Inventory.Api.Services;
 using Lsc.Inventory.Api.Storage;
 using Microsoft.Extensions.Options;
+using System.Runtime.CompilerServices;
 
 namespace Lsc.Inventory.Api.Workers;
 
@@ -80,60 +81,77 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         try
         {
             var minutes = Math.Clamp(_options.DefaultOverlapMinutes, 1, 4320);
-            var activeWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: false, cancellationToken);
-            pages += activeWindow.Pages;
-            requests += activeWindow.Requests;
-            foreach (var vehicle in MapRows(activeWindow.Rows, normalizedPlatform))
+            await foreach (var activePage in ReadWindowPagesAsync(normalizedPlatform, minutes, archived: false, cancellationToken).WithCancellation(cancellationToken))
             {
-                if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
-                if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
+                pages++;
+                requests++;
+                var activeVehicles = _options.CanonicalMapperEnabled
+                    ? MapRowsCanonical(activePage.Rows, normalizedPlatform)
+                    : MapRows(activePage.Rows, normalizedPlatform);
+                foreach (var vehicle in activeVehicles)
                 {
-                    failures.Add("changed:missing-lot");
-                    continue;
-                }
-                changed++;
-                var lotKey = $"{normalizedPlatform}:{vehicle.LotNumber.Trim()}";
-                var observedAt = DateTimeOffset.UtcNow;
-                var ingested = await canonicalPipeline.ProcessAsync(vehicle, observedAt, cancellationToken, runId, persist: persist);
-                foreach (var flag in ingested.Eligibility.Flags)
-                    eligibilityFlagCounts[flag.Code] = eligibilityFlagCounts.TryGetValue(flag.Code, out var current) ? current + 1 : 1;
-                if (!ingested.Loaded)
-                {
-                    if (ingested.Quarantined) quarantined++;
-                    else if (ingested.Discarded) discarded++;
+                    // Apply the requested observation cap before shadow comparison as well as before ingestion.
+                    // Otherwise the comparer can log an extra row while ChangedObserved remains capped.
+                    if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
+                    if (_options.CanonicalShadowEnabled)
+                        LogCanonicalShadowComparison(vehicle, normalizedPlatform);
+                    if (string.IsNullOrWhiteSpace(vehicle.LotNumber))
+                    {
+                        failures.Add("changed:missing-lot");
+                        continue;
+                    }
+                    changed++;
+                    var lotKey = $"{normalizedPlatform}:{vehicle.LotNumber.Trim()}";
+                    var observedAt = DateTimeOffset.UtcNow;
+                    var ingested = await canonicalPipeline.ProcessAsync(vehicle, observedAt, cancellationToken, runId, persist: persist);
+                    foreach (var flag in ingested.Eligibility.Flags)
+                        eligibilityFlagCounts[flag.Code] = eligibilityFlagCounts.TryGetValue(flag.Code, out var current) ? current + 1 : 1;
+                    if (!ingested.Loaded)
+                    {
+                        if (ingested.Quarantined) quarantined++;
+                        else if (ingested.Discarded) discarded++;
+                        if ((changed % 25) == 0)
+                            await snapshotStore.UpdateSyncRunProgressAsync(runId, new InventorySyncRunProgress(changed + archived, requests, loaded, created, updated, unchanged, marked, discarded, quarantined, failures.Count, pages), cancellationToken);
+                        continue;
+                    }
+                    loaded++;
+                    if (ingested.Marked) marked++;
+                    if (persist)
+                    {
+                        var saved = ingested.Persistence!;
+                        if (saved.Action.Equals("created", StringComparison.OrdinalIgnoreCase)) created++;
+                        else if (saved.Action.Equals("updated", StringComparison.OrdinalIgnoreCase)) updated++;
+                        else if (saved.Action.Equals("unchanged", StringComparison.OrdinalIgnoreCase)) unchanged++;
+                        await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, saved.LotKey, ingested.Vehicle.LotNumber, MaskVin(ingested.Vehicle.Vin), saved.Action, saved.ChangedFields, [], observedAt), cancellationToken);
+                    }
+                    else
+                    {
+                        await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, lotKey, vehicle.LotNumber, MaskVin(vehicle.Vin), "shadow-evaluated", [], [], observedAt), cancellationToken);
+                    }
                     if ((changed % 25) == 0)
                         await snapshotStore.UpdateSyncRunProgressAsync(runId, new InventorySyncRunProgress(changed + archived, requests, loaded, created, updated, unchanged, marked, discarded, quarantined, failures.Count, pages), cancellationToken);
-                    continue;
                 }
-                loaded++;
-                if (ingested.Marked) marked++;
-                if (persist)
-                {
-                    var saved = ingested.Persistence!;
-                    if (saved.Action.Equals("created", StringComparison.OrdinalIgnoreCase)) created++;
-                    else if (saved.Action.Equals("updated", StringComparison.OrdinalIgnoreCase)) updated++;
-                    else if (saved.Action.Equals("unchanged", StringComparison.OrdinalIgnoreCase)) unchanged++;
-                    await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, saved.LotKey, ingested.Vehicle.LotNumber, MaskVin(ingested.Vehicle.Vin), saved.Action, saved.ChangedFields, [], observedAt), cancellationToken);
-                }
-                else
-                {
-                    await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, lotKey, vehicle.LotNumber, MaskVin(vehicle.Vin), "shadow-evaluated", [], [], observedAt), cancellationToken);
-                }
-                if ((changed % 25) == 0)
-                    await snapshotStore.UpdateSyncRunProgressAsync(runId, new InventorySyncRunProgress(changed + archived, requests, loaded, created, updated, unchanged, marked, discarded, quarantined, failures.Count, pages), cancellationToken);
+
+                // Stop requesting additional pages as soon as the explicit canary cap is reached.
+                if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
             }
 
             if (requestedMaximum is null)
             {
-                var archivedWindow = await ReadWindowAsync(normalizedPlatform, minutes, archived: true, cancellationToken);
-                pages += archivedWindow.Pages;
-                requests += archivedWindow.Requests;
                 var archivedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var vehicle in MapRows(archivedWindow.Rows, normalizedPlatform))
+                await foreach (var archivedPage in ReadWindowPagesAsync(normalizedPlatform, minutes, archived: true, cancellationToken).WithCancellation(cancellationToken))
                 {
-                    if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
-                    archived++;
-                    archivedKeys.Add($"{normalizedPlatform}:{vehicle.LotNumber.Trim()}");
+                    pages++;
+                    requests++;
+                    var archivedVehicles = _options.CanonicalMapperEnabled
+                        ? MapRowsCanonical(archivedPage.Rows, normalizedPlatform)
+                        : MapRows(archivedPage.Rows, normalizedPlatform);
+                    foreach (var vehicle in archivedVehicles)
+                    {
+                        if (string.IsNullOrWhiteSpace(vehicle.LotNumber)) continue;
+                        archived++;
+                        archivedKeys.Add($"{normalizedPlatform}:{vehicle.LotNumber.Trim()}");
+                    }
                 }
                 if (persist && archivedKeys.Count > 0)
                     deactivated = await snapshotStore.DeactivateArchivedLotsAsync(normalizedPlatform, archivedKeys, DateTimeOffset.UtcNow, cancellationToken, runId);
@@ -170,25 +188,31 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         }
     }
 
-    private async Task<WindowReadResult> ReadWindowAsync(string platform, int minutes, bool archived, CancellationToken cancellationToken)
+    private async IAsyncEnumerable<WindowPage> ReadWindowPagesAsync(
+        string platform,
+        int minutes,
+        bool archived,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var rows = new List<JsonElement>();
         var page = 1;
-        var pages = 0;
-        var requests = 0;
         while (page <= 1000)
         {
             var response = archived
                 ? await client.GetArchivedLotsAsync(new AuctionsApiWindowRequest(DomainId(platform), minutes, page, _options.PageSize), cancellationToken)
                 : await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(DomainId(platform), minutes, page, _options.PageSize), cancellationToken);
-            requests++;
-            pages++;
-            rows.AddRange(ExtractRows(response.Data));
-            if (response.NextPage is not null && response.NextPage <= page) break;
-            if (response.NextPage is null && !HasNextPage(response.Meta, page)) break;
-            page = response.NextPage ?? page + 1;
+            var rows = ExtractRows(response.Data).ToArray();
+            var nextPage = response.NextPage;
+            var hasNext = nextPage is not null
+                ? nextPage > page
+                : HasNextPage(response.Meta, page);
+
+            // Yield one page only. The caller processes it before the next request,
+            // so raw JsonElements from a large window are not retained in memory.
+            yield return new WindowPage(rows);
+
+            if (!hasNext) yield break;
+            page = nextPage ?? page + 1;
         }
-        return new(rows, pages, requests);
     }
 
     private static bool HasNextPage(JsonElement meta, int currentPage)
@@ -462,5 +486,5 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
 
     private static string? MaskVin(string? vin) => string.IsNullOrWhiteSpace(vin) || vin.Length < 6 ? null : $"{vin[..3]}…{vin[^3..]}";
 
-    private sealed record WindowReadResult(IReadOnlyList<JsonElement> Rows, int Pages, int Requests);
+    private sealed record WindowPage(IReadOnlyList<JsonElement> Rows);
 }
