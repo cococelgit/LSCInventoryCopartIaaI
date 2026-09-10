@@ -1,0 +1,120 @@
+name: Production Cost and Storage Readonly Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: "Days of metrics and cost data to inspect"
+        required: true
+        default: "30"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-cost-storage-readonly-audit
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+
+jobs:
+  audit:
+    name: Audit Production costs and storage (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Collect resource, Storage, metrics and cost evidence
+        shell: bash
+        env:
+          LOOKBACK_DAYS: ${{ inputs.lookback_days }}
+        run: |
+          set -euo pipefail
+          test "$LOOKBACK_DAYS" -ge 1
+          test "$LOOKBACK_DAYS" -le 90
+          mkdir -p audit
+
+          capture() {
+            local name="$1"
+            shift
+            echo "=== $name ===" | tee -a audit/manifest.txt
+            if "$@" > "audit/$name.json" 2> "audit/$name.error"; then
+              jq -S . "audit/$name.json" > "audit/$name.sorted.json" 2>/dev/null || cp "audit/$name.json" "audit/$name.sorted.json"
+              rm -f "audit/$name.error"
+              echo "status=ok file=$name.sorted.json" | tee -a audit/manifest.txt
+            else
+              echo "status=unavailable file=$name.error" | tee -a audit/manifest.txt
+            fi
+          }
+
+          FROM="$(date -u -d "$LOOKBACK_DAYS days ago" +%Y-%m-%dT00:00:00Z)"
+          TO="$(date -u +%Y-%m-%dT00:00:00Z)"
+          jq -n --arg from "$FROM" --arg to "$TO" '{type:"ActualCost",timeframe:"Custom",timePeriod:{from:$from,to:$to},dataset:{granularity:"Daily",aggregation:{cost:{name:"PreTaxCost",function:"Sum"}},grouping:[{type:"Dimension",name:"ResourceType"},{type:"Dimension",name:"ResourceId"}]}}' > audit/cost-query.json
+
+          capture subscription az account show -o json
+          capture resource-group az group show --name "$RESOURCE_GROUP" -o json
+          capture resources az resource list --resource-group "$RESOURCE_GROUP" -o json
+          capture storage-accounts az storage account list --resource-group "$RESOURCE_GROUP" -o json
+          capture postgres-servers az postgres flexible-server list --resource-group "$RESOURCE_GROUP" -o json
+          capture container-apps az containerapp list --resource-group "$RESOURCE_GROUP" -o json
+          capture container-jobs az containerapp job list --resource-group "$RESOURCE_GROUP" -o json
+          capture acrs az acr list --resource-group "$RESOURCE_GROUP" -o json
+          capture log-analytics-workspaces az monitor log-analytics workspace list --resource-group "$RESOURCE_GROUP" -o json
+          capture application-insights az monitor app-insights component show --app "lsc-inventory-api-prod" --resource-group "$RESOURCE_GROUP" -o json
+          capture diagnostic-settings az monitor diagnostic-settings subscription list -o json
+          capture cost-by-resource az rest --method post --url "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CostManagement/query?api-version=2023-11-01" --body @audit/cost-query.json -o json
+
+          jq -r '.[].name' audit/storage-accounts.sorted.json 2>/dev/null | while read -r account; do
+            [ -n "$account" ] || continue
+            safe="${account//[^A-Za-z0-9_-]/_}"
+            capture "storage-$safe-config" az storage account show --name "$account" --resource-group "$RESOURCE_GROUP" -o json
+            capture "storage-$safe-usage" az storage account show-usage --name "$account" -o json
+            capture "storage-$safe-capacity" az monitor metrics list --resource "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$account" --metric UsedCapacity --interval P1D --aggregation Average --offset "${LOOKBACK_DAYS}d" -o json
+            capture "storage-$safe-transactions" az monitor metrics list --resource "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$account" --metric Transactions --interval P1D --aggregation Total --offset "${LOOKBACK_DAYS}d" -o json
+            capture "storage-$safe-egress" az monitor metrics list --resource "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$account" --metric Egress --interval P1D --aggregation Total --offset "${LOOKBACK_DAYS}d" -o json
+            capture "storage-$safe-ingress" az monitor metrics list --resource "/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$account" --metric Ingress --interval P1D --aggregation Total --offset "${LOOKBACK_DAYS}d" -o json
+            capture "storage-$safe-containers" az storage container list --account-name "$account" --auth-mode login -o json
+            capture "storage-$safe-service-properties" az storage blob service-properties show --account-name "$account" --auth-mode login -o json
+          done
+
+          jq -r '.[].name' audit/postgres-servers.sorted.json 2>/dev/null | while read -r server; do
+            [ -n "$server" ] || continue
+            capture "postgres-$server-config" az postgres flexible-server show --name "$server" --resource-group "$RESOURCE_GROUP" -o json
+          done
+
+          jq -r '.[].name' audit/acrs.sorted.json 2>/dev/null | while read -r acr; do
+            [ -n "$acr" ] || continue
+            capture "acr-$acr-usage" az acr show-usage --name "$acr" -o json
+          done
+
+          jq -r '.[].customerId // empty' audit/log-analytics-workspaces.sorted.json 2>/dev/null | while read -r workspace; do
+            [ -n "$workspace" ] || continue
+            capture "log-analytics-${workspace}-usage" az monitor log-analytics query --workspace "$workspace" --analytics-query "Usage | where TimeGenerated > ago(${LOOKBACK_DAYS}d) | summarize Quantity=sum(Quantity) by DataType, Solution | order by Quantity desc" -o json
+          done
+
+          printf 'from=%s\nto=%s\nlookback_days=%s\n' "$FROM" "$TO" "$LOOKBACK_DAYS" > audit/audit-window.txt
+
+      - name: Upload read-only evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-cost-storage-audit-${{ github.run_id }}
+          path: audit/
+          if-no-files-found: error
+          retention-days: 14
