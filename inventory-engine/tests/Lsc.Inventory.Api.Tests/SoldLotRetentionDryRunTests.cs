@@ -23,5 +23,11 @@ public sealed class SoldLotRetentionDryRunTests
         Assert.DoesNotContain("delete ", historicalSql);
         Assert.DoesNotContain("update ", historicalSql);
         Assert.DoesNotContain("insert ", historicalSql);
+        var diagnosticsSql = PostgresSnapshotStore.HistoricalRetentionDiagnosticsSql.ToLowerInvariant();
+        Assert.Contains("count(*)::bigint from auction_lots", diagnosticsSql);
+        Assert.Contains("lots.auction_at <= @cutoff_at", diagnosticsSql);
+        Assert.DoesNotContain("delete ", diagnosticsSql);
+        Assert.DoesNotContain("update ", diagnosticsSql);
+        Assert.DoesNotContain("insert ", diagnosticsSql);
     }
 }

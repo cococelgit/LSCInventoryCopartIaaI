@@ -255,6 +255,7 @@ public sealed record SoldLotRetentionDryRunReport(
     long ReferencedRawBlobsEligible,
     long EstimatedRawBlobBytesRecoverable,
     IReadOnlyList<HistoricalLotStatusBucket> HistoricalStatusBuckets,
+    HistoricalRetentionInventoryDiagnostics HistoricalDiagnostics,
     bool ReadOnly);
 
 /// <summary>
@@ -268,6 +269,18 @@ public sealed record HistoricalLotStatusBucket(
     long Versions,
     long PostgresPayloadBytes,
     long ReferencedRawBlobs);
+
+/// <summary>
+/// Aggregate coverage checks for the historical inventory query. No lot identifiers or payloads are exposed.
+/// </summary>
+public sealed record HistoricalRetentionInventoryDiagnostics(
+    long TotalLots,
+    long TotalVersions,
+    long LotsWithAuctionDate,
+    DateTimeOffset? MinimumAuctionAt,
+    DateTimeOffset? MaximumAuctionAt,
+    long LotsAuctionedBeforeCutoff,
+    long VersionsForLotsAuctionedBeforeCutoff);
 
 public sealed record InventoryBrowseQuery(
     string? Platform,
