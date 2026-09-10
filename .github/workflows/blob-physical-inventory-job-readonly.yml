@@ -103,7 +103,7 @@ jobs:
             --registry-identity "$API_UAI_RESOURCE_ID" \
             --mi-user-assigned "$API_UAI_RESOURCE_ID" \
             --command dotnet \
-            --args Lsc.Inventory.Api.dll --physical-blob-inventory \
+            --args "Lsc.Inventory.Api.dll --physical-blob-inventory" \
             --env-vars \
               "Persistence__Provider=Postgres" \
               "Persistence__PostgreSqlHost=$POSTGRES_HOST" \
