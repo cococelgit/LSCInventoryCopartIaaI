@@ -1979,18 +1979,17 @@ public sealed partial class PostgresSnapshotStore(
         long distinctLots;
         long distinctReferencedBlobs;
         long additionalVersionReferencesToSameBlob;
-        long referencedPostgresPayloadBytes;
+        long? referencedPostgresPayloadBytes = null;
         await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
-            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
             command.CommandText = """
                 select
                     count(*)::bigint,
                     count(distinct lot_key)::bigint,
                     count(distinct raw_blob_name)::bigint,
-                    (count(*) - count(distinct raw_blob_name))::bigint,
-                    coalesce(sum(octet_length(payload::text)), 0)::bigint
+                    (count(*) - count(distinct raw_blob_name))::bigint
                 from auction_lot_versions
                 where raw_blob_name is not null
                   and raw_blob_name like 'snapshots/%';
@@ -2001,17 +2000,16 @@ public sealed partial class PostgresSnapshotStore(
             distinctLots = reader.GetInt64(1);
             distinctReferencedBlobs = reader.GetInt64(2);
             additionalVersionReferencesToSameBlob = reader.GetInt64(3);
-            referencedPostgresPayloadBytes = reader.GetInt64(4);
         }
 
         long eligibleInactiveLots;
         long eligibleVersionRows;
         long eligibleDistinctReferencedBlobs;
-        long eligiblePostgresPayloadBytes;
+        long? eligiblePostgresPayloadBytes = null;
         await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
-            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
             command.CommandText = """
                 with eligible_lots as (
                     select lot_key
@@ -2020,7 +2018,7 @@ public sealed partial class PostgresSnapshotStore(
                       and deactivated_at is not null
                       and deactivated_at <= @cutoff_at
                 ), eligible_versions as (
-                    select versions.lot_key, versions.raw_blob_name, versions.payload
+                    select versions.lot_key, versions.raw_blob_name
                     from auction_lot_versions versions
                     join eligible_lots eligible on eligible.lot_key = versions.lot_key
                     where versions.raw_blob_name is not null
@@ -2029,8 +2027,7 @@ public sealed partial class PostgresSnapshotStore(
                 select
                     (select count(*)::bigint from eligible_lots),
                     count(*)::bigint,
-                    count(distinct raw_blob_name)::bigint,
-                    coalesce(sum(octet_length(payload::text)), 0)::bigint
+                    count(distinct raw_blob_name)::bigint
                 from eligible_versions;
                 """;
             AddParameter(command, "cutoff_at", cutoffAt);
@@ -2039,7 +2036,6 @@ public sealed partial class PostgresSnapshotStore(
             eligibleInactiveLots = reader.GetInt64(0);
             eligibleVersionRows = reader.GetInt64(1);
             eligibleDistinctReferencedBlobs = reader.GetInt64(2);
-            eligiblePostgresPayloadBytes = reader.GetInt64(3);
         }
 
         var samples = new List<string>();
