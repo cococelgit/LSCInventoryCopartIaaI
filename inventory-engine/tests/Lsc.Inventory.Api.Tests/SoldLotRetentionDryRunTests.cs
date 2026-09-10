@@ -18,7 +18,7 @@ public sealed class SoldLotRetentionDryRunTests
         Assert.DoesNotContain("update ", sql);
         Assert.DoesNotContain("insert ", sql);
         Assert.DoesNotContain("alter ", sql);
-        Assert.Contains("lots.observed_at <= @cutoff_at", historicalSql);
+        Assert.Contains("lots.auction_at <= @cutoff_at", historicalSql);
         Assert.Contains("group by lot_status, lot_sub_status", historicalSql);
         Assert.DoesNotContain("delete ", historicalSql);
         Assert.DoesNotContain("update ", historicalSql);
