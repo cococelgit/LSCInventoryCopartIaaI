@@ -98,7 +98,8 @@ jobs:
             }
           }'
           jq --arg name "$SNAPSHOT_LIFECYCLE_RULE" --argjson rule "$rule" '
-            .policy.rules = (((.policy.rules // []) | map(select(.name != $name))) + [$rule])
+            (.properties.policy // .policy // .) as $current
+            | {rules: ((($current.rules // []) | map(select(.name != $name))) + [$rule])}
           ' "$existing" > "$policy"
           az storage account management-policy create --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" --policy "@$policy" --only-show-errors
       - name: Verify image and runtime invariants
@@ -118,7 +119,7 @@ jobs:
           if [ '${{ inputs.apply_snapshot_cool_lifecycle }}' = true ]; then
             az storage account management-policy show --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" -o json |
               jq -e --arg name "$SNAPSHOT_LIFECYCLE_RULE" '
-                .policy.rules[] | select(.name == $name and .enabled == true and .definition.filters.prefixMatch == ["raw-apibara/snapshots/"] and .definition.actions.baseBlob.tierToCool.daysAfterModificationGreaterThan == 30)
+                (.properties.policy // .policy // .).rules[] | select(.name == $name and .enabled == true and .definition.filters.prefixMatch == ["raw-apibara/snapshots/"] and .definition.actions.baseBlob.tierToCool.daysAfterModificationGreaterThan == 30)
               ' >/dev/null
             echo "VERIFIED_LIFECYCLE_RULE=$SNAPSHOT_LIFECYCLE_RULE PREFIX=$SNAPSHOT_CONTAINER/snapshots/ TIER=Cool AFTER_DAYS=30"
           fi
