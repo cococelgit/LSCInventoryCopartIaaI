@@ -29,21 +29,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo '=== CONTAINER APPS WITH BLOB ENV ==='
+          echo '=== CONTAINER APPS ==='
           for app in $(az containerapp list --resource-group "$RESOURCE_GROUP" --query '[].name' -o tsv); do
             json="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$app" -o json)"
             matches="$(echo "$json" | jq '[.properties.template.containers[]?.env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$")) | .name]')"
-            if [ "$(echo "$matches" | jq 'length')" -gt 0 ]; then
-              echo "$json" | jq --argjson matches "$matches" '{type:"app",name:.name,image:.properties.template.containers[0].image,blobEnvNames:$matches}'
-            fi
+            echo "$json" | jq --argjson matches "$matches" '{type:"app",name:.name,image:.properties.template.containers[0].image,blobEnvCount:($matches|length),blobEnvNames:$matches}'
           done
 
-          echo '=== CONTAINER APP JOBS WITH BLOB ENV ==='
+          echo '=== CONTAINER APP JOBS ==='
           for job in $(az containerapp job list --resource-group "$RESOURCE_GROUP" --query '[].name' -o tsv); do
             json="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json)"
             matches="$(echo "$json" | jq '[.properties.template.containers[]?.env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$")) | .name]')"
-            if [ "$(echo "$matches" | jq 'length')" -gt 0 ]; then
-              active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
-              echo "$json" | jq --argjson matches "$matches" --argjson active "$active" '{type:"job",name:.name,trigger:.properties.configuration.triggerType,image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,activeExecutions:$active,blobEnvNames:$matches}'
-            fi
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            echo "$json" | jq --argjson matches "$matches" --argjson active "$active" '{type:"job",name:.name,trigger:.properties.configuration.triggerType,image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,activeExecutions:$active,blobEnvCount:($matches|length),blobEnvNames:$matches}'
           done
