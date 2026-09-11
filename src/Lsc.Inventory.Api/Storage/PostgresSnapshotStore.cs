@@ -8,7 +8,6 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using Azure.Core;
 using Azure.Identity;
-using Azure.Storage.Blobs;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Normalization;
@@ -21,7 +20,6 @@ namespace Lsc.Inventory.Api.Storage;
 
 public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
-    IOptions<BlobAuditOptions> blobOptions,
     ILogger<PostgresSnapshotStore> logger,
     IFacetsV2SharedCache? facetsV2SharedCache = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore
 {
@@ -40,7 +38,6 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _scoringSchemaInitialized;
     private static bool _nationalSyncSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
-    private readonly BlobAuditOptions _blob = blobOptions.Value;
     private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
     private AccessToken _cachedDatabaseAccessToken;
@@ -133,12 +130,10 @@ public sealed partial class PostgresSnapshotStore(
         var identity = BuildIdentity(vehicle);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, observedAt, payloadHash);
 
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         string? previousHash = null;
@@ -198,10 +193,10 @@ public sealed partial class PostgresSnapshotStore(
                 updated_at = now();
 
             insert into auction_lot_versions (
-                lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                lot_key, observed_at, payload_hash, current_bid_usd,
                 sale_price_usd, lot_status, lot_sub_status, payload)
             values (
-                @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                @lot_key, @observed_at, @payload_hash, @current_bid_usd,
                 @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
             on conflict (lot_key, payload_hash) do nothing;
 
@@ -247,7 +242,6 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "media_has_360", vehicle.Media?.Has360);
         AddParameter(command, "observed_at", observedAt);
         AddParameter(command, "payload_hash", payloadHash);
-        AddParameter(command, "raw_blob_name", blobName);
         AddParameter(command, "payload", rawJson);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -1009,10 +1003,6 @@ public sealed partial class PostgresSnapshotStore(
     {
         await EnsureEligibilitySchemaAsync(cancellationToken);
         var identity = $"{evaluation.AuctionSource ?? "unknown"}:{evaluation.LotNumber ?? "unknown"}";
-        var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
-        var blobName = $"eligibility/{evaluatedAt:yyyy/MM/dd}/{safeIdentity}/{evaluatedAt:HHmmssfff}-{evaluation.Decision.ToLowerInvariant()}.json";
-        var json = JsonSerializer.Serialize(evaluation);
-        await UploadRawPayloadAsync(blobName, json, cancellationToken);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -1021,11 +1011,11 @@ public sealed partial class PostgresSnapshotStore(
             insert into eligibility_decisions (
                 lot_key, auction_source, lot_number, vin_masked, decision, load_to_system,
                 rule_version, evaluated_at, discard_reasons, flags, data_quality_notes,
-                evaluated_fields, audit_blob_name)
+                evaluated_fields)
             values (
                 @lot_key, @auction_source, @lot_number, @vin_masked, @decision, @load_to_system,
                 @rule_version, @evaluated_at, cast(@discard_reasons as jsonb), cast(@flags as jsonb),
-                cast(@data_quality_notes as jsonb), cast(@evaluated_fields as jsonb), @audit_blob_name)
+                cast(@data_quality_notes as jsonb), cast(@evaluated_fields as jsonb))
             on conflict (lot_key) do update set
                 auction_source = excluded.auction_source,
                 lot_number = excluded.lot_number,
@@ -1038,7 +1028,6 @@ public sealed partial class PostgresSnapshotStore(
                 flags = excluded.flags,
                 data_quality_notes = excluded.data_quality_notes,
                 evaluated_fields = excluded.evaluated_fields,
-                audit_blob_name = excluded.audit_blob_name,
                 updated_at = now();
             """;
         AddParameter(command, "lot_key", identity);
@@ -1053,7 +1042,6 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "flags", JsonSerializer.Serialize(evaluation.Flags));
         AddParameter(command, "data_quality_notes", JsonSerializer.Serialize(evaluation.DataQualityNotes));
         AddParameter(command, "evaluated_fields", JsonSerializer.Serialize(evaluation.EvaluatedFields));
-        AddParameter(command, "audit_blob_name", blobName);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -3106,7 +3094,6 @@ public sealed partial class PostgresSnapshotStore(
                     flags jsonb not null default '[]'::jsonb,
                     data_quality_notes jsonb not null default '[]'::jsonb,
                     evaluated_fields jsonb not null default '[]'::jsonb,
-                    audit_blob_name text not null,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
@@ -3157,7 +3144,6 @@ public sealed partial class PostgresSnapshotStore(
                     lot_key text not null references auction_lots(lot_key),
                     observed_at timestamptz not null,
                     payload_hash text not null,
-                    raw_blob_name text not null,
                     current_bid_usd numeric,
                     sale_price_usd numeric,
                     lot_status text,
@@ -3357,7 +3343,6 @@ public sealed partial class PostgresSnapshotStore(
                     flags jsonb not null default '[]'::jsonb,
                     data_quality_notes jsonb not null default '[]'::jsonb,
                     evaluated_fields jsonb not null default '[]'::jsonb,
-                    audit_blob_name text not null,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
@@ -3405,15 +3390,6 @@ public sealed partial class PostgresSnapshotStore(
         {
             LifecycleSchemaLock.Release();
         }
-    }
-
-    private async Task UploadRawPayloadAsync(string blobName, string rawJson, CancellationToken cancellationToken)
-    {
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-        var blobClient = containerClient.GetBlobClient(blobName);
-
-        await blobClient.UploadAsync(BinaryData.FromString(rawJson), overwrite: false, cancellationToken: cancellationToken);
     }
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
@@ -3512,10 +3488,4 @@ public sealed partial class PostgresSnapshotStore(
     private static string BuildIdentity(AuctionVehicle vehicle) => string.Join(':',
         vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
         vehicle.LotNumber?.Trim() ?? vehicle.Vin?.Trim() ?? throw new InvalidOperationException("Apibara vehicle has neither lot number nor VIN."));
-
-    private static string BuildBlobName(string identity, DateTimeOffset observedAt, string payloadHash)
-    {
-        var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
-        return $"snapshots/{observedAt:yyyy/MM/dd}/{safeIdentity}/{observedAt:HHmmssfff}-{payloadHash[..12]}.json";
-    }
 }

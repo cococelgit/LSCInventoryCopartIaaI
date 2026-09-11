@@ -1,0 +1,69 @@
+name: Prepare PostgreSQL Only Schema
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type PREPARE_POSTGRES_ONLY_SCHEMA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: prepare-postgres-only-schema
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_JOB: job-lsc-copart-auto-prod
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout migration
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify paused jobs and zero active executions
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = PREPARE_POSTGRES_ONLY_SCHEMA
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            test "$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)" = Manual
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+            echo "SCHEMA_PRECHECK_JOB=$job TRIGGER=Manual ACTIVE=0"
+          done
+
+      - name: Make legacy Blob columns nullable
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          conn="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require"
+          psql "$conn" -v ON_ERROR_STOP=1 -f infra/sql/20260911_prepare_postgres_only.sql
+          psql "$conn" -v ON_ERROR_STOP=1 -At -F '|' -c "select table_name, column_name, is_nullable from information_schema.columns where table_schema='public' and (table_name,column_name) in (('auction_lot_versions','raw_blob_name'),('eligibility_decisions','audit_blob_name')) order by table_name,column_name;" | tee /tmp/postgres-only-schema.txt
+          test "$(grep -c '|YES$' /tmp/postgres-only-schema.txt)" = 2
+          echo "POSTGRES_ONLY_SCHEMA_READY=true"

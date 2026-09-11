@@ -16,7 +16,6 @@ public sealed class StoredSnapshotFallbackTests
     {
         var store = new PostgresSnapshotStore(
             Microsoft.Extensions.Options.Options.Create(new PersistenceOptions()),
-            Microsoft.Extensions.Options.Options.Create(new BlobAuditOptions()),
             NullLogger<PostgresSnapshotStore>.Instance);
         var method = typeof(PostgresSnapshotStore).GetMethod(
             "DeserializeStoredVehicle",

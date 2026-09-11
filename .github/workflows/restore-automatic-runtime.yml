@@ -58,7 +58,7 @@ jobs:
               | .properties.template.containers[0].command=$command
               | .properties.template.containers[0].args=$args
               | .properties.template.containers[0].env=((.properties.template.containers[0].env // [])
-                  | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "IaaINational__Enabled" and .name != "IaaINational__RunOnStartup" and .name != "IaaINational__PrimaryProvider" and .name != "IaaINational__FallbackProvider" and .name != "IaaINational__UpdatedWithinMinutes" and .name != "IaaINational__RequireInitialImportCompleted" and .name != "IaaINational__EnforceScheduleWindow" and .name != "IaaINational__ScheduleIntervalHours"))
+                  | map(select(.name != "AuctionsApi__ApiKey" and .name != "AuctionsApi__Enabled" and .name != "AuctionsApi__AllowWrites" and .name != "AuctionsApi__DefaultOverlapMinutes" and .name != "IaaINational__Enabled" and .name != "IaaINational__RunOnStartup" and .name != "IaaINational__PrimaryProvider" and .name != "IaaINational__FallbackProvider" and .name != "IaaINational__UpdatedWithinMinutes" and .name != "IaaINational__RequireInitialImportCompleted" and .name != "IaaINational__EnforceScheduleWindow" and .name != "IaaINational__ScheduleIntervalHours" and .name != "BlobAudit__AccountUrl" and .name != "BlobAudit__ContainerName" and .name != "CopartExcel__AccountUrl" and .name != "CopartExcel__ContainerName" and .name != "CopartExcel__SnapshotBlobName"))
                   + [
                       {name:"AuctionsApi__ApiKey",value:$apiKey},
                       {name:"AuctionsApi__Enabled",value:"true"},
@@ -89,6 +89,7 @@ jobs:
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
             test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
+            test "$(echo "$json" | jq '[.properties.template.containers[0].env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$"))] | length')" = 0
             if [ "$job" = "$COPART_JOB" ]; then
               test "$(echo "$json" | jq -c '.properties.template.containers[0].args')" = '["copart","run","140"]'
             fi

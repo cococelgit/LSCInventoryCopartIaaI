@@ -79,7 +79,7 @@ jobs:
             echo "BASELINE_JOB=$job TRIGGER=$trigger ACTIVE=$active IMAGE=$(echo "$json" | jq -r '.properties.template.containers[0].image')"
             test "$trigger" = Manual
             test "$active" = 0
-            echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.before.json"
+            echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData) | walk(if type == "object" and has("secretRef") then del(.value) else . end)' > "$RUNNER_TEMP/$job.before.json"
           done
 
       - name: Build immutable PostgreSQL-only image
@@ -106,7 +106,7 @@ jobs:
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
             test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
             test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
-            echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.after.json"
+            echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData) | walk(if type == "object" and has("secretRef") then del(.value) else . end)' > "$RUNNER_TEMP/$job.after.json"
             diff -u "$RUNNER_TEMP/$job.before.json" "$RUNNER_TEMP/$job.after.json"
             echo "VERIFIED_JOB=$job IMAGE=$PROMOTED_IMAGE TRIGGER=Manual ACTIVE=0"
           done

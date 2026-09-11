@@ -36,14 +36,3 @@ public sealed class PersistenceOptions
     [Range(1, 120)]
     public int CommandTimeoutSeconds { get; init; } = 30;
 }
-
-public sealed class BlobAuditOptions
-{
-    public const string SectionName = "BlobAudit";
-
-    [Required]
-    public string AccountUrl { get; init; } = string.Empty;
-
-    [Required]
-    public string ContainerName { get; init; } = "raw-apibara";
-}

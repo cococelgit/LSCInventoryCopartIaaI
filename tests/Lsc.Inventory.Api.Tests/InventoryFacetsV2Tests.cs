@@ -125,7 +125,6 @@ public sealed class InventoryFacetsV2Tests
     {
         var store = new PostgresSnapshotStore(
             Microsoft.Extensions.Options.Options.Create(new PersistenceOptions()),
-            Microsoft.Extensions.Options.Options.Create(new BlobAuditOptions()),
             NullLogger<PostgresSnapshotStore>.Instance);
         var method = typeof(PostgresSnapshotStore).GetMethod("BuildFacetsV2Command", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
@@ -164,7 +163,6 @@ public sealed class InventoryFacetsV2Tests
     {
         var store = new PostgresSnapshotStore(
             Microsoft.Extensions.Options.Options.Create(new PersistenceOptions()),
-            Microsoft.Extensions.Options.Options.Create(new BlobAuditOptions()),
             NullLogger<PostgresSnapshotStore>.Instance);
         var method = typeof(PostgresSnapshotStore).GetMethod("BuildFacetsV2Command", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
@@ -188,7 +186,6 @@ public sealed class InventoryFacetsV2Tests
     {
         var store = new PostgresSnapshotStore(
             Microsoft.Extensions.Options.Options.Create(new PersistenceOptions()),
-            Microsoft.Extensions.Options.Options.Create(new BlobAuditOptions()),
             NullLogger<PostgresSnapshotStore>.Instance);
         var method = typeof(PostgresSnapshotStore).GetMethod("BuildFacetsV2Command", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
