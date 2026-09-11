@@ -59,12 +59,14 @@ jobs:
       - name: Create isolated manual purge job
         env:
           TEMP_JOB: lsc-retention-${{ github.run_id }}
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
           az containerapp job show --name "$SOURCE_JOB" --resource-group "$RESOURCE_GROUP" -o json > /tmp/source.json
           image="$ACR_SERVER/$IMAGE_NAME:retention-parallel-${GITHUB_SHA}"
-          jq --arg name "$TEMP_JOB" --arg image "$image" --arg days '${{ inputs.retention_days }}' '
-            del(.id,.name,.type,.systemData,.properties.provisioningState,.properties.runningStatus)
+          jq --arg name "$TEMP_JOB" --arg image "$image" --arg days '${{ inputs.retention_days }}' --arg apiKey "$AUCTIONS_API_KEY" '
+            del(.id,.name,.type,.systemData,.properties.provisioningState,.properties.runningStatus,.properties.configuration.secrets)
             | .name=$name
             | .properties.configuration.triggerType="Manual"
             | .properties.configuration.manualTriggerConfig.parallelism=1
@@ -73,7 +75,7 @@ jobs:
             | .properties.template.containers[0].image=$image
             | .properties.template.containers[0].command=["dotnet"]
             | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--retention-purge-pilot"]
-            | .properties.template.containers[0].env=((.properties.template.containers[0].env // []) | map(select(.name != "Retention__DryRunDays" and .name != "Retention__PurgePilotLotLimit" and .name != "Retention__PurgePilotExecute")) + [{name:"Retention__DryRunDays",value:$days},{name:"Retention__PurgePilotLotLimit",value:"500"},{name:"Retention__PurgePilotExecute",value:"true"}])
+            | .properties.template.containers[0].env=((.properties.template.containers[0].env // []) | map(select(.name != "AuctionsApi__ApiKey" and .name != "Retention__DryRunDays" and .name != "Retention__PurgePilotLotLimit" and .name != "Retention__PurgePilotExecute")) + [{name:"AuctionsApi__ApiKey",value:$apiKey},{name:"Retention__DryRunDays",value:$days},{name:"Retention__PurgePilotLotLimit",value:"500"},{name:"Retention__PurgePilotExecute",value:"true"}])
             | {location:.location,properties:.properties}' /tmp/source.json > /tmp/purge-job.json
           az containerapp job create --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yaml /tmp/purge-job.json
       - name: Run bounded purge batches with cursor
