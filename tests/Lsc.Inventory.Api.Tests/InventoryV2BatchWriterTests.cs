@@ -33,6 +33,8 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Equal("copart:64206406", first.Values["lot_key"]);
         Assert.Equal("25000", first.Values["buy_now_usd"]);
         Assert.Equal("2", first.Values["media_photos_count"]);
+        Assert.Equal("OTHER", first.Values["title_type"]);
+        Assert.Equal("true", first.Values["is_buy_now"]);
         Assert.DoesNotContain(first.Values.Keys, key => key.Contains("payload", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(first.Values.Keys, key => key.Contains("json", StringComparison.OrdinalIgnoreCase));
     }
@@ -57,6 +59,29 @@ public sealed class InventoryV2BatchWriterTests
     }
 
     [Fact]
+    public void Buy_now_flag_requires_a_positive_price_and_seller_can_fall_back_to_raw_lot()
+    {
+        var raw = JsonDocument.Parse("""
+            {"lots":[{"lot":"64206406","seller_name":"Raw Seller","buy_now":{"value":0}}]}
+            """).RootElement.Clone();
+        var baseVehicle = Vehicle();
+        var vehicle = baseVehicle with
+        {
+            Seller = null,
+            Details = null,
+            Auction = baseVehicle.Auction! with { IsBuyNow = true },
+            Pricing = baseVehicle.Pricing! with { BuyNowUsd = 0m },
+            RawSource = raw,
+        };
+
+        var prepared = PostgresSnapshotStore.PrepareInventoryV2Lot(
+            new InventoryV2BatchItem(vehicle, DateTimeOffset.Parse("2026-09-11T12:00:00Z")))!;
+
+        Assert.Equal("Raw Seller", prepared.Values["seller_name"]);
+        Assert.Equal("false", prepared.Values["is_buy_now"]);
+    }
+
+    [Fact]
     public void Source_uses_copy_merge_and_non_blocking_shadow_contract()
     {
         var store = File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Batch.cs"));
@@ -77,6 +102,7 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("--inventory-v2-writer-state", program, StringComparison.Ordinal);
         Assert.Contains("--auctionsapi-incremental-canary", program, StringComparison.Ordinal);
         Assert.Contains("--inventory-v2-parity", program, StringComparison.Ordinal);
+        Assert.Contains("--inventory-v2-reset-shadow", program, StringComparison.Ordinal);
         Assert.Contains("--platform copart|iaai", program, StringComparison.Ordinal);
         Assert.Contains("--write", program, StringComparison.Ordinal);
 
@@ -86,6 +112,7 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("--inventory-v2-writer-state", workflow, StringComparison.Ordinal);
         Assert.Contains("--auctionsapi-incremental-canary", workflow, StringComparison.Ordinal);
         Assert.Contains("trap cleanup EXIT", workflow, StringComparison.Ordinal);
+        Assert.Contains("reset_platform", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("--tail 500", workflow, StringComparison.Ordinal);
         Assert.Contains("--tail 300", workflow, StringComparison.Ordinal);
         Assert.Contains("reader_enabled = false", File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Schema.cs")), StringComparison.Ordinal);

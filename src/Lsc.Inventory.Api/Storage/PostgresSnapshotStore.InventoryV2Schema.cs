@@ -121,6 +121,50 @@ public sealed partial class PostgresSnapshotStore
             reader.GetFieldValue<DateTimeOffset>(3));
     }
 
+    public async Task<InventoryV2ShadowResetResult> ResetInventoryV2ShadowAsync(string platform, CancellationToken cancellationToken)
+    {
+        var normalizedPlatform = platform.Trim().ToLowerInvariant();
+        if (normalizedPlatform is not ("copart" or "iaai"))
+            throw new ArgumentOutOfRangeException(nameof(platform));
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var guard = connection.CreateCommand();
+        guard.Transaction = transaction;
+        guard.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        guard.CommandText = """
+            select writer_enabled, reader_enabled
+            from inventory_v2_schema_state
+            where schema_name = 'inventory-current-v2'
+            for update;
+            """;
+        await using (var reader = await guard.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new InvalidOperationException("Inventory V2 schema state is missing.");
+            if (reader.GetBoolean(0) || reader.GetBoolean(1))
+                throw new InvalidOperationException("Inventory V2 shadow reset requires writer_enabled=false and reader_enabled=false.");
+        }
+
+        async Task<int> DeleteAsync(string table)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = $"delete from {table} where platform = @platform;";
+            AddParameter(command, "platform", normalizedPlatform);
+            return await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var media = await DeleteAsync("inventory_media_current_v2");
+        var attempts = await DeleteAsync("inventory_sale_attempts_v2");
+        var tombstones = await DeleteAsync("inventory_tombstones_v2");
+        var checkpoints = await DeleteAsync("inventory_sync_checkpoints_v2");
+        var current = await DeleteAsync("inventory_current_v2");
+        await transaction.CommitAsync(cancellationToken);
+        return new InventoryV2ShadowResetResult(normalizedPlatform, current, media, attempts, tombstones, checkpoints);
+    }
+
     private static string ReadInventoryV2SchemaSql()
     {
         using var stream = typeof(PostgresSnapshotStore).Assembly.GetManifestResourceStream(InventoryV2SchemaResourceName)
@@ -142,3 +186,11 @@ public sealed record InventoryV2WriterStateResult(
     bool WriterEnabled,
     bool ReaderEnabled,
     DateTimeOffset UpdatedAt);
+
+public sealed record InventoryV2ShadowResetResult(
+    string Platform,
+    int CurrentRows,
+    int MediaRows,
+    int SaleAttemptRows,
+    int TombstoneRows,
+    int CheckpointRows);

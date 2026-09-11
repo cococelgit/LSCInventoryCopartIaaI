@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Normalization;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -535,9 +536,9 @@ public sealed partial class PostgresSnapshotStore
             ["odometer_km"] = Invariant(vehicle.OdometerInfo?.Kilometers),
             ["odometer_status"] = NormalizeText(vehicle.OdometerInfo?.Status),
             ["title_id"] = RawText(rawLot, "title.id"),
-            ["title_type"] = NormalizeText(vehicle.SaleDocument?.Type ?? vehicle.Title),
+            ["title_type"] = TitleFacetCategory.Classify(vehicle),
             ["detailed_title_id"] = RawText(rawLot, "detailed_title.id"),
-            ["detailed_title"] = NormalizeText(vehicle.SaleDocument?.Name),
+            ["detailed_title"] = NormalizeText(vehicle.SaleDocument?.Name ?? vehicle.Title),
             ["title_group"] = NormalizeText(vehicle.SaleDocument?.Group),
             ["title_pending"] = Invariant(vehicle.SaleDocument?.IsPending),
             ["title_export"] = Invariant(vehicle.SaleDocument?.Export),
@@ -547,7 +548,11 @@ public sealed partial class PostgresSnapshotStore
             ["title_notes"] = Flatten(vehicle.TitleNotes) ?? NormalizeText(vehicle.Details?.VehicleInformation?.TitleNotes),
             ["special_note"] = Flatten(vehicle.SpecialNote),
             ["announcements"] = Flatten(vehicle.Announcements),
-            ["seller_name"] = NormalizeText(vehicle.Seller?.Name ?? vehicle.Details?.SaleInformation?.Seller),
+            ["seller_name"] = NormalizeText(
+                vehicle.Seller?.Name
+                ?? vehicle.Details?.SaleInformation?.Seller
+                ?? RawText(rawLot, "seller_name", "seller.name")
+                ?? RawText(rawRoot, "seller_name", "seller.name")),
             ["seller_type_id"] = RawText(rawLot, "seller_type.id"),
             ["seller_type"] = NormalizeText(vehicle.Seller?.Type ?? vehicle.Seller?.RawType ?? vehicle.Details?.SaleInformation?.SellerType),
             ["seller_class"] = NormalizeText(vehicle.Seller?.Class),
@@ -566,7 +571,7 @@ public sealed partial class PostgresSnapshotStore
             ["auction_at"] = Invariant(vehicle.Auction?.AuctionAt),
             ["auction_at_updated_at"] = Invariant(RawDate(rawLot, "sale_date.updated_at")),
             ["archived_at"] = Invariant(RawDate(rawLot, "archived_at")),
-            ["is_buy_now"] = Invariant(vehicle.Auction?.IsBuyNow ?? vehicle.Pricing?.BuyNowUsd is > 0m),
+            ["is_buy_now"] = Invariant(vehicle.Pricing?.BuyNowUsd is > 0m),
             ["is_timed"] = Invariant(vehicle.Auction?.IsTimed),
             ["current_bid_usd"] = Invariant(vehicle.Pricing?.CurrentBidUsd),
             ["current_bid_updated_at"] = Invariant(RawDate(rawLot, "bid.updated_at")),

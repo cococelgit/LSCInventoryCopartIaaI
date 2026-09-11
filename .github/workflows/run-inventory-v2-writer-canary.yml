@@ -13,6 +13,11 @@ on:
         required: true
         default: "1000"
         type: string
+      reset_platform:
+        description: "Delete only existing V2 shadow rows for this platform before the canary"
+        required: true
+        type: boolean
+        default: false
       confirmation:
         description: "Type RUN_INVENTORY_V2_WRITER_CANARY"
         required: true
@@ -205,6 +210,13 @@ jobs:
           done
           test "$state" = Succeeded
 
+          if [ "${{ inputs.reset_platform }}" = "true" ]; then
+            patch_args "[\"Lsc.Inventory.Api.dll\",\"--inventory-v2-reset-shadow\",\"--platform\",\"$PLATFORM\"]"
+            run_current V2_RESET
+            grep -q '"Platform":"'"$PLATFORM"'"' "$RUNNER_TEMP/V2_RESET.log"
+          fi
+
+          patch_args '["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","true"]'
           run_current WRITER_ENABLE
           grep -q '"WriterEnabled":true' "$RUNNER_TEMP/WRITER_ENABLE.log"
 

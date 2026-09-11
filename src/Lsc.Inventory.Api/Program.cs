@@ -1076,6 +1076,20 @@ if (args.Contains("--inventory-v2-parity", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--inventory-v2-reset-shadow", StringComparer.OrdinalIgnoreCase))
+{
+    var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));
+    var platform = platformIndex >= 0 && platformIndex + 1 < args.Length ? args[platformIndex + 1] : null;
+    if (platform is null)
+        throw new ArgumentException("--inventory-v2-reset-shadow requires --platform copart|iaai.");
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>() as PostgresSnapshotStore
+        ?? throw new InvalidOperationException("Inventory V2 shadow reset requires Persistence:Provider=Postgres.");
+    var result = await store.ResetInventoryV2ShadowAsync(platform, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
 if (args.Contains("--auctionsapi-incremental-canary", StringComparer.OrdinalIgnoreCase))
 {
     var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));
