@@ -99,13 +99,16 @@ jobs:
         run: |
           set -euo pipefail
           job_id="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$JOB_NAME" --query id -o tsv)"
-          az monitor metrics list \
-            --resource "$job_id" \
-            --metric UsageNanoCores UsageBytes RequestedCores RequestedBytes RxBytes TxBytes RestartCount Executions \
-            --start-time "$START_TIME" --end-time "$END_TIME" --interval PT1M \
-            --aggregation Average Maximum Total \
-            --filter "executionName eq '$EXECUTION_NAME'" \
-            -o json > report/job-metrics.json || true
+          az monitor metrics list-definitions --resource "$job_id" -o json > report/job-metric-definitions.json
+          for metric in UsageNanoCores UsageBytes RequestedCores RequestedBytes RxBytes TxBytes RestartCount Executions; do
+            az monitor metrics list \
+              --resource "$job_id" \
+              --metric "$metric" \
+              --start-time "$START_TIME" --end-time "$END_TIME" --interval PT1M \
+              --aggregation Average Maximum Total \
+              -o json > "report/job-${metric}.json" || true
+          done
+          jq -s '{value:[.[].value[]?]}' report/job-*.json > report/job-metrics.json
 
           pg_id="$(az resource list --resource-group "$RESOURCE_GROUP" --resource-type Microsoft.DBforPostgreSQL/flexibleServers --query '[0].id' -o tsv)"
           test -n "$pg_id"
