@@ -108,7 +108,10 @@ jobs:
               --aggregation Average Maximum Total \
               -o json > "report/job-${metric}.json" || true
           done
-          jq -s '{value:[.[].value[]?]}' report/job-*.json > report/job-metrics.json
+          jq -s '{value:[.[] | select(type == "object") | .value[]?]}' \
+            report/job-UsageNanoCores.json report/job-UsageBytes.json report/job-RequestedCores.json report/job-RequestedBytes.json \
+            report/job-RxBytes.json report/job-TxBytes.json report/job-RestartCount.json report/job-Executions.json \
+            > report/job-metrics.json
 
           pg_id="$(az resource list --resource-group "$RESOURCE_GROUP" --resource-type Microsoft.DBforPostgreSQL/flexibleServers --query '[0].id' -o tsv)"
           test -n "$pg_id"
