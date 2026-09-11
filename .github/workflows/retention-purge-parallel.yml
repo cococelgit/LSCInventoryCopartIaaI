@@ -76,7 +76,7 @@ jobs:
             | .properties.template.containers[0].command=["dotnet"]
             | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--retention-purge-pilot"]
             | .properties.template.containers[0].env=((.properties.template.containers[0].env // []) | map(select(.name != "AuctionsApi__ApiKey" and .name != "Retention__DryRunDays" and .name != "Retention__PurgePilotLotLimit" and .name != "Retention__PurgePilotExecute")) + [{name:"AuctionsApi__ApiKey",value:$apiKey},{name:"Retention__DryRunDays",value:$days},{name:"Retention__PurgePilotLotLimit",value:"500"},{name:"Retention__PurgePilotExecute",value:"true"}])
-            | .identity as $identity
+            | {type:(.identity.type // "UserAssigned"),userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
             | .location as $location
             | .properties.environmentId as $environmentId
             | {location:$location,identity:$identity,properties:{environmentId:$environmentId,configuration:(.properties.configuration | del(.identitySettings,.secrets,.scheduleTriggerConfig) | .triggerType="Manual" | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1} | .replicaRetryLimit=0 | .replicaTimeout=900),template:.properties.template}}' /tmp/source.json > /tmp/purge-job.json
