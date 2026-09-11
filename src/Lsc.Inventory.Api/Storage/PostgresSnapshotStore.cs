@@ -30,7 +30,6 @@ public sealed partial class PostgresSnapshotStore(
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim ScoringSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim NationalSyncSchemaLock = new(1, 1);
-    private static readonly SemaphoreSlim PostgresOnlyCompatibilityLock = new(1, 1);
     private static bool _schemaInitialized;
     private static bool _auditSchemaInitialized;
     private static bool _searchProjectionSchemaInitialized;
@@ -38,7 +37,6 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _lifecycleSchemaInitialized;
     private static bool _scoringSchemaInitialized;
     private static bool _nationalSyncSchemaInitialized;
-    private static bool _postgresOnlyCompatibilityReady;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
@@ -133,7 +131,6 @@ public sealed partial class PostgresSnapshotStore(
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
 
-        await EnsurePostgresOnlyCompatibilityAsync(cancellationToken);
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
@@ -196,10 +193,10 @@ public sealed partial class PostgresSnapshotStore(
                 updated_at = now();
 
             insert into auction_lot_versions (
-                lot_key, observed_at, payload_hash, current_bid_usd,
+                lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
                 sale_price_usd, lot_status, lot_sub_status, payload)
             values (
-                @lot_key, @observed_at, @payload_hash, @current_bid_usd,
+                @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
                 @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
             on conflict (lot_key, payload_hash) do nothing;
 
@@ -245,6 +242,7 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "media_has_360", vehicle.Media?.Has360);
         AddParameter(command, "observed_at", observedAt);
         AddParameter(command, "payload_hash", payloadHash);
+        AddParameter(command, "raw_blob_name", "postgresql-only");
         AddParameter(command, "payload", rawJson);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -1004,7 +1002,6 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task PersistEligibilityDecisionAsync(EligibilityEvaluation evaluation, DateTimeOffset evaluatedAt, CancellationToken cancellationToken)
     {
-        await EnsurePostgresOnlyCompatibilityAsync(cancellationToken);
         await EnsureEligibilitySchemaAsync(cancellationToken);
         var identity = $"{evaluation.AuctionSource ?? "unknown"}:{evaluation.LotNumber ?? "unknown"}";
 
@@ -1015,11 +1012,11 @@ public sealed partial class PostgresSnapshotStore(
             insert into eligibility_decisions (
                 lot_key, auction_source, lot_number, vin_masked, decision, load_to_system,
                 rule_version, evaluated_at, discard_reasons, flags, data_quality_notes,
-                evaluated_fields)
+                evaluated_fields, audit_blob_name)
             values (
                 @lot_key, @auction_source, @lot_number, @vin_masked, @decision, @load_to_system,
                 @rule_version, @evaluated_at, cast(@discard_reasons as jsonb), cast(@flags as jsonb),
-                cast(@data_quality_notes as jsonb), cast(@evaluated_fields as jsonb))
+                cast(@data_quality_notes as jsonb), cast(@evaluated_fields as jsonb), @audit_blob_name)
             on conflict (lot_key) do update set
                 auction_source = excluded.auction_source,
                 lot_number = excluded.lot_number,
@@ -1032,6 +1029,7 @@ public sealed partial class PostgresSnapshotStore(
                 flags = excluded.flags,
                 data_quality_notes = excluded.data_quality_notes,
                 evaluated_fields = excluded.evaluated_fields,
+                audit_blob_name = excluded.audit_blob_name,
                 updated_at = now();
             """;
         AddParameter(command, "lot_key", identity);
@@ -1046,6 +1044,7 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "flags", JsonSerializer.Serialize(evaluation.Flags));
         AddParameter(command, "data_quality_notes", JsonSerializer.Serialize(evaluation.DataQualityNotes));
         AddParameter(command, "evaluated_fields", JsonSerializer.Serialize(evaluation.EvaluatedFields));
+        AddParameter(command, "audit_blob_name", "postgresql-only");
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -3398,46 +3397,6 @@ public sealed partial class PostgresSnapshotStore(
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
         await OpenConnectionAsync(_persistence.Database, cancellationToken);
-
-    private async Task EnsurePostgresOnlyCompatibilityAsync(CancellationToken cancellationToken)
-    {
-        if (_postgresOnlyCompatibilityReady) return;
-        await PostgresOnlyCompatibilityLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (_postgresOnlyCompatibilityReady) return;
-            await using var connection = await OpenConnectionAsync(cancellationToken);
-            await using var command = connection.CreateCommand();
-            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            command.CommandText = """
-                do $$
-                begin
-                    if exists (
-                        select 1 from information_schema.columns
-                        where table_schema = 'public'
-                          and table_name = 'auction_lot_versions'
-                          and column_name = 'raw_blob_name'
-                    ) then
-                        alter table auction_lot_versions alter column raw_blob_name drop not null;
-                    end if;
-                    if exists (
-                        select 1 from information_schema.columns
-                        where table_schema = 'public'
-                          and table_name = 'eligibility_decisions'
-                          and column_name = 'audit_blob_name'
-                    ) then
-                        alter table eligibility_decisions alter column audit_blob_name drop not null;
-                    end if;
-                end $$;
-                """;
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            _postgresOnlyCompatibilityReady = true;
-        }
-        finally
-        {
-            PostgresOnlyCompatibilityLock.Release();
-        }
-    }
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(string database, CancellationToken cancellationToken)
     {
