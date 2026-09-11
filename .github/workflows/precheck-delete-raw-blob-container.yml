@@ -1,0 +1,68 @@
+name: Precheck Delete Raw Blob Container
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  RAW_CONTAINER: raw-apibara
+
+jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Locate raw container and inspect protection
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches=0
+          for account in $(az storage account list --resource-group "$RESOURCE_GROUP" --query '[].name' -o tsv); do
+            exists="$(az storage container-rm exists --resource-group "$RESOURCE_GROUP" --storage-account "$account" --name "$RAW_CONTAINER" --query exists -o tsv 2>/dev/null || echo false)"
+            if [ "$exists" = true ]; then
+              matches=$((matches + 1))
+              echo "RAW_ACCOUNT=$account"
+              az storage container-rm show --resource-group "$RESOURCE_GROUP" --storage-account "$account" --name "$RAW_CONTAINER" --query '{name:name,publicAccess:properties.publicAccess,hasImmutabilityPolicy:properties.hasImmutabilityPolicy,hasLegalHold:properties.hasLegalHold,leaseStatus:properties.leaseStatus}' -o json
+              az storage account blob-service-properties show --resource-group "$RESOURCE_GROUP" --account-name "$account" --query '{blobSoftDelete:deleteRetentionPolicy,containerSoftDelete:containerDeleteRetentionPolicy,versioning:isVersioningEnabled,restorePolicy:restorePolicy,changeFeed:changeFeed}' -o json
+              az storage container-rm list --resource-group "$RESOURCE_GROUP" --storage-account "$account" --query '[].name' -o json
+              account_id="$(az storage account show --resource-group "$RESOURCE_GROUP" --name "$account" --query id -o tsv)"
+              az monitor metrics list --resource "$account_id" --metric UsedCapacity --interval PT1H --aggregation Average --query '{timespan:timespan,value:value[0].timeseries[0].data[-1].average}' -o json || true
+            fi
+          done
+          test "$matches" = 1
+
+      - name: Confirm zero Blob consumers and paused ingestion jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumers=0
+          for app in $(az containerapp list --resource-group "$RESOURCE_GROUP" --query '[].name' -o tsv); do
+            count="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$app" -o json | jq '[.properties.template.containers[]?.env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$"))] | length')"
+            consumers=$((consumers + count))
+          done
+          for job in $(az containerapp job list --resource-group "$RESOURCE_GROUP" --query '[].name' -o tsv); do
+            count="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json | jq '[.properties.template.containers[]?.env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$"))] | length')"
+            consumers=$((consumers + count))
+          done
+          test "$consumers" = 0
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            json="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$job" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+          done
+          echo 'RAW_DELETE_PRECHECK=PASS CONSUMERS=0 IAAI_ACTIVE=0 COPART_ACTIVE=0'
