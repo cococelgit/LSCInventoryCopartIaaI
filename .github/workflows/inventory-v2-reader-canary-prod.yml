@@ -1,0 +1,165 @@
+name: Inventory V2 Reader Production Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type ENABLE_INVENTORY_V2_READER_CANARY"
+        required: true
+        type: string
+      expected_sha:
+        description: "Exact full source SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: inventory-v2-reader-production-canary
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+  SOURCE_JOB: job-lsc-copart-auto-prod
+  TEMP_JOB: job-lsc-v2-reader-activate-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+      - name: Verify inputs
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = ENABLE_INVENTORY_V2_READER_CANARY
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Build immutable reader image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="inventory-v2-reader-canary-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "CANDIDATE_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+      - name: Capture API baseline and activate V2 database reader state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/v2-reader-canary"
+          az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" -o json > "$RUNNER_TEMP/v2-reader-canary/api.before.json"
+          current_revision="$(jq -r '.properties.latestReadyRevisionName' "$RUNNER_TEMP/v2-reader-canary/api.before.json")"
+          api_fqdn="$(jq -r '.properties.configuration.ingress.fqdn' "$RUNNER_TEMP/v2-reader-canary/api.before.json")"
+          test -n "$current_revision" && test "$current_revision" != null
+          test -n "$api_fqdn" && test "$api_fqdn" != null
+          echo "CURRENT_REVISION=$current_revision" >> "$GITHUB_ENV"
+          echo "API_FQDN=$api_fqdn" >> "$GITHUB_ENV"
+          cleanup() { az containerapp job delete -g "$RESOURCE_GROUP" -n "$TEMP_JOB" --yes --only-show-errors >/dev/null 2>&1 || true; }
+          cleanup
+          source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$CANDIDATE_IMAGE" '
+            .location as $location
+            | .properties.environmentId as $environmentId
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | .properties.configuration as $sourceConfiguration
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
+                | del(.imageType)
+                | .name=$name
+                | .image=$image
+                | .command=["dotnet"]
+                | .args=["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","true"]
+                | .env=((.env // []) | map(select((.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not))))) as $container
+            | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
+                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=900)), template:($sourceTemplate | .containers=[$container])}}')"
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+          run_state() {
+            local command_name="$1" enabled="$2"
+            patch="$(az rest --method get --uri "$uri" -o json | jq --arg command_name "$command_name" --arg enabled "$enabled" '
+              .properties.template.containers[0] |= (del(.imageType) | .command=["dotnet"] | .args=["Lsc.Inventory.Api.dll",$command_name,"--enabled",$enabled])
+              | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+            az rest --method patch --uri "$uri" --body "$patch" --output none
+            execution="$(az containerapp job start -g "$RESOURCE_GROUP" -n "$TEMP_JOB" -o json | jq -r '.name // .properties.name // empty')"
+            test -n "$execution"
+            for _ in $(seq 1 180); do
+              status="$(az containerapp job execution show -g "$RESOURCE_GROUP" -n "$TEMP_JOB" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+              case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+              sleep 5
+            done
+            test "$status" = Succeeded
+          }
+          run_state --inventory-v2-writer-state true
+          run_state --inventory-v2-reader-state true
+          cleanup
+          trap - EXIT
+      - name: Deploy API canary with V2 reader and legacy fallback
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rollback() {
+            az containerapp ingress traffic set -g "$RESOURCE_GROUP" -n "$API_APP" --revision-weight "$CURRENT_REVISION=100" --only-show-errors >/dev/null 2>&1 || true
+            if [[ -n "${NEW_REVISION:-}" ]]; then
+              az containerapp revision deactivate -g "$RESOURCE_GROUP" -n "$API_APP" --revision "$NEW_REVISION" --only-show-errors >/dev/null 2>&1 || true
+            fi
+            az containerapp job delete -g "$RESOURCE_GROUP" -n "$TEMP_JOB" --yes --only-show-errors >/dev/null 2>&1 || true
+          }
+          trap rollback ERR
+          az containerapp revision set-mode -g "$RESOURCE_GROUP" -n "$API_APP" --mode Multiple --only-show-errors
+          az containerapp update -g "$RESOURCE_GROUP" -n "$API_APP" \
+            --image "$CANDIDATE_IMAGE" \
+            --revision-suffix "v2r${GITHUB_RUN_NUMBER}" \
+            --set-env-vars "InventoryV2__ReaderEnabled=true" "InventoryV2__LegacyReadFallbackEnabled=true" \
+            --only-show-errors >/dev/null
+          NEW_REVISION="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.latestRevisionName -o tsv)"
+          test "$NEW_REVISION" != "$CURRENT_REVISION"
+          az containerapp ingress traffic set -g "$RESOURCE_GROUP" -n "$API_APP" --revision-weight "$CURRENT_REVISION=95" "$NEW_REVISION=5" --only-show-errors
+          for _ in $(seq 1 36); do
+            state="$(az containerapp revision list -g "$RESOURCE_GROUP" -n "$API_APP" --query "[?name=='$NEW_REVISION'].properties.runningState | [0]" -o tsv)"
+            case "$state" in Running) break ;; Failed|Degraded) exit 1 ;; esac
+            sleep 10
+          done
+          test "$state" = Running
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
+          echo "CURRENT_REVISION=$CURRENT_REVISION NEW_REVISION=$NEW_REVISION TRAFFIC_CURRENT=95 TRAFFIC_V2=5 FALLBACK=true"
+          trap - ERR
+      - name: Verify canary state
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" -o json)"
+          test "$(echo "$current" | jq -r '.properties.latestRevisionName')" = "$NEW_REVISION"
+          test "$(echo "$current" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__ReaderEnabled")][0].value // ""')" = true
+          test "$(echo "$current" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__LegacyReadFallbackEnabled")][0].value // ""')" = true
+          echo "$current" | jq '{latestRevision:.properties.latestRevisionName,traffic:.properties.ingress.traffic,readerEnv:[.properties.template.containers[0].env[]? | select(.name|test("InventoryV2__"))]}'
