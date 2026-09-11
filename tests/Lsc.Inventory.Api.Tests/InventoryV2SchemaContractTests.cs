@@ -77,12 +77,15 @@ public sealed class InventoryV2SchemaContractTests
     {
         var program = Normalize(ReadRepositoryFile("src/Lsc.Inventory.Api/Program.cs"));
         var migration = Normalize(ReadRepositoryFile("infra/sql/20260911_inventory_v2_schema.sql"));
+        var preparation = Normalize(ReadRepositoryFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.InventoryV2Schema.cs"));
 
         Assert.Contains("--prepare-inventory-v2-schema", program);
         Assert.Contains("prepareinventoryv2schemaasync", program);
         Assert.Contains("writer_enabled boolean not null default false", migration);
         Assert.Contains("reader_enabled boolean not null default false", migration);
         Assert.Contains("values ('inventory-current-v2', 1, false, false)", migration);
+        Assert.Contains("select schema_version, writer_enabled, reader_enabled, prepared_at", preparation);
+        Assert.Contains("if (writerenabled || readerenabled)", preparation);
     }
 
     [Fact]

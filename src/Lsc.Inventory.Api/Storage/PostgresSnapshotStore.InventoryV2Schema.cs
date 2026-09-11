@@ -49,21 +49,43 @@ public sealed partial class PostgresSnapshotStore
             var createdTables = InventoryV2OwnedTables
                 .Where((_, index) => reader.GetBoolean(index))
                 .ToArray();
-            await reader.CloseAsync();
-
             if (createdTables.Length != InventoryV2OwnedTables.Count)
             {
                 var missing = InventoryV2OwnedTables.Except(createdTables, StringComparer.Ordinal).ToArray();
                 throw new InvalidOperationException($"Inventory V2 schema is incomplete. Missing: {string.Join(", ", missing)}.");
             }
 
+            await reader.CloseAsync();
+
+            await using var state = connection.CreateCommand();
+            state.Transaction = transaction;
+            state.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            state.CommandText = """
+                select schema_version, writer_enabled, reader_enabled, prepared_at
+                from inventory_v2_schema_state
+                where schema_name = 'inventory-current-v2';
+                """;
+            await using var stateReader = await state.ExecuteReaderAsync(cancellationToken);
+            if (!await stateReader.ReadAsync(cancellationToken))
+                throw new InvalidOperationException("Inventory V2 schema state is missing.");
+
+            var schemaVersion = stateReader.GetInt32(0);
+            var writerEnabled = stateReader.GetBoolean(1);
+            var readerEnabled = stateReader.GetBoolean(2);
+            var preparedAt = stateReader.GetFieldValue<DateTimeOffset>(3);
+
+            if (schemaVersion < InventoryV2SchemaVersion)
+                throw new InvalidOperationException($"Inventory V2 schema state is outdated: {schemaVersion}.");
+            if (writerEnabled || readerEnabled)
+                throw new InvalidOperationException("Inventory V2 schema preparation must not enable V2 writers or readers.");
+
             await transaction.CommitAsync(cancellationToken);
             return new InventoryV2SchemaPreparationResult(
-                InventoryV2SchemaVersion,
+                schemaVersion,
                 createdTables,
-                WriterEnabled: false,
-                ReaderEnabled: false,
-                PreparedAt: DateTimeOffset.UtcNow);
+                writerEnabled,
+                readerEnabled,
+                preparedAt);
         }
         finally
         {
