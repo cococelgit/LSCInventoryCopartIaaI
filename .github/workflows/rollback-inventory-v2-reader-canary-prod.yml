@@ -1,0 +1,61 @@
+name: Rollback Inventory V2 Reader Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type ROLLBACK_INVENTORY_V2_READER_CANARY"
+        required: true
+        type: string
+      stable_revision:
+        description: "Stable revision to receive 100 percent traffic"
+        required: true
+        type: string
+      canary_revision:
+        description: "Canary revision to deactivate"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify confirmation
+        run: test '${{ inputs.confirmation }}' = ROLLBACK_INVENTORY_V2_READER_CANARY
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Restore stable traffic and verify health
+        shell: bash
+        env:
+          STABLE_REVISION: ${{ inputs.stable_revision }}
+          CANARY_REVISION: ${{ inputs.canary_revision }}
+        run: |
+          set -euo pipefail
+          az containerapp ingress traffic set -g "$RESOURCE_GROUP" -n "$API_APP" --revision-weight "$STABLE_REVISION=100" "$CANARY_REVISION=0" --only-show-errors
+          az containerapp revision deactivate -g "$RESOURCE_GROUP" -n "$API_APP" --revision "$CANARY_REVISION" --only-show-errors || true
+          current="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" -o json)"
+          stable_weight="$(printf '%s' "$current" | jq -r --arg revision "$STABLE_REVISION" '[.properties.configuration.ingress.traffic[]? | select(.revisionName==$revision)][0].weight // 0')"
+          canary_weight="$(printf '%s' "$current" | jq -r --arg revision "$CANARY_REVISION" '[.properties.configuration.ingress.traffic[]? | select(.revisionName==$revision)][0].weight // 0')"
+          test "$stable_weight" = 100
+          test "$canary_weight" = 0
+          fqdn="$(printf '%s' "$current" | jq -r '.properties.configuration.ingress.fqdn')"
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 5 "https://$fqdn/healthz" >/dev/null
+          printf '%s' "$current" | jq --arg stable "$STABLE_REVISION" --arg canary "$CANARY_REVISION" '{latestRevision:.properties.latestRevisionName,traffic:.properties.configuration.ingress.traffic,stable:$stable,canary:$canary}'
