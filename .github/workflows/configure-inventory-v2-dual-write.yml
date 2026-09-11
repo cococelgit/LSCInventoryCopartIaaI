@@ -106,14 +106,21 @@ jobs:
             .location as $location
             | .properties.environmentId as $environmentId
             | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
-            | (.properties.template.containers[0]
+            | .properties.configuration as $sourceConfiguration
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
                 | del(.imageType)
                 | .name=$name
                 | .image=$image
                 | .command=["dotnet"]
                 | .args=["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","false"]
                 | .env=((.env // []) | map(select((.secretRef // "") == "")))) as $container
-            | {location:$location,identity:$identity,properties:{environmentId:$environmentId,configuration:{triggerType:"Manual",replicaTimeout:900,replicaRetryLimit:0,manualTriggerConfig:{parallelism:1,replicaCompletionCount:1}},template:{containers:[$container]}}}')"
+            | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
+                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=900)), template:($sourceTemplate | .containers=[$container])}}')"
           uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
           az rest --method put --uri "$uri" --body "$body" --output none
           for _ in $(seq 1 60); do

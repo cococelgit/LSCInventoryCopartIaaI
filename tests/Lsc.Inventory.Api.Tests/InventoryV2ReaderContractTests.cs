@@ -43,7 +43,7 @@ public sealed class InventoryV2ReaderContractTests
         Assert.Contains("--inventory-v2-reader-state", workflow, StringComparison.Ordinal);
         Assert.Contains("--enabled\",\"false", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("triggerType=\"Schedule\"", workflow, StringComparison.Ordinal);
-        Assert.DoesNotContain("scheduleTriggerConfig", workflow, StringComparison.Ordinal);
+        Assert.Contains("del(.identitySettings,.secrets,.scheduleTriggerConfig)", workflow, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRootFile(string relativePath)

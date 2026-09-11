@@ -133,7 +133,7 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("$job-template.json", rolloutWorkflow, StringComparison.Ordinal);
         Assert.Contains("--inventory-v2-reader-state", rolloutWorkflow, StringComparison.Ordinal);
         Assert.Contains("rollback_needed=true", rolloutWorkflow, StringComparison.Ordinal);
-        Assert.DoesNotContain("scheduleTriggerConfig", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("del(.identitySettings,.secrets,.scheduleTriggerConfig)", rolloutWorkflow, StringComparison.Ordinal);
         Assert.DoesNotContain("--tail 500", workflow, StringComparison.Ordinal);
         Assert.Contains("--tail 300", workflow, StringComparison.Ordinal);
         Assert.Contains("reader_enabled = false", File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Schema.cs")), StringComparison.Ordinal);
