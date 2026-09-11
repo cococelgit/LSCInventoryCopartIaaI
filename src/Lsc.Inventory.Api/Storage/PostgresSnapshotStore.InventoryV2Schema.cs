@@ -79,6 +79,8 @@ public sealed partial class PostgresSnapshotStore
             if (writerEnabled || readerEnabled)
                 throw new InvalidOperationException("Inventory V2 schema preparation must not enable V2 writers or readers.");
 
+            await stateReader.CloseAsync();
+
             await transaction.CommitAsync(cancellationToken);
             return new InventoryV2SchemaPreparationResult(
                 schemaVersion,
