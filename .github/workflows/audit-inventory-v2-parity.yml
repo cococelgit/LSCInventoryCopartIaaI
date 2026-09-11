@@ -30,6 +30,7 @@ env:
   AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
   IMAGE_NAME: lsc-inventory-engine
   SOURCE_JOB: job-lsc-copart-auto-prod
@@ -59,6 +60,13 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Build immutable parity image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="inventory-v2-parity-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "PARITY_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
       - name: Run isolated read-only parity audit
         shell: bash
         env:
@@ -66,7 +74,7 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
           set -euo pipefail
-          image="$ACR_SERVER/$IMAGE_NAME:inventory-v2-canary-$EXPECTED_SHA"
+          image="$PARITY_IMAGE"
           uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
           cleanup() { az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true; }
           trap cleanup EXIT
