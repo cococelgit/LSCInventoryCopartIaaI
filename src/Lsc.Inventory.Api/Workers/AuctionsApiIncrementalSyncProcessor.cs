@@ -37,6 +37,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     IAuctionsApiClient client,
     IInventorySnapshotStore snapshotStore,
     ICanonicalInventoryIngestionPipeline canonicalPipeline,
+    IInventoryV2BatchWriter inventoryV2BatchWriter,
     IOptions<AuctionsApiOptions> options,
     ILogger<AuctionsApiIncrementalSyncProcessor> logger) : IAuctionsApiIncrementalSyncProcessor
 {
@@ -77,6 +78,7 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         var pages = 0;
         var requests = 0;
         var eligibilityFlagCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var inventoryV2Batch = new List<InventoryV2BatchItem>(inventoryV2BatchWriter.PreferredBatchSize);
 
         try
         {
@@ -123,6 +125,12 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                         else if (saved.Action.Equals("updated", StringComparison.OrdinalIgnoreCase)) updated++;
                         else if (saved.Action.Equals("unchanged", StringComparison.OrdinalIgnoreCase)) unchanged++;
                         await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, saved.LotKey, ingested.Vehicle.LotNumber, MaskVin(ingested.Vehicle.Vin), saved.Action, saved.ChangedFields, [], observedAt), cancellationToken);
+                        if (inventoryV2BatchWriter.ShadowWriteConfigured)
+                        {
+                            inventoryV2Batch.Add(new InventoryV2BatchItem(ingested.Vehicle, observedAt));
+                            if (inventoryV2Batch.Count >= inventoryV2BatchWriter.PreferredBatchSize)
+                                await FlushInventoryV2ShadowAsync(inventoryV2Batch, cancellationToken);
+                        }
                     }
                     else
                     {
@@ -135,6 +143,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                 // Stop requesting additional pages as soon as the explicit canary cap is reached.
                 if (requestedMaximum is not null && changed >= requestedMaximum.Value) break;
             }
+
+            await FlushInventoryV2ShadowAsync(inventoryV2Batch, cancellationToken);
 
             if (requestedMaximum is null)
             {
@@ -185,6 +195,33 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
         finally
         {
             await snapshotStore.ReleaseLeaseAsync(leaseName, runId, DateTimeOffset.UtcNow, CancellationToken.None);
+        }
+    }
+
+    private async Task FlushInventoryV2ShadowAsync(List<InventoryV2BatchItem> batch, CancellationToken cancellationToken)
+    {
+        if (batch.Count == 0) return;
+        var snapshot = batch.ToArray();
+        batch.Clear();
+        try
+        {
+            var result = await inventoryV2BatchWriter.WriteShadowBatchAsync(snapshot, cancellationToken);
+            logger.LogInformation(
+                "Inventory V2 shadow flush attempted={Attempted} input={Input} distinct={Distinct} created={Created} updated={Updated} unchanged={Unchanged} stale={Stale} durationMs={DurationMs} skip={SkipReason}",
+                result.Attempted,
+                result.InputRows,
+                result.DistinctRows,
+                result.Created,
+                result.Updated,
+                result.Unchanged,
+                result.Stale,
+                result.DurationMs,
+                result.SkipReason);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // V2 remains shadow-only. Its failure must never make the V1 inventory write fail.
+            logger.LogError(exception, "Inventory V2 shadow batch failed after V1 persisted {Count} lots.", snapshot.Length);
         }
     }
 

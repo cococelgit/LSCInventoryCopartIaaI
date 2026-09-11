@@ -21,7 +21,8 @@ namespace Lsc.Inventory.Api.Storage;
 public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
     ILogger<PostgresSnapshotStore> logger,
-    IFacetsV2SharedCache? facetsV2SharedCache = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore
+    IFacetsV2SharedCache? facetsV2SharedCache = null,
+    IOptions<InventoryV2Options>? inventoryV2Options = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore, IInventoryV2BatchWriter
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static readonly SemaphoreSlim AuditSchemaLock = new(1, 1);
@@ -39,6 +40,7 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _scoringSchemaInitialized;
     private static bool _nationalSyncSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
+    private readonly InventoryV2Options _inventoryV2 = inventoryV2Options?.Value ?? new InventoryV2Options();
     private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
     private AccessToken _cachedDatabaseAccessToken;
@@ -3409,7 +3411,7 @@ public sealed partial class PostgresSnapshotStore(
             Database = database,
             Username = _persistence.DatabaseUser,
             Password = accessToken,
-            SslMode = SslMode.VerifyFull,
+            SslMode = _persistence.RequireTls ? SslMode.VerifyFull : SslMode.Disable,
             Timeout = _persistence.CommandTimeoutSeconds,
             CommandTimeout = _persistence.CommandTimeoutSeconds
         }.ConnectionString;

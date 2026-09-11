@@ -55,6 +55,11 @@ builder.Services
     .ValidateDataAnnotations();
 
 builder.Services
+    .AddOptions<InventoryV2Options>()
+    .Bind(builder.Configuration.GetSection(InventoryV2Options.SectionName))
+    .ValidateDataAnnotations();
+
+builder.Services
     .AddOptions<FacetsRedisOptions>()
     .Bind(builder.Configuration.GetSection(FacetsRedisOptions.SectionName))
     .ValidateDataAnnotations();
@@ -104,11 +109,14 @@ builder.Services.AddHttpClient("copart-media-proxy", client =>
 var persistenceProvider = builder.Configuration.GetValue<string>($"{PersistenceOptions.SectionName}:Provider") ?? "InMemory";
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
 {
-    builder.Services.AddSingleton<IInventorySnapshotStore, PostgresSnapshotStore>();
+    builder.Services.AddSingleton<PostgresSnapshotStore>();
+    builder.Services.AddSingleton<IInventorySnapshotStore>(serviceProvider => serviceProvider.GetRequiredService<PostgresSnapshotStore>());
+    builder.Services.AddSingleton<IInventoryV2BatchWriter>(serviceProvider => serviceProvider.GetRequiredService<PostgresSnapshotStore>());
 }
 else
 {
     builder.Services.AddSingleton<IInventorySnapshotStore, InMemorySnapshotStore>();
+    builder.Services.AddSingleton<IInventoryV2BatchWriter>(_ => DisabledInventoryV2BatchWriter.Instance);
 }
 builder.Services.AddScoped<IInventorySyncProcessor, InventorySyncProcessor>();
 builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();

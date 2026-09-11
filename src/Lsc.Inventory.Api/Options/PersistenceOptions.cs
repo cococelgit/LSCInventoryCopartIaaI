@@ -23,6 +23,9 @@ public sealed class PersistenceOptions
 
     public string? AccessToken { get; init; }
 
+    /// <summary>Production defaults to certificate-verified TLS; local integration tests may explicitly disable it.</summary>
+    public bool RequireTls { get; init; } = true;
+
     public bool RunMigrations { get; init; }
 
     [Required]
