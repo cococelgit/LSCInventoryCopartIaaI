@@ -51,7 +51,7 @@ public sealed partial class PostgresSnapshotStore
         var itemWhere = new List<string> { "latest.is_active" };
         AddInventoryV2ReaderFilters(itemsCommand, request, itemWhere);
         itemsCommand.CommandText = $"""
-            select latest.*, score.status as score_status, score.pre_grade as score_pre_grade,
+            select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
                    score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
                    score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
                    score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
@@ -75,7 +75,7 @@ public sealed partial class PostgresSnapshotStore
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
-            select latest.*, score.status as score_status, score.pre_grade as score_pre_grade,
+            select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
                    score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
                    score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
                    score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
@@ -174,7 +174,7 @@ public sealed partial class PostgresSnapshotStore
         "bid-desc" => "score.pre_grade desc nulls last, latest.current_bid_usd desc nulls last",
         "odometer-asc" => "score.pre_grade desc nulls last, latest.odometer_miles asc nulls last",
         "odometer-desc" => "score.pre_grade desc nulls last, latest.odometer_miles desc nulls last",
-        _ => "score.pre_grade desc nulls last, latest.observed_at desc nulls last"
+        _ => "score.pre_grade desc nulls last, latest.last_seen_at desc nulls last"
     };
 
     private static string PublicRunConditionV2Sql(string alias) => $"case when upper(replace(replace(replace(coalesce({alias}.run_condition_value, {alias}.run_condition_label, ''), '&', ' AND '), '/', ' AND '), '-', ' ')) like '%RUNS AND DRIVES%' or upper(replace(replace(replace(coalesce({alias}.run_condition_value, {alias}.run_condition_label, ''), '&', ' AND '), '/', ' AND '), '-', ' ')) like '%RUN AND DRIVE%' then 'RUNS_AND_DRIVES' when upper(coalesce({alias}.run_condition_value, {alias}.run_condition_label, '')) like '%START%' then 'STARTS' when upper(coalesce({alias}.run_condition_value, {alias}.run_condition_label, '')) like '%STATIONARY%' then 'STATIONARY' else 'UNVERIFIED' end";
