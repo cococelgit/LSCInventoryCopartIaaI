@@ -30,6 +30,7 @@ public sealed partial class PostgresSnapshotStore(
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim ScoringSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim NationalSyncSchemaLock = new(1, 1);
+    private static readonly SemaphoreSlim InventoryV2SchemaLock = new(1, 1);
     private static bool _schemaInitialized;
     private static bool _auditSchemaInitialized;
     private static bool _searchProjectionSchemaInitialized;

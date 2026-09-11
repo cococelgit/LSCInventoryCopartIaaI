@@ -17,4 +17,9 @@
     <PackageReference Include="StackExchange.Redis" Version="2.10.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="../../infra/sql/20260911_inventory_v2_schema.sql"
+                      LogicalName="InventoryV2Schema.sql" />
+  </ItemGroup>
+
 </Project>

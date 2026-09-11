@@ -994,6 +994,20 @@ if (args.Contains("--bootstrap-db", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--prepare-inventory-v2-schema", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    if (store is not PostgresSnapshotStore postgresStore)
+    {
+        throw new InvalidOperationException("Inventory V2 schema preparation requires Persistence:Provider=Postgres.");
+    }
+
+    var result = await postgresStore.PrepareInventoryV2SchemaAsync(CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
 if (args.Contains("--validation-report", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();
