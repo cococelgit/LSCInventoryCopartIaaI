@@ -77,16 +77,46 @@ public sealed partial class PostgresSnapshotStore
             ["has_key"] = reader.GetInt64(29), ["v2_media_internal"] = reader.GetInt64(30), ["has_photos"] = reader.GetInt64(31),
             ["has_360"] = reader.GetInt64(32), ["is_buy_now"] = reader.GetInt64(33), ["is_active"] = reader.GetInt64(34),
         };
+        var v2Rows = reader.GetInt64(0);
+        var missingV1Rows = reader.GetInt64(1);
+        var sellerParity = new InventoryV2SellerParity(
+            reader.GetInt64(35),
+            reader.GetInt64(36),
+            reader.GetInt64(37));
+        await reader.DisposeAsync();
+
+        var sellerSamples = new List<InventoryV2SellerMismatchSample>();
+        await using (var sampleCommand = connection.CreateCommand())
+        {
+            sampleCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            sampleCommand.CommandText = """
+                select v2.platform, v2.lot_number, v1.seller_name, v2.seller_name
+                from inventory_current_v2 v2
+                join inventory_search_current v1 on v1.lot_key = v2.lot_key
+                where (@platform::text is null or v2.platform = @platform::text)
+                  and v1.seller_name is not null
+                  and btrim(v2.seller_name) is distinct from btrim(v1.seller_name)
+                order by v2.platform, v2.lot_number
+                limit 20;
+                """;
+            AddParameter(sampleCommand, "platform", normalizedPlatform);
+            await using var sampleReader = await sampleCommand.ExecuteReaderAsync(cancellationToken);
+            while (await sampleReader.ReadAsync(cancellationToken))
+                sellerSamples.Add(new(
+                    sampleReader.GetString(0),
+                    sampleReader.GetString(1),
+                    sampleReader.IsDBNull(2) ? null : sampleReader.GetString(2),
+                    sampleReader.IsDBNull(3) ? null : sampleReader.GetString(3)));
+        }
+
         return new InventoryV2ParityReport(
             normalizedPlatform ?? "all",
-            reader.GetInt64(0),
-            reader.GetInt64(1),
+            v2Rows,
+            missingV1Rows,
             mismatches,
             mismatches.Values.Sum(),
-            new InventoryV2SellerParity(
-                reader.GetInt64(35),
-                reader.GetInt64(36),
-                reader.GetInt64(37)));
+            sellerParity,
+            sellerSamples);
     }
 }
 
@@ -96,9 +126,16 @@ public sealed record InventoryV2ParityReport(
     long MissingV1Rows,
     IReadOnlyDictionary<string, long> FieldMismatches,
     long TotalFieldMismatches,
-    InventoryV2SellerParity SellerParity);
+    InventoryV2SellerParity SellerParity,
+    IReadOnlyList<InventoryV2SellerMismatchSample> SellerMismatchSamples);
 
 public sealed record InventoryV2SellerParity(
     long V2Only,
     long V1Only,
     long ConflictingNonNull);
+
+public sealed record InventoryV2SellerMismatchSample(
+    string Platform,
+    string LotNumber,
+    string? V1SellerName,
+    string? V2SellerName);
