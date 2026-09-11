@@ -72,6 +72,20 @@ public sealed class InventoryV2BatchWriterTests
         var collect = processor.IndexOf("inventoryV2Batch.Add", StringComparison.Ordinal);
         Assert.True(persist >= 0 && collect > persist);
         Assert.Contains("failure must never make the V1 inventory write fail", processor, StringComparison.Ordinal);
+
+        var program = File.ReadAllText(FindRepositoryFile("Program.cs"));
+        Assert.Contains("--inventory-v2-writer-state", program, StringComparison.Ordinal);
+        Assert.Contains("--auctionsapi-incremental-canary", program, StringComparison.Ordinal);
+        Assert.Contains("--platform copart|iaai", program, StringComparison.Ordinal);
+        Assert.Contains("--write", program, StringComparison.Ordinal);
+
+        var workflow = File.ReadAllText(FindRepositoryRootFile(".github/workflows/run-inventory-v2-writer-canary.yml"));
+        Assert.Contains("RUN_INVENTORY_V2_WRITER_CANARY", workflow, StringComparison.Ordinal);
+        Assert.Contains("InventoryV2__ShadowWriteEnabled", workflow, StringComparison.Ordinal);
+        Assert.Contains("--inventory-v2-writer-state", workflow, StringComparison.Ordinal);
+        Assert.Contains("--auctionsapi-incremental-canary", workflow, StringComparison.Ordinal);
+        Assert.Contains("trap cleanup EXIT", workflow, StringComparison.Ordinal);
+        Assert.Contains("reader_enabled = false", File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Schema.cs")), StringComparison.Ordinal);
     }
 
     private static AuctionVehicle Vehicle() => new()
@@ -132,6 +146,18 @@ public sealed class InventoryV2BatchWriterTests
         while (directory is not null)
         {
             var candidate = Path.Combine(directory.FullName, "src", "Lsc.Inventory.Api", relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(candidate)) return candidate;
+            directory = directory.Parent;
+        }
+        throw new FileNotFoundException(relativePath);
+    }
+
+    private static string FindRepositoryRootFile(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath.Replace('/', Path.DirectorySeparatorChar));
             if (File.Exists(candidate)) return candidate;
             directory = directory.Parent;
         }

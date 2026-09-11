@@ -95,6 +95,32 @@ public sealed partial class PostgresSnapshotStore
         }
     }
 
+    public async Task<InventoryV2WriterStateResult> SetInventoryV2WriterStateAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            update inventory_v2_schema_state
+            set writer_enabled = @enabled,
+                updated_at = now()
+            where schema_name = 'inventory-current-v2'
+              and schema_version >= @schemaVersion
+              and reader_enabled = false
+            returning schema_version, writer_enabled, reader_enabled, updated_at;
+            """;
+        AddParameter(command, "enabled", enabled);
+        AddParameter(command, "schemaVersion", InventoryV2SchemaVersion);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            throw new InvalidOperationException("Inventory V2 writer state could not be changed; schema is missing, outdated, or reader is enabled.");
+        return new InventoryV2WriterStateResult(
+            reader.GetInt32(0),
+            reader.GetBoolean(1),
+            reader.GetBoolean(2),
+            reader.GetFieldValue<DateTimeOffset>(3));
+    }
+
     private static string ReadInventoryV2SchemaSql()
     {
         using var stream = typeof(PostgresSnapshotStore).Assembly.GetManifestResourceStream(InventoryV2SchemaResourceName)
@@ -110,3 +136,9 @@ public sealed record InventoryV2SchemaPreparationResult(
     bool WriterEnabled,
     bool ReaderEnabled,
     DateTimeOffset PreparedAt);
+
+public sealed record InventoryV2WriterStateResult(
+    int SchemaVersion,
+    bool WriterEnabled,
+    bool ReaderEnabled,
+    DateTimeOffset UpdatedAt);

@@ -1,0 +1,234 @@
+name: Run Inventory V2 Writer Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to process"
+        required: true
+        type: choice
+        options: [copart, iaai]
+      maximum:
+        description: "Maximum changed lots"
+        required: true
+        default: "1000"
+        type: string
+      confirmation:
+        description: "Type RUN_INVENTORY_V2_WRITER_CANARY"
+        required: true
+        type: string
+      source_ref:
+        description: "Reviewed branch or commit"
+        required: true
+        default: "main"
+        type: string
+      expected_sha:
+        description: "Exact full SHA approved for the canary"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: inventory-v2-writer-canary
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  TEMP_JOB: job-lsc-v2-canary-prod
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Verify exact commit and inputs
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          MAXIMUM: ${{ inputs.maximum }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = RUN_INVENTORY_V2_WRITER_CANARY
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]]
+          test "$MAXIMUM" -le 5000
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Verify production jobs are paused and idle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            echo "PRODUCTION_JOB=$job TRIGGER=$trigger ACTIVE=$active"
+            test "$trigger" = Manual
+            test "$active" = 0
+          done
+
+      - name: Build immutable canary image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="inventory-v2-canary-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "CANARY_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+
+      - name: Run isolated writer canary and restore writer state
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          MAXIMUM: ${{ inputs.maximum }}
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          case "$PLATFORM" in
+            copart) SOURCE_JOB=job-lsc-copart-auto-prod ;;
+            iaai) SOURCE_JOB=job-lsc-iaai-pilot-prod ;;
+            *) exit 2 ;;
+          esac
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+
+          wait_execution() {
+            local execution="$1"
+            local label="$2"
+            local status=Unknown
+            for _ in $(seq 1 360); do
+              status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+              echo "${label}_STATUS=$status"
+              case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+              sleep 5
+            done
+            replicas="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json || true)"
+            replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+            container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+            if [ -n "$replica" ] && [ -n "$container" ]; then
+              az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 500 --format text | tee "$RUNNER_TEMP/$label.log" || true
+            fi
+            test "$status" = Succeeded
+          }
+
+          patch_args() {
+            local args_json="$1"
+            body="$(az rest --method get --uri "$uri" -o json | jq --argjson args "$args_json" '
+              .properties.template.containers[0] |= (del(.imageType) | .command=["dotnet"] | .args=$args)
+              | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+            az rest --method patch --uri "$uri" --body "$body" --output none
+          }
+
+          run_current() {
+            local label="$1"
+            execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+            test -n "$execution"
+            echo "${label}_EXECUTION=$execution"
+            wait_execution "$execution" "$label"
+          }
+
+          disable_writer() {
+            if az rest --method get --uri "$uri" --output none 2>/dev/null; then
+              patch_args '["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","false"]' || true
+              execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty' || true)"
+              if [ -n "$execution" ]; then wait_execution "$execution" WRITER_DISABLE || true; fi
+            fi
+          }
+
+          cleanup() {
+            disable_writer
+            az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
+          }
+          trap cleanup EXIT
+          az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
+
+          source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$CANARY_IMAGE" --arg key "$AUCTIONS_API_KEY" '
+            .location as $location
+            | .properties.environmentId as $environmentId
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | .properties.configuration as $sourceConfiguration
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
+                | del(.imageType)
+                | .name=$name
+                | .image=$image
+                | .command=["dotnet"]
+                | .args=["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","true"]
+                | .env=((.env // [])
+                    | map(select((.secretRef // "") == ""
+                        and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not)
+                        and (.name | IN("AuctionsApi__ApiKey","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalMapperEnabled","InventoryV2__ShadowWriteEnabled","InventoryV2__BatchSize") | not)))
+                    + [
+                        {name:"AuctionsApi__ApiKey",value:$key},
+                        {name:"AuctionsApi__Enabled",value:"true"},
+                        {name:"AuctionsApi__AllowWrites",value:"true"},
+                        {name:"AuctionsApi__CanonicalMapperEnabled",value:"true"},
+                        {name:"InventoryV2__ShadowWriteEnabled",value:"true"},
+                        {name:"InventoryV2__BatchSize",value:"1000"}
+                      ])) as $container
+            | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
+                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=3600)), template:($sourceTemplate | .containers=[$container])}}')"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            echo "CANARY_JOB_PROVISIONING=$state"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+
+          run_current WRITER_ENABLE
+          grep -q '"WriterEnabled":true' "$RUNNER_TEMP/WRITER_ENABLE.log"
+
+          patch_args "[\"Lsc.Inventory.Api.dll\",\"--auctionsapi-incremental-canary\",\"--platform\",\"$PLATFORM\",\"--maximum\",\"$MAXIMUM\",\"--write\"]"
+          run_current V2_CANARY
+          grep -q 'Inventory V2 shadow batch completed' "$RUNNER_TEMP/V2_CANARY.log"
+          grep -q '"Failures":\[\]' "$RUNNER_TEMP/V2_CANARY.log"
+
+          disable_writer
+          patch_args '["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","false"]'
+          run_current WRITER_VERIFY_DISABLED
+          grep -q '"WriterEnabled":false' "$RUNNER_TEMP/WRITER_VERIFY_DISABLED.log"
+
+          az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors
+          trap - EXIT
+
+      - name: Verify production jobs remain paused and idle
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+          done

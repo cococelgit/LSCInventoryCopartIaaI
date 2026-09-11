@@ -1051,6 +1051,38 @@ if (args.Contains("--media-diagnostic", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--inventory-v2-writer-state", StringComparer.OrdinalIgnoreCase))
+{
+    var enabledIndex = Array.FindIndex(args, argument => string.Equals(argument, "--enabled", StringComparison.OrdinalIgnoreCase));
+    if (enabledIndex < 0 || enabledIndex + 1 >= args.Length || !bool.TryParse(args[enabledIndex + 1], out var enabled))
+        throw new ArgumentException("--inventory-v2-writer-state requires --enabled true|false.");
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>() as PostgresSnapshotStore
+        ?? throw new InvalidOperationException("Inventory V2 writer state requires Persistence:Provider=Postgres.");
+    var result = await store.SetInventoryV2WriterStateAsync(enabled, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
+if (args.Contains("--auctionsapi-incremental-canary", StringComparer.OrdinalIgnoreCase))
+{
+    var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));
+    var platform = platformIndex >= 0 && platformIndex + 1 < args.Length ? args[platformIndex + 1].Trim().ToLowerInvariant() : string.Empty;
+    if (platform is not ("copart" or "iaai"))
+        throw new ArgumentException("--auctionsapi-incremental-canary requires --platform copart|iaai.");
+    var maximumIndex = Array.FindIndex(args, argument => string.Equals(argument, "--maximum", StringComparison.OrdinalIgnoreCase));
+    var maximum = maximumIndex >= 0 && maximumIndex + 1 < args.Length && int.TryParse(args[maximumIndex + 1], out var parsedMaximum)
+        ? Math.Clamp(parsedMaximum, 1, 5_000)
+        : 100;
+    var persist = args.Contains("--write", StringComparer.OrdinalIgnoreCase);
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiIncrementalSyncProcessor>();
+    var result = await processor.RunAsync(platform, persist, CancellationToken.None, maximum);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    if (result.Failures.Count > 0) Environment.ExitCode = 1;
+    return;
+}
+
 if (args.Contains("--copart-auctionsapi-run", StringComparer.OrdinalIgnoreCase)
     || args.Contains("--copart-auctionsapi-dry-run", StringComparer.OrdinalIgnoreCase))
 {
