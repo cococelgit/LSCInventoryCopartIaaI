@@ -456,6 +456,22 @@ if (args.Contains("--sold-lot-retention-dry-run", StringComparer.OrdinalIgnoreCa
     return;
 }
 
+if (args.Contains("--sold-lot-jsonb-purge-batch", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:PurgeDays") ?? 7, 1, 3650);
+    var batchSize = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:PurgeBatchSize") ?? 500, 1, 1000);
+    var afterLotKey = builder.Configuration["Retention:PurgeAfterLotKey"];
+    var purgeRunId = builder.Configuration["Retention:PurgeRunId"] ?? $"manual-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
+    var execute = builder.Configuration.GetValue<bool>("Retention:PurgeExecute");
+    if (execute && !string.Equals(builder.Configuration["Retention:PurgeConfirmation"], "PURGE_JSONB_BATCH", StringComparison.Ordinal))
+        throw new InvalidOperationException("JSONB purge execute mode requires Retention:PurgeConfirmation=PURGE_JSONB_BATCH.");
+    var report = await store.PurgeLegacyJsonbBatchAsync(retentionDays, batchSize, afterLotKey, purgeRunId, execute, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
+    return;
+}
+
 if (args.Contains("--copart-publication-report", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

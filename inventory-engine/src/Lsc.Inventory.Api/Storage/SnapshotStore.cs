@@ -55,6 +55,7 @@ public interface IInventorySnapshotStore
     Task<CopartAuctionHistoryBackfillResult> BackfillCopartAuctionObservationsAsync(int maximum, CancellationToken cancellationToken);
     Task<CopartAuctionHistoryReport> GetCopartAuctionHistoryReportAsync(CancellationToken cancellationToken);
     Task<SoldLotRetentionDryRunReport> GetSoldLotRetentionDryRunAsync(int retentionDays, CancellationToken cancellationToken) => throw new NotSupportedException();
+    Task<InventoryJsonbPurgeBatchResult> PurgeLegacyJsonbBatchAsync(int retentionDays, int batchSize, string? afterLotKey, string purgeRunId, bool execute, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<SellerAuditReport> GetSellerAuditReportAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken);
     Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken);
@@ -255,6 +256,20 @@ public sealed record SoldLotRetentionDryRunReport(
     IReadOnlyList<HistoricalLotStatusBucket> HistoricalStatusBuckets,
     HistoricalRetentionInventoryDiagnostics? HistoricalDiagnostics,
     bool ReadOnly);
+
+public sealed record InventoryJsonbPurgeBatchResult(
+    string PurgeRunId,
+    int RetentionDays,
+    DateTimeOffset CutoffAt,
+    int BatchSize,
+    string? AfterLotKey,
+    string? LastLotKey,
+    int LotsSelected,
+    long VersionsSelected,
+    long VersionsDeleted,
+    bool Execute,
+    bool HasMore,
+    DateTimeOffset CompletedAt);
 
 /// <summary>
 /// Historical inventory grouped by the source-provided lot outcome. These buckets are review data,

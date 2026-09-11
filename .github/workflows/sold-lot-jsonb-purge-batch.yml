@@ -1,0 +1,160 @@
+name: Sold Lot JSONB Purge Batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RUN_JSONB_PURGE_BATCH to run one controlled batch
+        required: true
+        type: string
+      source_ref:
+        description: Reviewed source ref containing the incremental purge
+        required: true
+        default: main
+        type: string
+      retention_days:
+        description: Inactive days before a lot is eligible
+        required: true
+        default: '7'
+        type: string
+      batch_size:
+        description: Maximum lots in this batch (1-1000)
+        required: true
+        default: '500'
+        type: string
+      after_lot_key:
+        description: Optional keyset cursor from the previous batch
+        required: false
+        default: ''
+        type: string
+      purge_run_id:
+        description: Stable ledger run identifier
+        required: true
+        default: jsonb-purge-pilot-1
+        type: string
+      execute:
+        description: Must be true only for an explicitly approved deletion batch
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: sold-lot-jsonb-purge-batch
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  TEMPORARY_JOB: job-lsc-copart-catchup-prod
+
+jobs:
+  purge-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Build immutable purge image
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'RUN_JSONB_PURGE_BATCH'
+          [[ '${{ inputs.retention_days }}' =~ ^[1-9][0-9]{0,3}$ ]] || { echo 'retention_days must be 1-9999' >&2; exit 1; }
+          [[ '${{ inputs.batch_size }}' =~ ^[1-9][0-9]{0,3}$ ]] || { echo 'batch_size must be 1-1000' >&2; exit 1; }
+          test '${{ inputs.purge_run_id }}' != ''
+          tag="jsonb-purge-${GITHUB_SHA}"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file inventory-engine/Dockerfile inventory-engine
+          echo "PURGE_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+      - name: Run one protected batch and restore job template
+        shell: bash
+        env:
+          RETENTION_DAYS: ${{ inputs.retention_days }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          AFTER_LOT_KEY: ${{ inputs.after_lot_key }}
+          PURGE_RUN_ID: ${{ inputs.purge_run_id }}
+          PURGE_EXECUTE: ${{ inputs.execute }}
+        run: |
+          set -euo pipefail
+          mkdir -p report
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMPORARY_JOB?api-version=2024-03-01"
+          current="$(az rest --method get --uri "$uri" -o json)"
+          trigger="$(echo "$current" | jq -r '.properties.configuration.triggerType')"
+          active="$(az containerapp job execution list --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+          test "$trigger" = Manual
+          test "$active" = 0
+          echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-before.json
+          restore_body="$(echo "$current" | jq '{properties:{template:{containers:[.properties.template.containers[0] | del(.imageType)]}}}')"
+          restore() { if [ -n "${restore_body:-}" ]; then az rest --method patch --uri "$uri" --body "$restore_body" --output none || true; fi; }
+          trap restore EXIT
+          body="$(echo "$current" | jq --arg image "$PURGE_IMAGE" --arg days "$RETENTION_DAYS" --arg batch "$BATCH_SIZE" --arg after "$AFTER_LOT_KEY" --arg run "$PURGE_RUN_ID" --arg execute "$PURGE_EXECUTE" '
+            .properties.template.containers[0]
+            |= (del(.imageType)
+                | .image = $image
+                | .command = ["dotnet"]
+                | .args = ["Lsc.Inventory.Api.dll", "--sold-lot-jsonb-purge-batch"]
+                | .env = ((.env // [])
+                    | map(select(.name != "Retention__PurgeDays" and .name != "Retention__PurgeBatchSize" and .name != "Retention__PurgeAfterLotKey" and .name != "Retention__PurgeRunId" and .name != "Retention__PurgeExecute" and .name != "Retention__PurgeConfirmation"))
+                    + [{name:"Retention__PurgeDays",value:$days},{name:"Retention__PurgeBatchSize",value:$batch},{name:"Retention__PurgeAfterLotKey",value:$after},{name:"Retention__PurgeRunId",value:$run},{name:"Retention__PurgeExecute",value:$execute},{name:"Retention__PurgeConfirmation",value:(if $execute == "true" then "PURGE_JSONB_BATCH" else "" end)}]))
+            | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+          az rest --method patch --uri "$uri" --body "$body" --output none
+          execution="$(az containerapp job start --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+          test -n "$execution_name"
+          echo "$execution" | jq . > report/execution-start.json
+          deadline=$((SECONDS + 900))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            status_json="$(az containerapp job execution show --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution_name" -o json)"
+            status="$(echo "$status_json" | jq -r '.properties.status // .properties.runningState // "Unknown"')"
+            echo "JSONB purge status: $status"
+            case "$status" in
+              Succeeded|Failed|Canceled)
+                echo "$status_json" | jq . > report/execution-final.json
+                replicas="$(az containerapp job replica list --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" -o json || true)"
+                echo "$replicas" | jq . > report/replicas.json
+                replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+                container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+                if [ -n "$replica" ] && [ -n "$container" ]; then
+                  az containerapp job logs show --name "$TEMPORARY_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" --replica "$replica" --container "$container" --tail 300 --format text | tee report/jsonb-purge-batch.log || true
+                fi
+                test "$status" = Succeeded
+                break
+                ;;
+            esac
+            sleep 15
+          done
+          test "$SECONDS" -lt "$deadline"
+      - name: Verify temporary job restored
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMPORARY_JOB?api-version=2024-03-01"
+          current="$(az rest --method get --uri "$uri" -o json)"
+          echo "$current" | jq -S '.properties.template.containers[0] | del(.imageType)' > report/template-after.json
+          diff -u report/template-before.json report/template-after.json
+          test "$(echo "$current" | jq -r '.properties.configuration.triggerType')" = Manual
+      - name: Upload purge evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sold-lot-jsonb-purge-batch-${{ github.run_id }}
+          path: report
+          if-no-files-found: warn
+          retention-days: 30

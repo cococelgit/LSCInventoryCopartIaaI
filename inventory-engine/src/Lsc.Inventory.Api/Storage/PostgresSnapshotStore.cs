@@ -1818,6 +1818,135 @@ public sealed partial class PostgresSnapshotStore(
         return report;
     }
 
+    public async Task<InventoryJsonbPurgeBatchResult> PurgeLegacyJsonbBatchAsync(int retentionDays, int batchSize, string? afterLotKey, string purgeRunId, bool execute, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(purgeRunId))
+            throw new ArgumentException("A purge run id is required.", nameof(purgeRunId));
+        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
+        var safeBatchSize = Math.Clamp(batchSize, 1, 1000);
+        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
+        await EnsureSchemaAsync(cancellationToken);
+        await EnsureLifecycleSchemaAsync(cancellationToken);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using (var ledgerSchema = connection.CreateCommand())
+        {
+            ledgerSchema.CommandTimeout = Math.Min(Math.Max(_persistence.CommandTimeoutSeconds, 30), 120);
+            ledgerSchema.CommandText = """
+                create table if not exists inventory_jsonb_purge_ledger (
+                    purge_run_id text not null,
+                    batch_completed_at timestamptz not null default now(),
+                    retention_days integer not null,
+                    cutoff_at timestamptz not null,
+                    after_lot_key text,
+                    last_lot_key text,
+                    batch_size integer not null,
+                    lots_selected integer not null,
+                    versions_selected bigint not null,
+                    versions_deleted bigint not null,
+                    execute boolean not null,
+                    primary key (purge_run_id, batch_completed_at)
+                );
+                create index if not exists ix_inventory_jsonb_purge_ledger_run on inventory_jsonb_purge_ledger (purge_run_id, batch_completed_at desc);
+                """;
+            await ledgerSchema.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await using var candidatesCommand = connection.CreateCommand();
+            candidatesCommand.Transaction = transaction;
+            candidatesCommand.CommandTimeout = Math.Min(Math.Max(_persistence.CommandTimeoutSeconds, 30), 120);
+            candidatesCommand.CommandText = """
+                select lifecycle.lot_key
+                from inventory_lot_lifecycle lifecycle
+                where not lifecycle.is_active
+                  and lifecycle.deactivated_at is not null
+                  and lifecycle.deactivated_at <= @cutoff_at
+                  and (@after_lot_key is null or lifecycle.lot_key > @after_lot_key)
+                order by lifecycle.lot_key
+                limit @batch_size;
+                """;
+            AddParameter(candidatesCommand, "cutoff_at", cutoffAt);
+            AddParameter(candidatesCommand, "after_lot_key", (object?)afterLotKey ?? DBNull.Value);
+            AddParameter(candidatesCommand, "batch_size", safeBatchSize);
+
+            var lotKeys = new List<string>(safeBatchSize);
+            await using (var reader = await candidatesCommand.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                    lotKeys.Add(reader.GetString(0));
+            }
+
+            long versionsSelected = 0;
+            if (lotKeys.Count > 0)
+            {
+                await using var countCommand = connection.CreateCommand();
+                countCommand.Transaction = transaction;
+                countCommand.CommandTimeout = Math.Min(Math.Max(_persistence.CommandTimeoutSeconds, 30), 120);
+                countCommand.CommandText = "select count(*)::bigint from auction_lot_versions where lot_key = any(@lot_keys);";
+                AddParameter(countCommand, "lot_keys", lotKeys.ToArray());
+                versionsSelected = Convert.ToInt64(await countCommand.ExecuteScalarAsync(cancellationToken));
+
+                if (execute)
+                {
+                    await using var deleteCommand = connection.CreateCommand();
+                    deleteCommand.Transaction = transaction;
+                    deleteCommand.CommandTimeout = Math.Min(Math.Max(_persistence.CommandTimeoutSeconds, 30), 120);
+                    deleteCommand.CommandText = "delete from auction_lot_versions where lot_key = any(@lot_keys);";
+                    AddParameter(deleteCommand, "lot_keys", lotKeys.ToArray());
+                    var versionsDeleted = await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
+                    if (versionsDeleted != versionsSelected)
+                        throw new InvalidOperationException($"JSONB purge count mismatch: selected {versionsSelected}, deleted {versionsDeleted}.");
+                }
+            }
+
+            await using (var ledger = connection.CreateCommand())
+            {
+                ledger.Transaction = transaction;
+                ledger.CommandTimeout = Math.Min(Math.Max(_persistence.CommandTimeoutSeconds, 30), 120);
+                ledger.CommandText = """
+                    insert into inventory_jsonb_purge_ledger (
+                        purge_run_id, retention_days, cutoff_at, after_lot_key, last_lot_key,
+                        batch_size, lots_selected, versions_selected, versions_deleted, execute)
+                    values (@purge_run_id, @retention_days, @cutoff_at, @after_lot_key, @last_lot_key,
+                            @batch_size, @lots_selected, @versions_selected, @versions_deleted, @execute);
+                    """;
+                AddParameter(ledger, "purge_run_id", purgeRunId);
+                AddParameter(ledger, "retention_days", safeRetentionDays);
+                AddParameter(ledger, "cutoff_at", cutoffAt);
+                AddParameter(ledger, "after_lot_key", (object?)afterLotKey ?? DBNull.Value);
+                AddParameter(ledger, "last_lot_key", (object?)(lotKeys.Count == 0 ? afterLotKey : lotKeys[^1]) ?? DBNull.Value);
+                AddParameter(ledger, "batch_size", safeBatchSize);
+                AddParameter(ledger, "lots_selected", lotKeys.Count);
+                AddParameter(ledger, "versions_selected", versionsSelected);
+                AddParameter(ledger, "versions_deleted", execute ? versionsSelected : 0L);
+                AddParameter(ledger, "execute", execute);
+                await ledger.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return new InventoryJsonbPurgeBatchResult(
+                purgeRunId,
+                safeRetentionDays,
+                cutoffAt,
+                safeBatchSize,
+                afterLotKey,
+                lotKeys.Count == 0 ? afterLotKey : lotKeys[^1],
+                lotKeys.Count,
+                versionsSelected,
+                execute ? versionsSelected : 0,
+                execute,
+                lotKeys.Count == safeBatchSize,
+                DateTimeOffset.UtcNow);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
     public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
