@@ -50,12 +50,16 @@ jobs:
             cron="$(echo "$before" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression // empty')"
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
             echo "JOB=$job TRIGGER=$trigger CRON=${cron:-none} ACTIVE=$active"
-            test "$trigger" = "Schedule"
             test "$active" -eq 0
-            test -n "$cron"
-            job_id="$(echo "$before" | jq -r '.id')"
-            az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body '{"properties":{"configuration":{"triggerType":"Manual"}}}' --only-show-errors
-            echo "$job|$cron" >> "$RUNNER_TEMP/paused-jobs.txt"
+            if [ "$trigger" = "Schedule" ]; then
+              test -n "$cron"
+              job_id="$(echo "$before" | jq -r '.id')"
+              az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body '{"properties":{"configuration":{"triggerType":"Manual"}}}' --only-show-errors
+              echo "$job|$cron" >> "$RUNNER_TEMP/paused-jobs.txt"
+            else
+              test "$trigger" = "Manual"
+              echo "JOB_ALREADY_PAUSED=$job"
+            fi
           done
       - name: Verify both schedules are paused
         shell: bash

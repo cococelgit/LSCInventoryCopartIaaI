@@ -1,0 +1,113 @@
+name: Promote PostgreSQL Only Engine While Paused
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type PROMOTE_POSTGRES_ONLY_WHILE_PAUSED"
+        required: true
+        type: string
+      source_ref:
+        description: "Reviewed branch containing the exact expected commit"
+        required: true
+        default: "12597d4ddd9d6045c95d08d230419a4cb0fb488d"
+        type: string
+      expected_sha:
+        description: "Exact full SHA approved for Production"
+        required: true
+        default: "12597d4ddd9d6045c95d08d230419a4cb0fb488d"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: postgres-only-engine-cutover
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_JOB: job-lsc-copart-auto-prod
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Verify exact approved commit
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = PROMOTE_POSTGRES_ONLY_WHILE_PAUSED
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "APPROVED_SHA=$EXPECTED_SHA"
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture paused job baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            echo "BASELINE_JOB=$job TRIGGER=$trigger ACTIVE=$active IMAGE=$(echo "$json" | jq -r '.properties.template.containers[0].image')"
+            test "$trigger" = Manual
+            test "$active" = 0
+            echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.before.json"
+          done
+
+      - name: Build immutable PostgreSQL-only image
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          tag="postgres-only-${source_sha}"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "PROMOTED_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+
+      - name: Update only paused job images
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job update --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" --image "$PROMOTED_IMAGE" --only-show-errors
+          az containerapp job update --name "$COPART_JOB" --resource-group "$RESOURCE_GROUP" --image "$PROMOTED_IMAGE" --only-show-errors
+
+      - name: Verify image-only cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
+            echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.after.json"
+            diff -u "$RUNNER_TEMP/$job.before.json" "$RUNNER_TEMP/$job.after.json"
+            echo "VERIFIED_JOB=$job IMAGE=$PROMOTED_IMAGE TRIGGER=Manual ACTIVE=0"
+          done
+          echo "PostgreSQL-only engine promoted. Schedules remain paused and no execution was started."

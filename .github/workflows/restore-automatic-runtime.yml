@@ -51,7 +51,7 @@ jobs:
               args='["Lsc.Inventory.Api.dll","--iaai-national"]'
             else
               command='["/app/run-auctionsapi-dry-run.sh"]'
-              args='["copart","run","500"]'
+              args='["copart","run","140"]'
             fi
             body="$(echo "$before" | jq --argjson command "$command" --argjson args "$args" --arg apiKey "$AUCTIONS_API_KEY" --arg job "$job" '
               .properties.template.containers[0] |= del(.imageType)
@@ -89,6 +89,9 @@ jobs:
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
             test -n "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__ApiKey")][0] | .value // .secretRef // ""')"
+            if [ "$job" = "$COPART_JOB" ]; then
+              test "$(echo "$json" | jq -c '.properties.template.containers[0].args')" = '["copart","run","140"]'
+            fi
             echo "$json" | jq '{name:.name,trigger:.properties.configuration.triggerType,image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,enabled:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled") | .value),allowWrites:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites") | .value),overlapMinutes:(.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__DefaultOverlapMinutes") | .value)}'
           done
           echo "Runtime restored; schedules remain paused; no execution started."
