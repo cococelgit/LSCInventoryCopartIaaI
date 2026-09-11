@@ -1,0 +1,129 @@
+name: Delete Raw Apibara Container
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type DELETE_RAW_APIBARA_PERMANENTLY"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: delete-raw-apibara-container
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  STORAGE_ACCOUNT: stlscinvprodeus2
+  RAW_CONTAINER: raw-apibara
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Guard explicit permanent deletion
+        shell: bash
+        run: test '${{ inputs.confirmation }}' = DELETE_RAW_APIBARA_PERMANENTLY
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Final destructive prechecks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p report
+          exists="$(az storage container-rm exists --resource-group "$RESOURCE_GROUP" --storage-account "$STORAGE_ACCOUNT" --name "$RAW_CONTAINER" --query exists -o tsv)"
+          test "$exists" = true
+          az storage container-rm show --resource-group "$RESOURCE_GROUP" --storage-account "$STORAGE_ACCOUNT" --name "$RAW_CONTAINER" -o json > report/raw-container-before.json
+          test "$(jq -r '.properties.hasImmutabilityPolicy // false' report/raw-container-before.json)" = false
+          test "$(jq -r '.properties.hasLegalHold // false' report/raw-container-before.json)" = false
+
+          az storage account blob-service-properties show --resource-group "$RESOURCE_GROUP" --account-name "$STORAGE_ACCOUNT" -o json > report/blob-service-before.json
+          test "$(jq -r '.deleteRetentionPolicy.enabled // false' report/blob-service-before.json)" = false
+          test "$(jq -r '.containerDeleteRetentionPolicy.enabled // false' report/blob-service-before.json)" = false
+          test "$(jq -r '.isVersioningEnabled // false' report/blob-service-before.json)" = false
+          az storage container-rm list --resource-group "$RESOURCE_GROUP" --storage-account "$STORAGE_ACCOUNT" --query '[].name' -o json | jq -S . > report/containers-before.json
+          jq '[.[] | select(. != "raw-apibara")] | sort' report/containers-before.json > report/expected-containers-after.json
+
+          consumers=0
+          for app in $(az containerapp list --resource-group "$RESOURCE_GROUP" --query '[].name' -o tsv); do
+            count="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$app" -o json | jq '[.properties.template.containers[]?.env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$"))] | length')"
+            consumers=$((consumers + count))
+          done
+          for job in $(az containerapp job list --resource-group "$RESOURCE_GROUP" --query '[].name' -o tsv); do
+            count="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json | jq '[.properties.template.containers[]?.env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$"))] | length')"
+            consumers=$((consumers + count))
+          done
+          test "$consumers" = 0
+
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            json="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$job" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+          done
+
+          api_fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "https://${api_fqdn}/healthz" > report/api-health-before.json
+          echo "API_FQDN=$api_fqdn" >> "$GITHUB_ENV"
+          echo 'PERMANENT_DELETE_PRECHECK=PASS SOFT_DELETE=false VERSIONING=false CONSUMERS=0'
+
+      - name: Permanently delete only raw-apibara
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(jq -r '.id' report/raw-container-before.json)"
+          test -n "$container_id" && test "$container_id" != null
+          az resource delete --ids "$container_id" --only-show-errors
+
+          absent=false
+          for attempt in $(seq 1 30); do
+            exists="$(az storage container-rm exists --resource-group "$RESOURCE_GROUP" --storage-account "$STORAGE_ACCOUNT" --name "$RAW_CONTAINER" --query exists -o tsv 2>/dev/null || echo false)"
+            echo "DELETE_VERIFY attempt=$attempt exists=$exists"
+            if [ "$exists" = false ]; then
+              absent=true
+              break
+            fi
+            sleep 10
+          done
+          test "$absent" = true
+
+      - name: Verify remaining resources and application health
+        shell: bash
+        run: |
+          set -euo pipefail
+          az storage container-rm list --resource-group "$RESOURCE_GROUP" --storage-account "$STORAGE_ACCOUNT" --query '[].name' -o json | jq -S . > report/containers-after.json
+          diff -u report/expected-containers-after.json report/containers-after.json
+          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "https://${API_FQDN}/healthz" > report/api-health-after.json
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            json="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$job" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+          done
+          account_id="$(az storage account show --resource-group "$RESOURCE_GROUP" --name "$STORAGE_ACCOUNT" --query id -o tsv)"
+          az monitor metrics list --resource "$account_id" --metric UsedCapacity --interval PT1H --aggregation Average --query '{timespan:timespan,value:value[0].timeseries[0].data[-1].average}' -o json > report/used-capacity-after.json || true
+          echo 'RAW_CONTAINER_DELETE=SUCCESS CONTAINER=raw-apibara API_HEALTH=PASS IAAI_ACTIVE=0 COPART_ACTIVE=0'
+
+      - name: Upload deletion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-apibara-delete-${{ github.run_id }}
+          path: report
+          if-no-files-found: warn
+          retention-days: 90
