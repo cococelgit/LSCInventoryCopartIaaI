@@ -30,6 +30,7 @@ public sealed partial class PostgresSnapshotStore(
     private static readonly SemaphoreSlim LifecycleSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim ScoringSchemaLock = new(1, 1);
     private static readonly SemaphoreSlim NationalSyncSchemaLock = new(1, 1);
+    private static readonly SemaphoreSlim PostgresOnlyCompatibilityLock = new(1, 1);
     private static bool _schemaInitialized;
     private static bool _auditSchemaInitialized;
     private static bool _searchProjectionSchemaInitialized;
@@ -37,6 +38,7 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _lifecycleSchemaInitialized;
     private static bool _scoringSchemaInitialized;
     private static bool _nationalSyncSchemaInitialized;
+    private static bool _postgresOnlyCompatibilityReady;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
@@ -131,6 +133,7 @@ public sealed partial class PostgresSnapshotStore(
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
 
+        await EnsurePostgresOnlyCompatibilityAsync(cancellationToken);
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
@@ -1001,6 +1004,7 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task PersistEligibilityDecisionAsync(EligibilityEvaluation evaluation, DateTimeOffset evaluatedAt, CancellationToken cancellationToken)
     {
+        await EnsurePostgresOnlyCompatibilityAsync(cancellationToken);
         await EnsureEligibilitySchemaAsync(cancellationToken);
         var identity = $"{evaluation.AuctionSource ?? "unknown"}:{evaluation.LotNumber ?? "unknown"}";
 
@@ -3153,18 +3157,6 @@ public sealed partial class PostgresSnapshotStore(
                     unique (lot_key, payload_hash)
                 );
 
-                do $$
-                begin
-                    if exists (
-                        select 1 from information_schema.columns
-                        where table_schema = 'public'
-                          and table_name = 'auction_lot_versions'
-                          and column_name = 'raw_blob_name'
-                    ) then
-                        alter table auction_lot_versions alter column raw_blob_name drop not null;
-                    end if;
-                end $$;
-
                 create index if not exists ix_auction_lot_versions_lot_observed on auction_lot_versions (lot_key, observed_at desc);
                 create index if not exists ix_auction_lot_versions_lot_observed_id on auction_lot_versions (lot_key, observed_at desc, id desc);
                 """;
@@ -3359,18 +3351,6 @@ public sealed partial class PostgresSnapshotStore(
                     updated_at timestamptz not null default now()
                 );
 
-                do $$
-                begin
-                    if exists (
-                        select 1 from information_schema.columns
-                        where table_schema = 'public'
-                          and table_name = 'eligibility_decisions'
-                          and column_name = 'audit_blob_name'
-                    ) then
-                        alter table eligibility_decisions alter column audit_blob_name drop not null;
-                    end if;
-                end $$;
-
                 create index if not exists ix_eligibility_decisions_decision_evaluated on eligibility_decisions (decision, evaluated_at desc);
                 create index if not exists ix_eligibility_decisions_discard_reasons on eligibility_decisions using gin (discard_reasons);
                 """;
@@ -3418,6 +3398,46 @@ public sealed partial class PostgresSnapshotStore(
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
         await OpenConnectionAsync(_persistence.Database, cancellationToken);
+
+    private async Task EnsurePostgresOnlyCompatibilityAsync(CancellationToken cancellationToken)
+    {
+        if (_postgresOnlyCompatibilityReady) return;
+        await PostgresOnlyCompatibilityLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_postgresOnlyCompatibilityReady) return;
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            command.CommandText = """
+                do $$
+                begin
+                    if exists (
+                        select 1 from information_schema.columns
+                        where table_schema = 'public'
+                          and table_name = 'auction_lot_versions'
+                          and column_name = 'raw_blob_name'
+                    ) then
+                        alter table auction_lot_versions alter column raw_blob_name drop not null;
+                    end if;
+                    if exists (
+                        select 1 from information_schema.columns
+                        where table_schema = 'public'
+                          and table_name = 'eligibility_decisions'
+                          and column_name = 'audit_blob_name'
+                    ) then
+                        alter table eligibility_decisions alter column audit_blob_name drop not null;
+                    end if;
+                end $$;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            _postgresOnlyCompatibilityReady = true;
+        }
+        finally
+        {
+            PostgresOnlyCompatibilityLock.Release();
+        }
+    }
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(string database, CancellationToken cancellationToken)
     {
