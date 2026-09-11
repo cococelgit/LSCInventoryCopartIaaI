@@ -1,0 +1,113 @@
+name: Audit Inventory V2 Reader Canary
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type AUDIT_INVENTORY_V2_READER_CANARY"
+        required: true
+        type: string
+      expected_sha:
+        description: "Exact full image/source SHA"
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: audit-inventory-v2-reader-canary
+  cancel-in-progress: false
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  SOURCE_JOB: job-lsc-copart-auto-prod
+  TEMP_JOB: job-lsc-v2-reader-canary-prod
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+      - name: Verify inputs
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = AUDIT_INVENTORY_V2_READER_CANARY
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Build immutable reader canary image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="inventory-v2-reader-canary-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "CANARY_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+      - name: Run isolated V2 reader canary
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+          cleanup() { az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true; }
+          trap cleanup EXIT
+          cleanup
+          source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$CANARY_IMAGE" '
+            .location as $location
+            | .properties.environmentId as $environmentId
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | .properties.configuration as $sourceConfiguration
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
+                | del(.imageType)
+                | .name=$name
+                | .image=$image
+                | .command=["dotnet"]
+                | .args=["Lsc.Inventory.Api.dll","--inventory-v2-reader-canary"]
+                | .env=((.env // []) | map(select((.secretRef // "") == "" and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not) and .name != "InventoryV2__ReaderEnabled")) + [{name:"InventoryV2__ReaderEnabled",value:"true"}])) as $container
+            | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
+                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=900)), template:($sourceTemplate | .containers=[$container])}}')"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+          execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+          test -n "$execution"
+          status=Unknown
+          for _ in $(seq 1 180); do
+            status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+            case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+            sleep 5
+          done
+          replicas="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json)"
+          replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+          container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+          az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 300 --format text | tee "$RUNNER_TEMP/v2-reader-canary.log"
+          test "$status" = Succeeded
+          grep -q '"Mode":"InventoryV2ReaderCanary"' "$RUNNER_TEMP/v2-reader-canary.log"
+          grep -q '"DetailFound":true' "$RUNNER_TEMP/v2-reader-canary.log"
+          cleanup
+          trap - EXIT

@@ -1077,6 +1077,49 @@ if (args.Contains("--inventory-v2-reader-state", StringComparer.OrdinalIgnoreCas
     return;
 }
 
+if (args.Contains("--inventory-v2-reader-canary", StringComparer.OrdinalIgnoreCase))
+{
+    var started = System.Diagnostics.Stopwatch.GetTimestamp();
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>() as PostgresSnapshotStore
+        ?? throw new InvalidOperationException("Inventory V2 reader canary requires Persistence:Provider=Postgres.");
+    var request = new InventorySearchRequest(1, 25);
+    var summaryStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+    var summary = await store.GetInventorySearchSummaryAsync(request, CancellationToken.None);
+    var summaryMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(summaryStarted).TotalMilliseconds;
+    var searchStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+    var page = await store.SearchAsync(request, CancellationToken.None);
+    var searchMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(searchStarted).TotalMilliseconds;
+    var facetsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+    var facets = await store.GetInventoryFacetsV2Async(new InventoryFacetsV2Request(request, InventoryFacetsV2Groups.Core), CancellationToken.None);
+    var facetsMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(facetsStarted).TotalMilliseconds;
+    StoredVehicleSnapshot? detail = null;
+    long detailMs = 0;
+    if (page.Items.FirstOrDefault() is { } first)
+    {
+        var detailStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        detail = await store.GetByPlatformAndLotAsync(first.Vehicle.Platform ?? string.Empty, first.Vehicle.LotNumber ?? string.Empty, CancellationToken.None);
+        detailMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(detailStarted).TotalMilliseconds;
+    }
+    var result = new
+    {
+        Mode = "InventoryV2ReaderCanary",
+        ReaderItems = page.Items.Count,
+        SummaryTotal = summary.Total,
+        SummaryFacetGroups = summary.Facets.Count,
+        FacetsTotal = facets.Total,
+        FacetGroups = facets.Facets.Count,
+        DetailFound = detail is not null,
+        DetailIdentity = detail?.Identity,
+        SummaryMs = summaryMs,
+        SearchMs = searchMs,
+        FacetsMs = facetsMs,
+        DetailMs = detailMs,
+        TotalMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds
+    };
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
 if (args.Contains("--inventory-v2-parity", StringComparer.OrdinalIgnoreCase))
 {
     var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));
