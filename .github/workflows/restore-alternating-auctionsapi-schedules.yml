@@ -60,9 +60,7 @@ jobs:
           persistence_runtime_name="$(api_env Persistence__RuntimePrincipalName)"
           persistence_runtime_object_id="$(api_env Persistence__RuntimePrincipalObjectId)"
           persistence_run_migrations="$(api_env Persistence__RunMigrations)"
-          blob_account_url="$(api_env BlobAudit__AccountUrl)"
-          blob_container_name="$(api_env BlobAudit__ContainerName)"
-          test -n "$persistence_provider" -a -n "$persistence_postgres_host" -a -n "$persistence_database" -a -n "$persistence_managed_identity" -a -n "$persistence_database_user" -a -n "$persistence_runtime_name" -a -n "$persistence_runtime_object_id" -a -n "$blob_account_url" -a -n "$blob_container_name"
+          test -n "$persistence_provider" -a -n "$persistence_postgres_host" -a -n "$persistence_database" -a -n "$persistence_managed_identity" -a -n "$persistence_database_user" -a -n "$persistence_runtime_name" -a -n "$persistence_runtime_object_id"
           for job in "$IAAI_JOB" "$COPART_JOB"; do
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" --query "[?properties.status=='Running']" -o json | jq 'length')"
             test "$active" -eq 0
@@ -75,7 +73,7 @@ jobs:
               cron='0 0-22/2 * * *'
               is_iaai=false
             fi
-            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" --arg provider "$persistence_provider" --arg postgresHost "$persistence_postgres_host" --arg database "$persistence_database" --arg managedIdentity "$persistence_managed_identity" --arg databaseUser "$persistence_database_user" --arg runtimeName "$persistence_runtime_name" --arg runtimeObjectId "$persistence_runtime_object_id" --arg blobUrl "$blob_account_url" --arg blobContainer "$blob_container_name" --argjson isIaai "$is_iaai" --argjson removeNames '["Persistence__Provider","Persistence__PostgreSqlHost","Persistence__Database","Persistence__ManagedIdentityClientId","Persistence__DatabaseUser","Persistence__RuntimePrincipalName","Persistence__RuntimePrincipalObjectId","Persistence__RunMigrations","BlobAudit__AccountUrl","BlobAudit__ContainerName","AuctionsApi__DefaultOverlapMinutes","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalShadowEnabled","AuctionsApi__CanonicalMapperEnabled","AuctionsApi__ApiKey","IaaINational__Enabled","IaaINational__RunOnStartup","IaaINational__PrimaryProvider","IaaINational__FallbackProvider","IaaINational__UpdatedWithinMinutes","IaaINational__RequireInitialImportCompleted","IaaINational__EnforceScheduleWindow","IaaINational__ScheduleIntervalHours"]' '
+            body="$(echo "$current" | jq --arg cron "$cron" --arg minutes "$OVERLAP_MINUTES" --arg apiKey "$AUCTIONS_API_KEY" --arg provider "$persistence_provider" --arg postgresHost "$persistence_postgres_host" --arg database "$persistence_database" --arg managedIdentity "$persistence_managed_identity" --arg databaseUser "$persistence_database_user" --arg runtimeName "$persistence_runtime_name" --arg runtimeObjectId "$persistence_runtime_object_id" --argjson isIaai "$is_iaai" --argjson removeNames '["Persistence__Provider","Persistence__PostgreSqlHost","Persistence__Database","Persistence__ManagedIdentityClientId","Persistence__DatabaseUser","Persistence__RuntimePrincipalName","Persistence__RuntimePrincipalObjectId","Persistence__RunMigrations","AuctionsApi__DefaultOverlapMinutes","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalShadowEnabled","AuctionsApi__CanonicalMapperEnabled","AuctionsApi__ApiKey","IaaINational__Enabled","IaaINational__RunOnStartup","IaaINational__PrimaryProvider","IaaINational__FallbackProvider","IaaINational__UpdatedWithinMinutes","IaaINational__RequireInitialImportCompleted","IaaINational__EnforceScheduleWindow","IaaINational__ScheduleIntervalHours"]' '
               .properties.template.containers[0] |= (
                 del(.imageType)
                 | if $isIaai then
@@ -96,8 +94,6 @@ jobs:
                         {name:"Persistence__RuntimePrincipalName",value:$runtimeName},
                         {name:"Persistence__RuntimePrincipalObjectId",value:$runtimeObjectId},
                         {name:"Persistence__RunMigrations",value:"false"},
-                        {name:"BlobAudit__AccountUrl",value:$blobUrl},
-                        {name:"BlobAudit__ContainerName",value:$blobContainer},
                         {name:"AuctionsApi__DefaultOverlapMinutes",value:$minutes},
                         {name:"AuctionsApi__Enabled",value:"true"},
                         {name:"AuctionsApi__AllowWrites",value:"true"},

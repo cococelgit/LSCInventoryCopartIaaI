@@ -12,11 +12,6 @@ on:
         required: true
         default: "manus/auctionsapi-canonical-contract-v1"
         type: string
-      apply_snapshot_cool_lifecycle:
-        description: "Add or replace the non-destructive snapshots-to-Cool lifecycle rule"
-        required: true
-        default: true
-        type: boolean
 
 permissions:
   contents: read
@@ -32,9 +27,6 @@ env:
   IMAGE_NAME: lsc-inventory-engine
   IAAI_JOB: job-lsc-iaai-pilot-prod
   COPART_JOB: job-lsc-copart-auto-prod
-  STORAGE_ACCOUNT: stlscinvprodeus2
-  SNAPSHOT_CONTAINER: raw-apibara
-  SNAPSHOT_LIFECYCLE_RULE: tier-snapshots-to-cool-after-30d
 
 jobs:
   promote:
@@ -80,28 +72,6 @@ jobs:
           set -euo pipefail
           az containerapp job update --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" --image "$PROMOTED_IMAGE" --only-show-errors
           az containerapp job update --name "$COPART_JOB" --resource-group "$RESOURCE_GROUP" --image "$PROMOTED_IMAGE" --only-show-errors
-      - name: Apply non-destructive snapshot lifecycle tiering
-        if: ${{ inputs.apply_snapshot_cool_lifecycle }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          existing="$RUNNER_TEMP/storage-lifecycle.before.json"
-          policy="$RUNNER_TEMP/storage-lifecycle.after.json"
-          az storage account management-policy show --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" -o json > "$existing" 2>/dev/null || echo '{"policy":{"rules":[]}}' > "$existing"
-          rule='{
-            "enabled": true,
-            "name": "tier-snapshots-to-cool-after-30d",
-            "type": "Lifecycle",
-            "definition": {
-              "actions": {"baseBlob": {"tierToCool": {"daysAfterModificationGreaterThan": 30}}},
-              "filters": {"blobTypes": ["blockBlob"], "prefixMatch": ["raw-apibara/snapshots/"]}
-            }
-          }'
-          jq --arg name "$SNAPSHOT_LIFECYCLE_RULE" --argjson rule "$rule" '
-            (.properties.policy // .policy // .) as $current
-            | {rules: ((($current.rules // []) | map(select(.name != $name))) + [$rule])}
-          ' "$existing" > "$policy"
-          az storage account management-policy create --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" --policy "@$policy" --only-show-errors
       - name: Verify image and runtime invariants
         shell: bash
         run: |
@@ -116,11 +86,4 @@ jobs:
             test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
             echo "VERIFIED_JOB=$job IMAGE=$PROMOTED_IMAGE TRIGGER=Schedule"
           done
-          if [ '${{ inputs.apply_snapshot_cool_lifecycle }}' = true ]; then
-            az storage account management-policy show --account-name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" -o json |
-              jq -e --arg name "$SNAPSHOT_LIFECYCLE_RULE" '
-                (.properties.policy // .policy // .).rules[] | select(.name == $name and .enabled == true and .definition.filters.prefixMatch == ["raw-apibara/snapshots/"] and .definition.actions.baseBlob.tierToCool.daysAfterModificationGreaterThan == 30)
-              ' >/dev/null
-            echo "VERIFIED_LIFECYCLE_RULE=$SNAPSHOT_LIFECYCLE_RULE PREFIX=$SNAPSHOT_CONTAINER/snapshots/ TIER=Cool AFTER_DAYS=30"
-          fi
           echo "Only images changed; cron, secrets, persistence, and write policy were preserved."

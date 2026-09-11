@@ -99,8 +99,6 @@ jobs:
           db_user="$(app_env Persistence__DatabaseUser)"
           runtime_name="$(app_env Persistence__RuntimePrincipalName)"
           runtime_object_id="$(app_env Persistence__RuntimePrincipalObjectId)"
-          blob_url="$(app_env BlobAudit__AccountUrl)"
-          blob_container="$(app_env BlobAudit__ContainerName)"
           for value in "$db_host" "$db_name" "$db_client_id" "$db_user" "$runtime_name" "$runtime_object_id"; do test -n "$value"; done
           env_id="$(jq -r '.properties.environmentId' <<<"$app_json")"
           test -n "$env_id" && test "$env_id" != "null"
@@ -116,8 +114,6 @@ jobs:
             echo "POSTGRES_DATABASE_USER=$db_user"
             echo "RUNTIME_PRINCIPAL_NAME=$runtime_name"
             echo "RUNTIME_PRINCIPAL_OBJECT_ID=$runtime_object_id"
-            echo "BLOB_ACCOUNT_URL=$blob_url"
-            echo "BLOB_CONTAINER_NAME=$blob_container"
             echo "CONTAINER_ENVIRONMENT_ID=$env_id"
           } >> "$GITHUB_ENV"
           echo "Production prechecks passed for revision=$api_revision image=$api_image fqdn=$ingress_fqdn"
@@ -158,8 +154,6 @@ jobs:
               "Persistence__RuntimePrincipalObjectId=$RUNTIME_PRINCIPAL_OBJECT_ID" \
               "Persistence__RunMigrations=true" \
               "Sync__Enabled=false" \
-              "BlobAudit__AccountUrl=$BLOB_ACCOUNT_URL" \
-              "BlobAudit__ContainerName=$BLOB_CONTAINER_NAME" \
             --only-show-errors >/dev/null
           echo "MIGRATION_JOB=$job" >> "$GITHUB_ENV"
           az containerapp job start -g "$RESOURCE_GROUP" -n "$job" --only-show-errors >/dev/null

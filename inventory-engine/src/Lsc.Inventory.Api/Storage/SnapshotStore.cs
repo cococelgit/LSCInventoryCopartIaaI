@@ -244,7 +244,7 @@ public sealed record CopartAuctionHistoryReport(
 
 /// <summary>
 /// Aggregate-only, read-only estimate for a future retention run. It does not list lot identifiers,
-/// access Blob payloads, archive records, or modify PostgreSQL.
+/// archive records, or modify PostgreSQL.
 /// </summary>
 public sealed record SoldLotRetentionDryRunReport(
     int RetentionDays,
@@ -252,140 +252,8 @@ public sealed record SoldLotRetentionDryRunReport(
     long EligibleInactiveLots,
     long? EligibleVersions,
     long? PostgresPayloadBytesRecoverable,
-    long? ReferencedRawBlobsEligible,
-    long? EstimatedRawBlobBytesRecoverable,
     IReadOnlyList<HistoricalLotStatusBucket> HistoricalStatusBuckets,
     HistoricalRetentionInventoryDiagnostics? HistoricalDiagnostics,
-    bool ReadOnly);
-
-/// <summary>
-/// Physical, metadata-only enumeration of the content-addressed Blob prefix. The report does not read blob bodies,
-/// mutate Storage, or treat multiple legitimate versions of a lot as removable duplicates.
-/// </summary>
-public sealed record PhysicalBlobInventoryReport(
-    string Prefix,
-    long TotalBlobs,
-    long TotalBlobBytes,
-    long ContentAddressedBlobs,
-    long ContentAddressedBytes,
-    long UnparsedLegacyOrUnknownBlobs,
-    long UnparsedLegacyOrUnknownBytes,
-    long DistinctContentAddressedLotIdentities,
-    long LotsWithMultiplePhysicalBlobs,
-    long AdditionalPhysicalBlobsBeyondFirstPerLot,
-    long IdenticalHashExcessBlobs,
-    long IdenticalHashExcessBytes,
-    IReadOnlyList<PhysicalBlobLotSummary> TopLots,
-    bool ReadOnly);
-
-/// <summary>
-/// Uses the safe content-addressed identity encoded in the Blob path, not customer or vehicle payload data.
-/// </summary>
-public sealed record PhysicalBlobLotSummary(
-    string SafeLotIdentity,
-    long PhysicalBlobs,
-    long PhysicalBytes,
-    long IdenticalHashExcessBlobs,
-    long IdenticalHashExcessBytes);
-
-/// <summary>
-/// Small metadata-only sample of Blob paths used exclusively to identify an historical path convention.
-/// </summary>
-public sealed record BlobPathSampleReport(
-    string Prefix,
-    IReadOnlyList<BlobPathSample> Samples,
-    bool ReadOnly);
-
-public sealed record BlobPathSample(string Name, long ContentLength, DateTimeOffset? LastModified);
-
-/// <summary>
-/// Bounded, metadata-only inventory for the lifecycle candidates of a retention review. It proves the potential
-/// Blob impact by matching names to lot identities, but it is not a deletion manifest and contains no payload body.
-/// </summary>
-public sealed record RetentionCandidateBlobInventoryReport(
-    int RetentionDays,
-    DateTimeOffset CutoffAt,
-    long EligibleInactiveLots,
-    long MatchedPhysicalBlobs,
-    long MatchedPhysicalBytes,
-    long LegacyMatchedPhysicalBlobs,
-    long LegacyMatchedPhysicalBytes,
-    long ContentAddressedMatchedPhysicalBlobs,
-    long ContentAddressedMatchedPhysicalBytes,
-    long UnmatchedPhysicalBlobs,
-    long UnmatchedPhysicalBytes,
-    IReadOnlyList<RetentionCandidateLotSummary> TopLots,
-    bool ReadOnly);
-
-public sealed record RetentionCandidateLotSummary(string SafeLotIdentity, long PhysicalBlobs, long PhysicalBytes);
-
-/// <summary>
-/// In-memory, deterministic deletion plan for a limited retention pilot. It contains only inactive lifecycle lots
-/// and legacy raw Blob names; it never includes inventory rows, titles, scores, observations, or seller signals.
-/// </summary>
-public sealed record RetentionPurgePilotManifest(
-    int RetentionDays,
-    DateTimeOffset CutoffAt,
-    int RequestedLotLimit,
-    DateTimeOffset CreatedAt,
-    IReadOnlyList<RetentionPurgePilotLot> Lots,
-    IReadOnlyList<RetentionPurgePilotBlob> Blobs,
-    long MotivationSignalsPreserved,
-    string ManifestSha256,
-    bool ReadOnly);
-
-public sealed record RetentionPurgePilotLot(string LotKey, DateTimeOffset DeactivatedAt);
-public sealed record RetentionPurgePilotBlob(string LotKey, string BlobName, long ContentLength, DateTimeOffset LastModified);
-
-public sealed record RetentionPurgePilotManifestReport(
-    int RetentionDays,
-    DateTimeOffset CutoffAt,
-    int RequestedLotLimit,
-    int SelectedLots,
-    long EligibleBlobs,
-    long EligibleBytes,
-    long MotivationSignalsPreserved,
-    string ManifestSha256,
-    bool ReadOnly);
-
-public sealed record RetentionPurgePilotExecutionReport(
-    int RetentionDays,
-    DateTimeOffset CutoffAt,
-    int SelectedLots,
-    long PlannedBlobs,
-    long PlannedBytes,
-    long DeletedBlobs,
-    long DeletedBytes,
-    long SkippedMissingBlobs,
-    long SkippedChangedBlobs,
-    long SkippedReactivatedLots,
-    long PreservedInventoryRows,
-    long PreservedLifecycleRows,
-    long PreservedVersionRows,
-    long PreservedMotivationSignals,
-    IReadOnlyList<string> FailureSamples,
-    string ManifestSha256,
-    bool ReadOnly,
-    DateTimeOffset? LastSelectedDeactivatedAt = null,
-    string? LastSelectedLotKey = null);
-
-/// <summary>
-/// Read-only reconciliation between version rows and Blob references. It measures duplicate references precisely but
-/// never assumes that distinct versions of the same lot are identical payloads or safe to delete.
-/// </summary>
-public sealed record BlobReferenceCrosscheckReport(
-    int RetentionDays,
-    DateTimeOffset CutoffAt,
-    long VersionRows,
-    long DistinctLots,
-    long DistinctReferencedBlobs,
-    long AdditionalVersionReferencesToSameBlob,
-    long? ReferencedPostgresPayloadBytes,
-    long EligibleInactiveLots,
-    long EligibleVersionRows,
-    long EligibleDistinctReferencedBlobs,
-    long? EligiblePostgresPayloadBytes,
-    IReadOnlyList<string> RawBlobNameSamples,
     bool ReadOnly);
 
 /// <summary>
@@ -397,8 +265,7 @@ public sealed record HistoricalLotStatusBucket(
     string LotSubStatus,
     long Lots,
     long Versions,
-    long? PostgresPayloadBytes,
-    long ReferencedRawBlobs);
+    long? PostgresPayloadBytes);
 
 /// <summary>
 /// Aggregate coverage checks for the historical inventory query. No lot identifiers or payloads are exposed.

@@ -4,11 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Azure;
 using Azure.Core;
 using Azure.Identity;
-using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
@@ -21,7 +18,6 @@ namespace Lsc.Inventory.Api.Storage;
 
 public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
-    IOptions<BlobAuditOptions> blobOptions,
     ILogger<PostgresSnapshotStore> logger) : IInventorySnapshotStore
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
@@ -38,7 +34,6 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _lifecycleSchemaInitialized;
     private static bool _scoringSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
-    private readonly BlobAuditOptions _blob = blobOptions.Value;
     private readonly ConcurrentDictionary<string, StoredVehicleSnapshot> _recent = new(StringComparer.OrdinalIgnoreCase);
     private readonly TokenCredential _credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
     {
@@ -184,28 +179,7 @@ public sealed partial class PostgresSnapshotStore(
         vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, payloadHash);
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        var snapshotVersionExists = false;
-        var reactivatingInactiveLot = false;
-        await using (var existing = connection.CreateCommand())
-        {
-            existing.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            existing.CommandText = """
-                select
-                    exists(select 1 from auction_lot_versions where lot_key = @lot_key and payload_hash = @payload_hash),
-                    coalesce((select not is_active from inventory_lot_lifecycle where lot_key = @lot_key), false);
-                """;
-            AddParameter(existing, "lot_key", identity);
-            AddParameter(existing, "payload_hash", payloadHash);
-            await using var reader = await existing.ExecuteReaderAsync(cancellationToken);
-            await reader.ReadAsync(cancellationToken);
-            snapshotVersionExists = reader.GetBoolean(0);
-            reactivatingInactiveLot = reader.GetBoolean(1);
-        }
-        var canonicalBlobExists = !snapshotVersionExists || !reactivatingInactiveLot || await RawPayloadExistsAsync(blobName, cancellationToken);
-        if (ShouldUploadRawSnapshot(snapshotVersionExists, reactivatingInactiveLot, canonicalBlobExists))
-            await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
@@ -249,10 +223,10 @@ public sealed partial class PostgresSnapshotStore(
                 updated_at = now();
 
             insert into auction_lot_versions (
-                lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                lot_key, observed_at, payload_hash, current_bid_usd,
                 sale_price_usd, lot_status, lot_sub_status, payload)
             values (
-                @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                @lot_key, @observed_at, @payload_hash, @current_bid_usd,
                 @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
             on conflict (lot_key, payload_hash) do nothing;
 
@@ -298,7 +272,6 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "media_has_360", vehicle.Media?.Has360);
         AddParameter(command, "observed_at", observedAtUtc);
         AddParameter(command, "payload_hash", payloadHash);
-        AddParameter(command, "raw_blob_name", blobName);
         AddParameter(command, "payload", rawJson);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -327,7 +300,6 @@ public sealed partial class PostgresSnapshotStore(
         vehicle = await ReuseResolvedCopartMediaAsync(identity, vehicle, cancellationToken);
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, payloadHash);
         var policyVersion = LscScoringPolicy.ResolveVersion(vehicle.Platform);
         var scoreInputHash = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
         var scoringDuration = TimeSpan.Zero;
@@ -349,8 +321,6 @@ public sealed partial class PostgresSnapshotStore(
             await reader.ReadAsync(cancellationToken);
             snapshotChange = !reader.GetBoolean(0) ? "created" : reader.GetBoolean(1) ? "unchanged" : "updated";
         }
-        if (!string.Equals(snapshotChange, "unchanged", StringComparison.Ordinal))
-            await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         var scoreCurrent = false;
         await using (var current = connection.CreateCommand())
         {
@@ -401,10 +371,10 @@ public sealed partial class PostgresSnapshotStore(
                     observed_at = excluded.observed_at, updated_at = now();
 
                 insert into auction_lot_versions (
-                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    lot_key, observed_at, payload_hash, current_bid_usd,
                     sale_price_usd, lot_status, lot_sub_status, payload)
                 values (
-                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @lot_key, @observed_at, @payload_hash, @current_bid_usd,
                     @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
                 on conflict (lot_key, payload_hash) do nothing;
 
@@ -415,7 +385,7 @@ public sealed partial class PostgresSnapshotStore(
                     platform = excluded.platform, is_active = true, consecutive_misses = 0,
                     last_seen_at = excluded.last_seen_at, deactivated_at = null, updated_at = now();
                 """;
-            AddSnapshotParameters(snapshot, vehicle, identity, observedAtUtc, payloadHash, blobName, rawJson);
+            AddSnapshotParameters(snapshot, vehicle, identity, observedAtUtc, payloadHash, rawJson);
             await snapshot.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -461,7 +431,7 @@ public sealed partial class PostgresSnapshotStore(
         return new CopartInlineScoringPersistenceResult(snapshotChange, !scoreCurrent, scoreCurrent, score, scoringDuration);
     }
 
-    private static void AddSnapshotParameters(NpgsqlCommand command, AuctionVehicle vehicle, string identity, DateTimeOffset observedAtUtc, string payloadHash, string blobName, string rawJson)
+    private static void AddSnapshotParameters(NpgsqlCommand command, AuctionVehicle vehicle, string identity, DateTimeOffset observedAtUtc, string payloadHash, string rawJson)
     {
         AddParameter(command, "lot_key", identity);
         AddParameter(command, "platform", vehicle.Platform);
@@ -492,7 +462,6 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "media_has_360", vehicle.Media?.Has360);
         AddParameter(command, "observed_at", observedAtUtc);
         AddParameter(command, "payload_hash", payloadHash);
-        AddParameter(command, "raw_blob_name", blobName);
         AddParameter(command, "payload", rawJson);
     }
 
@@ -632,10 +601,8 @@ public sealed partial class PostgresSnapshotStore(
         var enriched = vehicle with { AdditionalData = additional };
         var rawJson = JsonSerializer.Serialize(enriched);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, payloadHash);
 
         await EnsureSchemaAsync(cancellationToken);
-        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using (var update = connection.CreateCommand())
         {
@@ -661,17 +628,16 @@ public sealed partial class PostgresSnapshotStore(
             insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
             insert.CommandText = """
                 insert into auction_lot_versions (
-                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    lot_key, observed_at, payload_hash, current_bid_usd,
                     sale_price_usd, lot_status, lot_sub_status, payload)
                 values (
-                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @lot_key, @observed_at, @payload_hash, @current_bid_usd,
                     @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
                 on conflict (lot_key, payload_hash) do nothing;
                 """;
             AddParameter(insert, "lot_key", identity);
             AddParameter(insert, "observed_at", observedAtUtc);
             AddParameter(insert, "payload_hash", payloadHash);
-            AddParameter(insert, "raw_blob_name", blobName);
             AddParameter(insert, "current_bid_usd", enriched.Pricing?.CurrentBidUsd);
             AddParameter(insert, "sale_price_usd", enriched.Pricing?.SalePriceUsd);
             AddParameter(insert, "lot_status", enriched.Auction?.LotStatus);
@@ -772,9 +738,7 @@ public sealed partial class PostgresSnapshotStore(
         var observedAtUtc = expectedObservedAt.ToUniversalTime();
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, payloadHash);
         await EnsureSchemaAsync(cancellationToken);
-        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using (var update = connection.CreateCommand())
         {
@@ -798,17 +762,16 @@ public sealed partial class PostgresSnapshotStore(
             insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
             insert.CommandText = """
                 insert into auction_lot_versions (
-                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    lot_key, observed_at, payload_hash, current_bid_usd,
                     sale_price_usd, lot_status, lot_sub_status, payload)
                 values (
-                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @lot_key, @observed_at, @payload_hash, @current_bid_usd,
                     @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
                 on conflict (lot_key, payload_hash) do nothing;
                 """;
             AddParameter(insert, "lot_key", identity);
             AddParameter(insert, "observed_at", observedAtUtc);
             AddParameter(insert, "payload_hash", payloadHash);
-            AddParameter(insert, "raw_blob_name", blobName);
             AddParameter(insert, "current_bid_usd", vehicle.Pricing?.CurrentBidUsd);
             AddParameter(insert, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
             AddParameter(insert, "lot_status", vehicle.Auction?.LotStatus);
@@ -871,9 +834,7 @@ public sealed partial class PostgresSnapshotStore(
         var observedAtUtc = expectedObservedAt.ToUniversalTime();
         var rawJson = JsonSerializer.Serialize(vehicle);
         var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawJson))).ToLowerInvariant();
-        var blobName = BuildBlobName(identity, payloadHash);
         await EnsureSchemaAsync(cancellationToken);
-        await UploadRawPayloadAsync(blobName, rawJson, cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using (var update = connection.CreateCommand())
         {
@@ -897,17 +858,16 @@ public sealed partial class PostgresSnapshotStore(
             insert.CommandTimeout = _persistence.CommandTimeoutSeconds;
             insert.CommandText = """
                 insert into auction_lot_versions (
-                    lot_key, observed_at, payload_hash, raw_blob_name, current_bid_usd,
+                    lot_key, observed_at, payload_hash, current_bid_usd,
                     sale_price_usd, lot_status, lot_sub_status, payload)
                 values (
-                    @lot_key, @observed_at, @payload_hash, @raw_blob_name, @current_bid_usd,
+                    @lot_key, @observed_at, @payload_hash, @current_bid_usd,
                     @sale_price_usd, @lot_status, @lot_sub_status, cast(@payload as jsonb))
                 on conflict (lot_key, payload_hash) do nothing;
                 """;
             AddParameter(insert, "lot_key", identity);
             AddParameter(insert, "observed_at", observedAtUtc);
             AddParameter(insert, "payload_hash", payloadHash);
-            AddParameter(insert, "raw_blob_name", blobName);
             AddParameter(insert, "current_bid_usd", vehicle.Pricing?.CurrentBidUsd);
             AddParameter(insert, "sale_price_usd", vehicle.Pricing?.SalePriceUsd);
             AddParameter(insert, "lot_status", vehicle.Auction?.LotStatus);
@@ -1581,10 +1541,7 @@ public sealed partial class PostgresSnapshotStore(
     {
         await EnsureEligibilitySchemaAsync(cancellationToken);
         var identity = $"{evaluation.AuctionSource ?? "unknown"}:{evaluation.LotNumber ?? "unknown"}";
-        var safeIdentity = string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
-        var blobName = $"eligibility/{evaluatedAt:yyyy/MM/dd}/{safeIdentity}/{evaluatedAt:HHmmssfff}-{evaluation.Decision.ToLowerInvariant()}.json";
         var json = JsonSerializer.Serialize(evaluation);
-        await UploadRawPayloadAsync(blobName, json, cancellationToken);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -1593,11 +1550,11 @@ public sealed partial class PostgresSnapshotStore(
             insert into eligibility_decisions (
                 lot_key, auction_source, lot_number, vin_masked, decision, load_to_system,
                 rule_version, evaluated_at, discard_reasons, flags, data_quality_notes,
-                evaluated_fields, audit_blob_name)
+                evaluated_fields)
             values (
                 @lot_key, @auction_source, @lot_number, @vin_masked, @decision, @load_to_system,
                 @rule_version, @evaluated_at, cast(@discard_reasons as jsonb), cast(@flags as jsonb),
-                cast(@data_quality_notes as jsonb), cast(@evaluated_fields as jsonb), @audit_blob_name)
+                cast(@data_quality_notes as jsonb), cast(@evaluated_fields as jsonb))
             on conflict (lot_key) do update set
                 auction_source = excluded.auction_source,
                 lot_number = excluded.lot_number,
@@ -1610,7 +1567,6 @@ public sealed partial class PostgresSnapshotStore(
                 flags = excluded.flags,
                 data_quality_notes = excluded.data_quality_notes,
                 evaluated_fields = excluded.evaluated_fields,
-                audit_blob_name = excluded.audit_blob_name,
                 updated_at = now();
             """;
         AddParameter(command, "lot_key", identity);
@@ -1625,7 +1581,6 @@ public sealed partial class PostgresSnapshotStore(
         AddParameter(command, "flags", JsonSerializer.Serialize(evaluation.Flags));
         AddParameter(command, "data_quality_notes", JsonSerializer.Serialize(evaluation.DataQualityNotes));
         AddParameter(command, "evaluated_fields", JsonSerializer.Serialize(evaluation.EvaluatedFields));
-        AddParameter(command, "audit_blob_name", blobName);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1812,8 +1767,6 @@ public sealed partial class PostgresSnapshotStore(
         }
 
         long eligibleInactiveLots;
-        long? postgresPayloadBytesRecoverable = null;
-        long? estimatedRawBlobBytesRecoverable = null;
         await using (var eligibleLotsCommand = connection.CreateCommand())
         {
             eligibleLotsCommand.Transaction = transaction;
@@ -1834,543 +1787,12 @@ public sealed partial class PostgresSnapshotStore(
             cutoffAt,
             eligibleInactiveLots,
             EligibleVersions: null,
-            postgresPayloadBytesRecoverable,
-            ReferencedRawBlobsEligible: null,
-            estimatedRawBlobBytesRecoverable,
+            PostgresPayloadBytesRecoverable: null,
             Array.Empty<HistoricalLotStatusBucket>(),
             HistoricalDiagnostics: null,
             ReadOnly: true);
         await transaction.RollbackAsync(cancellationToken);
         return report;
-    }
-
-    /// <summary>
-    /// Lists metadata under snapshots/ through the managed identity. It does not download Blob content or make any
-    /// Blob/PostgreSQL mutation. Only the new content-addressed path is attributed to a vehicle identity; legacy
-    /// paths are explicitly reported as unparsed until they are reconciled through PostgreSQL references.
-    /// </summary>
-    public async Task<PhysicalBlobInventoryReport> GetPhysicalBlobInventoryAsync(int top, CancellationToken cancellationToken)
-    {
-        const string prefix = "snapshots/";
-        var topN = Math.Clamp(top, 1, 100);
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-        var lots = new Dictionary<string, PhysicalBlobLotCounter>(StringComparer.Ordinal);
-
-        long totalBlobs = 0;
-        long totalBytes = 0;
-        long contentAddressedBlobs = 0;
-        long contentAddressedBytes = 0;
-        long unparsedBlobs = 0;
-        long unparsedBytes = 0;
-
-        await foreach (var page in containerClient
-            .GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, cancellationToken)
-            .AsPages(pageSizeHint: 5_000))
-        {
-            foreach (var blob in page.Values)
-            {
-                var bytes = blob.Properties.ContentLength ?? 0;
-                totalBlobs++;
-                totalBytes += bytes;
-
-                if (!TryParseContentAddressedBlobName(blob.Name, out var safeLotIdentity, out _))
-                {
-                    unparsedBlobs++;
-                    unparsedBytes += bytes;
-                    continue;
-                }
-
-                contentAddressedBlobs++;
-                contentAddressedBytes += bytes;
-                if (!lots.TryGetValue(safeLotIdentity, out var lot))
-                {
-                    lot = new PhysicalBlobLotCounter();
-                    lots.Add(safeLotIdentity, lot);
-                }
-
-                lot.PhysicalBlobs++;
-                lot.PhysicalBytes += bytes;
-            }
-        }
-
-        var topLots = lots
-            .OrderByDescending(pair => pair.Value.PhysicalBytes)
-            .ThenByDescending(pair => pair.Value.PhysicalBlobs)
-            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
-            .Take(topN)
-            .Select(pair => new PhysicalBlobLotSummary(
-                pair.Key,
-                pair.Value.PhysicalBlobs,
-                pair.Value.PhysicalBytes,
-                IdenticalHashExcessBlobs: 0,
-                IdenticalHashExcessBytes: 0))
-            .ToArray();
-
-        return new PhysicalBlobInventoryReport(
-            prefix,
-            totalBlobs,
-            totalBytes,
-            contentAddressedBlobs,
-            contentAddressedBytes,
-            unparsedBlobs,
-            unparsedBytes,
-            lots.Count,
-            lots.Values.LongCount(value => value.PhysicalBlobs > 1),
-            lots.Values.Sum(value => Math.Max(0, value.PhysicalBlobs - 1)),
-            IdenticalHashExcessBlobs: 0,
-            IdenticalHashExcessBytes: 0,
-            topLots,
-            ReadOnly: true);
-    }
-
-    /// <summary>
-    /// Lists only the first paths and metadata from the legacy prefix. It stops immediately after the bounded sample
-    /// and never opens a Blob stream or mutates Blob Storage.
-    /// </summary>
-    public async Task<BlobPathSampleReport> GetBlobPathSampleAsync(int maximum, CancellationToken cancellationToken)
-    {
-        const string prefix = "snapshots/";
-        var sampleSize = Math.Clamp(maximum, 1, 25);
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-        var samples = new List<BlobPathSample>(sampleSize);
-
-        await foreach (var page in containerClient
-            .GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, cancellationToken)
-            .AsPages(pageSizeHint: sampleSize))
-        {
-            foreach (var blob in page.Values)
-            {
-                samples.Add(new BlobPathSample(blob.Name, blob.Properties.ContentLength ?? 0, blob.Properties.LastModified));
-                if (samples.Count == sampleSize) return new BlobPathSampleReport(prefix, samples, ReadOnly: true);
-            }
-        }
-
-        return new BlobPathSampleReport(prefix, samples, ReadOnly: true);
-    }
-
-    /// <summary>
-    /// Enumerates Blob metadata only and matches the two known path conventions against lifecycle candidates. It is a
-    /// pre-deletion aggregate, not a destructive manifest: no Blob stream is opened and no storage mutation occurs.
-    /// </summary>
-    public async Task<RetentionCandidateBlobInventoryReport> GetRetentionCandidateBlobInventoryAsync(int retentionDays, int top, CancellationToken cancellationToken)
-    {
-        const string prefix = "snapshots/";
-        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
-        var topN = Math.Clamp(top, 1, 100);
-        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
-        var candidates = new HashSet<string>(StringComparer.Ordinal);
-
-        await using (var connection = await OpenConnectionAsync(cancellationToken))
-        await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
-        {
-            await using (var readOnly = connection.CreateCommand())
-            {
-                readOnly.Transaction = transaction;
-                readOnly.CommandText = "set transaction read only;";
-                await readOnly.ExecuteNonQueryAsync(cancellationToken);
-            }
-
-            await using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-                command.CommandText = """
-                    select lot_key
-                    from inventory_lot_lifecycle
-                    where not is_active
-                      and deactivated_at is not null
-                      and deactivated_at <= @cutoff_at;
-                    """;
-                AddParameter(command, "cutoff_at", cutoffAt);
-                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-                while (await reader.ReadAsync(cancellationToken)) candidates.Add(ToSafeBlobIdentity(reader.GetString(0)));
-            }
-            await transaction.RollbackAsync(cancellationToken);
-        }
-
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-        var byLot = new Dictionary<string, PhysicalBlobLotCounter>(StringComparer.Ordinal);
-        long matchedBlobs = 0;
-        long matchedBytes = 0;
-        long legacyBlobs = 0;
-        long legacyBytes = 0;
-        long contentAddressedBlobs = 0;
-        long contentAddressedBytes = 0;
-        long unmatchedBlobs = 0;
-        long unmatchedBytes = 0;
-
-        await foreach (var page in containerClient
-            .GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, cancellationToken)
-            .AsPages(pageSizeHint: 5_000))
-        {
-            foreach (var blob in page.Values)
-            {
-                var bytes = blob.Properties.ContentLength ?? 0;
-                var parsed = TryParseContentAddressedBlobName(blob.Name, out var currentIdentity, out _)
-                    ? (Identity: currentIdentity, Legacy: false, Parsed: true)
-                    : TryParseLegacyBlobName(blob.Name, out var legacyIdentity)
-                        ? (Identity: legacyIdentity, Legacy: true, Parsed: true)
-                        : (Identity: string.Empty, Legacy: false, Parsed: false);
-
-                if (!parsed.Parsed || !candidates.Contains(parsed.Identity))
-                {
-                    unmatchedBlobs++;
-                    unmatchedBytes += bytes;
-                    continue;
-                }
-
-                matchedBlobs++;
-                matchedBytes += bytes;
-                if (parsed.Legacy)
-                {
-                    legacyBlobs++;
-                    legacyBytes += bytes;
-                }
-                else
-                {
-                    contentAddressedBlobs++;
-                    contentAddressedBytes += bytes;
-                }
-
-                if (!byLot.TryGetValue(parsed.Identity, out var lot))
-                {
-                    lot = new PhysicalBlobLotCounter();
-                    byLot.Add(parsed.Identity, lot);
-                }
-                lot.PhysicalBlobs++;
-                lot.PhysicalBytes += bytes;
-            }
-        }
-
-        var topLots = byLot
-            .OrderByDescending(pair => pair.Value.PhysicalBytes)
-            .ThenByDescending(pair => pair.Value.PhysicalBlobs)
-            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
-            .Take(topN)
-            .Select(pair => new RetentionCandidateLotSummary(pair.Key, pair.Value.PhysicalBlobs, pair.Value.PhysicalBytes))
-            .ToArray();
-
-        return new RetentionCandidateBlobInventoryReport(
-            safeRetentionDays, cutoffAt, candidates.Count, matchedBlobs, matchedBytes,
-            legacyBlobs, legacyBytes, contentAddressedBlobs, contentAddressedBytes,
-            unmatchedBlobs, unmatchedBytes, topLots, ReadOnly: true);
-    }
-
-    /// <summary>
-    /// Builds a deterministic, metadata-only plan for a narrow retention pilot. The candidate selection happens in a
-    /// read-only transaction and blob properties are fetched only for legacy paths belonging to the selected lots.
-    /// </summary>
-    public async Task<RetentionPurgePilotManifest> CreateRetentionPurgePilotManifestAsync(int retentionDays, int lotLimit, CancellationToken cancellationToken)
-    {
-        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
-        var safeLotLimit = Math.Clamp(lotLimit, 1, 500);
-        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
-        var lots = new List<RetentionPurgePilotLot>(safeLotLimit);
-        long motivationSignals;
-
-        await using (var connection = await OpenConnectionAsync(cancellationToken))
-        await using (var transaction = await connection.BeginTransactionAsync(cancellationToken))
-        {
-            await using (var readOnly = connection.CreateCommand())
-            {
-                readOnly.Transaction = transaction;
-                readOnly.CommandText = "set transaction read only;";
-                await readOnly.ExecuteNonQueryAsync(cancellationToken);
-            }
-
-            await using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-                command.CommandText = """
-                    select lot_key, deactivated_at
-                    from inventory_lot_lifecycle
-                    where not is_active
-                      and deactivated_at is not null
-                      and deactivated_at <= @cutoff_at
-                      and (CAST(@cursor_at AS timestamptz) is null or (deactivated_at, lot_key) > (CAST(@cursor_at AS timestamptz), CAST(@cursor_lot_key AS text)))
-                    order by deactivated_at asc, lot_key asc
-                    limit @lot_limit;
-                    """;
-                var cursorText = Environment.GetEnvironmentVariable("RETENTION_PURGE_CURSOR_AT");
-                DateTimeOffset? cursorAt = DateTimeOffset.TryParse(cursorText, out var parsedCursor) ? parsedCursor : null;
-                AddParameter(command, "cursor_at", cursorAt);
-                AddParameter(command, "cursor_lot_key", Environment.GetEnvironmentVariable("RETENTION_PURGE_CURSOR_LOT_KEY") ?? string.Empty);
-                AddParameter(command, "cutoff_at", cutoffAt);
-                AddParameter(command, "lot_limit", safeLotLimit);
-                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-                while (await reader.ReadAsync(cancellationToken))
-                    lots.Add(new RetentionPurgePilotLot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1)));
-            }
-
-            var lotKeys = lots.Select(lot => lot.LotKey).ToArray();
-            await using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-                command.CommandText = """
-                    select count(*)::bigint
-                    from copart_lot_motivation_signals
-                    where lot_key = any(@lot_keys);
-                    """;
-                AddParameter(command, "lot_keys", lotKeys);
-                motivationSignals = (long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L);
-            }
-            await transaction.RollbackAsync(cancellationToken);
-        }
-
-        var expectedLotKeysByIdentity = lots.ToDictionary(lot => ToSafeBlobIdentity(lot.LotKey), lot => lot.LotKey, StringComparer.Ordinal);
-        var blobs = new List<RetentionPurgePilotBlob>();
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-
-        await foreach (var item in containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, "snapshots/", cancellationToken))
-        {
-            if (!TryGetPilotLegacyBlobLotKey(item.Name, expectedLotKeysByIdentity, out var lotKey)) continue;
-            blobs.Add(new RetentionPurgePilotBlob(lotKey, item.Name, item.Properties.ContentLength ?? 0, item.Properties.LastModified ?? DateTimeOffset.MinValue));
-        }
-
-        var createdAt = DateTimeOffset.UtcNow;
-        var fingerprint = string.Join('\n', blobs.OrderBy(blob => blob.BlobName, StringComparer.Ordinal).Select(blob => $"{blob.LotKey}|{blob.BlobName}|{blob.ContentLength}|{blob.LastModified:O}"));
-        var manifestSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint))).ToLowerInvariant();
-        return new RetentionPurgePilotManifest(safeRetentionDays, cutoffAt, safeLotLimit, createdAt, lots, blobs, motivationSignals, manifestSha256, ReadOnly: true);
-    }
-
-    /// <summary>
-    /// Deletes only the Blob paths already frozen in an approved manifest. It rechecks lifecycle status before any
-    /// delete and intentionally never issues DELETE/UPDATE statements against PostgreSQL.
-    /// </summary>
-    public async Task<RetentionPurgePilotExecutionReport> ExecuteRetentionPurgePilotAsync(RetentionPurgePilotManifest manifest, CancellationToken cancellationToken)
-    {
-        if (!manifest.ReadOnly) throw new InvalidOperationException("A pilot purge requires a manifest generated by the read-only planner.");
-        var lotKeys = manifest.Lots.Select(lot => lot.LotKey).ToArray();
-        var eligibleLotKeys = await GetStillEligibleRetentionLotKeysAsync(lotKeys, manifest.CutoffAt, cancellationToken);
-        var eligibleBlobs = GetPilotBlobsForEligibleLots(manifest.Blobs, eligibleLotKeys);
-        // A concurrent auction load may reactivate every lot after manifest creation. Treat that as a
-        // successful no-op so the cursor can advance; the lifecycle recheck remains the deletion guard.
-
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-        var deletedBlobs = 0L;
-        var deletedBytes = 0L;
-        var skippedMissing = 0L;
-        var skippedChanged = 0L;
-        var failures = new System.Collections.Concurrent.ConcurrentQueue<string>();
-
-        await Parallel.ForEachAsync(eligibleBlobs, new ParallelOptions { MaxDegreeOfParallelism = 16, CancellationToken = cancellationToken }, async (blob, token) =>
-        {
-            var client = containerClient.GetBlobClient(blob.BlobName);
-            try
-            {
-                var properties = await client.GetPropertiesAsync(cancellationToken: token);
-                if (properties.Value.ContentLength != blob.ContentLength || properties.Value.LastModified != blob.LastModified)
-                {
-                    Interlocked.Increment(ref skippedChanged);
-                    return;
-                }
-
-                if (await client.DeleteIfExistsAsync(DeleteSnapshotsOption.None, cancellationToken: token))
-                {
-                    Interlocked.Increment(ref deletedBlobs);
-                    Interlocked.Add(ref deletedBytes, blob.ContentLength);
-                }
-                else Interlocked.Increment(ref skippedMissing);
-            }
-            catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status404NotFound)
-            {
-                Interlocked.Increment(ref skippedMissing);
-            }
-            catch (Exception exception)
-            {
-                if (failures.Count < 20) failures.Enqueue($"{blob.BlobName}: {exception.GetType().Name}");
-            }
-        });
-
-        var preservation = await GetPilotPreservationCountsAsync(lotKeys, cancellationToken);
-        return new RetentionPurgePilotExecutionReport(
-            manifest.RetentionDays, manifest.CutoffAt, eligibleLotKeys.Count, eligibleBlobs.Count,
-            eligibleBlobs.Sum(blob => blob.ContentLength), deletedBlobs, deletedBytes, skippedMissing, skippedChanged,
-            manifest.Lots.Count - eligibleLotKeys.Count,
-            preservation.InventoryRows, preservation.LifecycleRows, preservation.VersionRows, preservation.MotivationSignals,
-            failures.OrderBy(value => value, StringComparer.Ordinal).ToArray(), manifest.ManifestSha256, ReadOnly: false,
-            manifest.Lots.LastOrDefault()?.DeactivatedAt, manifest.Lots.LastOrDefault()?.LotKey);
-    }
-
-    public static RetentionPurgePilotManifestReport ToPilotManifestReport(RetentionPurgePilotManifest manifest) =>
-        new(manifest.RetentionDays, manifest.CutoffAt, manifest.RequestedLotLimit, manifest.Lots.Count, manifest.Blobs.Count,
-            manifest.Blobs.Sum(blob => blob.ContentLength), manifest.MotivationSignalsPreserved, manifest.ManifestSha256, ReadOnly: true);
-
-    internal static IReadOnlyList<RetentionPurgePilotBlob> GetPilotBlobsForEligibleLots(
-        IReadOnlyList<RetentionPurgePilotBlob> blobs,
-        IReadOnlySet<string> eligibleLotKeys) =>
-        blobs.Where(blob => eligibleLotKeys.Contains(blob.LotKey)).ToArray();
-
-    private async Task<HashSet<string>> GetStillEligibleRetentionLotKeysAsync(string[] lotKeys, DateTimeOffset cutoffAt, CancellationToken cancellationToken)
-    {
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await using (var readOnly = connection.CreateCommand())
-        {
-            readOnly.Transaction = transaction;
-            readOnly.CommandText = "set transaction read only;";
-            await readOnly.ExecuteNonQueryAsync(cancellationToken);
-        }
-        var eligible = new HashSet<string>(StringComparer.Ordinal);
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-            command.CommandText = """
-                select lot_key
-                from inventory_lot_lifecycle
-                where lot_key = any(@lot_keys)
-                  and not is_active
-                  and deactivated_at is not null
-                  and deactivated_at <= @cutoff_at;
-                """;
-            AddParameter(command, "lot_keys", lotKeys);
-            AddParameter(command, "cutoff_at", cutoffAt);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken)) eligible.Add(reader.GetString(0));
-        }
-        await transaction.RollbackAsync(cancellationToken);
-        return eligible;
-    }
-
-    private async Task<(long InventoryRows, long LifecycleRows, long VersionRows, long MotivationSignals)> GetPilotPreservationCountsAsync(string[] lotKeys, CancellationToken cancellationToken)
-    {
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-        command.CommandText = """
-            select
-                (select count(*)::bigint from auction_lots where lot_key = any(@lot_keys)),
-                (select count(*)::bigint from inventory_lot_lifecycle where lot_key = any(@lot_keys)),
-                (select count(*)::bigint from auction_lot_versions where lot_key = any(@lot_keys)),
-                (select count(*)::bigint from copart_lot_motivation_signals where lot_key = any(@lot_keys));
-            """;
-        AddParameter(command, "lot_keys", lotKeys);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        await reader.ReadAsync(cancellationToken);
-        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
-    }
-
-    /// <summary>
-    /// Reconciles PostgreSQL's raw_blob_name references without accessing Blob payloads. It is deliberately separate
-    /// from the physical listing because old historical names do not use the current content-addressed path layout.
-    /// </summary>
-    public async Task<BlobReferenceCrosscheckReport> GetBlobReferenceCrosscheckAsync(int retentionDays, CancellationToken cancellationToken)
-    {
-        var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
-        var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-
-        await using (var readOnly = connection.CreateCommand())
-        {
-            readOnly.Transaction = transaction;
-            readOnly.CommandText = "set transaction read only;";
-            await readOnly.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        long versionRows;
-        long distinctLots;
-        long distinctReferencedBlobs;
-        long additionalVersionReferencesToSameBlob;
-        long? referencedPostgresPayloadBytes = null;
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
-            command.CommandText = """
-                select
-                    count(*)::bigint,
-                    count(distinct lot_key)::bigint,
-                    count(distinct raw_blob_name)::bigint,
-                    (count(*) - count(distinct raw_blob_name))::bigint
-                from auction_lot_versions
-                where raw_blob_name is not null
-                  and raw_blob_name like 'snapshots/%';
-                """;
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            await reader.ReadAsync(cancellationToken);
-            versionRows = reader.GetInt64(0);
-            distinctLots = reader.GetInt64(1);
-            distinctReferencedBlobs = reader.GetInt64(2);
-            additionalVersionReferencesToSameBlob = reader.GetInt64(3);
-        }
-
-        long eligibleInactiveLots;
-        long eligibleVersionRows;
-        long eligibleDistinctReferencedBlobs;
-        long? eligiblePostgresPayloadBytes = null;
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 600);
-            command.CommandText = """
-                with eligible_lots as (
-                    select lot_key
-                    from inventory_lot_lifecycle
-                    where not is_active
-                      and deactivated_at is not null
-                      and deactivated_at <= @cutoff_at
-                ), eligible_versions as (
-                    select versions.lot_key, versions.raw_blob_name
-                    from auction_lot_versions versions
-                    join eligible_lots eligible on eligible.lot_key = versions.lot_key
-                    where versions.raw_blob_name is not null
-                      and versions.raw_blob_name like 'snapshots/%'
-                )
-                select
-                    (select count(*)::bigint from eligible_lots),
-                    count(*)::bigint,
-                    count(distinct raw_blob_name)::bigint
-                from eligible_versions;
-                """;
-            AddParameter(command, "cutoff_at", cutoffAt);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            await reader.ReadAsync(cancellationToken);
-            eligibleInactiveLots = reader.GetInt64(0);
-            eligibleVersionRows = reader.GetInt64(1);
-            eligibleDistinctReferencedBlobs = reader.GetInt64(2);
-        }
-
-        var samples = new List<string>();
-        await using (var command = connection.CreateCommand())
-        {
-            command.Transaction = transaction;
-            command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            command.CommandText = """
-                select raw_blob_name
-                from auction_lot_versions
-                where raw_blob_name is not null
-                  and raw_blob_name like 'snapshots/%'
-                order by id
-                limit 5;
-                """;
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken)) samples.Add(reader.GetString(0));
-        }
-
-        await transaction.RollbackAsync(cancellationToken);
-        return new BlobReferenceCrosscheckReport(
-            safeRetentionDays,
-            cutoffAt,
-            versionRows,
-            distinctLots,
-            distinctReferencedBlobs,
-            additionalVersionReferencesToSameBlob,
-            referencedPostgresPayloadBytes,
-            eligibleInactiveLots,
-            eligibleVersionRows,
-            eligibleDistinctReferencedBlobs,
-            eligiblePostgresPayloadBytes,
-            samples,
-            ReadOnly: true);
     }
 
     public async Task<string> GetCopartPublicationReportAsync(CancellationToken cancellationToken)
@@ -3188,7 +2610,6 @@ public sealed partial class PostgresSnapshotStore(
                     flags jsonb not null default '[]'::jsonb,
                     data_quality_notes jsonb not null default '[]'::jsonb,
                     evaluated_fields jsonb not null default '[]'::jsonb,
-                    audit_blob_name text not null,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
@@ -3238,7 +2659,6 @@ public sealed partial class PostgresSnapshotStore(
                     lot_key text not null references auction_lots(lot_key),
                     observed_at timestamptz not null,
                     payload_hash text not null,
-                    raw_blob_name text not null,
                     current_bid_usd numeric,
                     sale_price_usd numeric,
                     lot_status text,
@@ -3460,7 +2880,6 @@ public sealed partial class PostgresSnapshotStore(
                     flags jsonb not null default '[]'::jsonb,
                     data_quality_notes jsonb not null default '[]'::jsonb,
                     evaluated_fields jsonb not null default '[]'::jsonb,
-                    audit_blob_name text not null,
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
@@ -3510,31 +2929,7 @@ public sealed partial class PostgresSnapshotStore(
         }
     }
 
-    private async Task UploadRawPayloadAsync(string blobName, string rawJson, CancellationToken cancellationToken)
-    {
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-        var blobClient = containerClient.GetBlobClient(blobName);
 
-        try
-        {
-            await blobClient.UploadAsync(BinaryData.FromString(rawJson), overwrite: false, cancellationToken: cancellationToken);
-        }
-        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status409Conflict ||
-                                                    string.Equals(exception.ErrorCode, "BlobAlreadyExists", StringComparison.OrdinalIgnoreCase))
-        {
-            // Content-addressed payloads are immutable. A retry that produces the same hash already has the audit blob.
-        }
-    }
-
-    private async Task<bool> RawPayloadExistsAsync(string blobName, CancellationToken cancellationToken)
-    {
-        var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
-        var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
-        var blobClient = containerClient.GetBlobClient(blobName);
-        var response = await blobClient.ExistsAsync(cancellationToken);
-        return response.Value;
-    }
 
     private async Task<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
         await OpenConnectionAsync(_persistence.Database, cancellationToken);
@@ -3588,64 +2983,10 @@ public sealed partial class PostgresSnapshotStore(
         vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown",
         vehicle.LotNumber?.Trim() ?? vehicle.Vin?.Trim() ?? throw new InvalidOperationException("Apibara vehicle has neither lot number nor VIN."));
 
-    internal static string BuildBlobName(string identity, string payloadHash)
-    {
-        var safeIdentity = ToSafeBlobIdentity(identity);
-        return $"snapshots/{safeIdentity}/{payloadHash}.json";
-    }
 
-    internal static string ToSafeBlobIdentity(string identity) =>
-        string.Concat(identity.Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
 
-    internal static bool ShouldUploadRawSnapshot(bool snapshotVersionExists, bool reactivatingInactiveLot, bool canonicalBlobExists) =>
-        !snapshotVersionExists || (reactivatingInactiveLot && !canonicalBlobExists);
 
-    internal static bool TryGetPilotLegacyBlobLotKey(
-        string blobName,
-        IReadOnlyDictionary<string, string> lotKeysBySafeIdentity,
-        out string lotKey)
-    {
-        lotKey = string.Empty;
-        if (!TryParseLegacyBlobName(blobName, out var safeIdentity) ||
-            !lotKeysBySafeIdentity.TryGetValue(safeIdentity, out var selectedLotKey) ||
-            string.IsNullOrWhiteSpace(selectedLotKey)) return false;
-        lotKey = selectedLotKey;
-        return true;
-    }
 
-    private static bool TryParseContentAddressedBlobName(string blobName, out string safeLotIdentity, out string payloadHash)
-    {
-        safeLotIdentity = string.Empty;
-        payloadHash = string.Empty;
-        var segments = blobName.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length != 3 || !string.Equals(segments[0], "snapshots", StringComparison.Ordinal)) return false;
-        if (!segments[2].EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return false;
-
-        var candidateHash = segments[2][..^".json".Length];
-        if (candidateHash.Length != 64 || candidateHash.Any(character => !Uri.IsHexDigit(character))) return false;
-        if (string.IsNullOrWhiteSpace(segments[1])) return false;
-
-        safeLotIdentity = segments[1];
-        payloadHash = candidateHash.ToLowerInvariant();
-        return true;
-    }
-
-    private static bool TryParseLegacyBlobName(string blobName, out string safeLotIdentity)
-    {
-        safeLotIdentity = string.Empty;
-        var parts = blobName.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 6 || !string.Equals(parts[0], "snapshots", StringComparison.Ordinal)) return false;
-        if (parts[1].Length != 4 || parts[2].Length != 2 || parts[3].Length != 2) return false;
-        if (string.IsNullOrWhiteSpace(parts[4]) || !parts[5].EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return false;
-        safeLotIdentity = parts[4];
-        return true;
-    }
-
-    private sealed class PhysicalBlobLotCounter
-    {
-        public long PhysicalBlobs { get; set; }
-        public long PhysicalBytes { get; set; }
-    }
 
     internal const string SoldLotRetentionDryRunSql = """
         with eligible_lots as (
@@ -3654,16 +2995,12 @@ public sealed partial class PostgresSnapshotStore(
             where not lifecycle.is_active
               and lifecycle.deactivated_at is not null
               and lifecycle.deactivated_at <= @cutoff_at
-        ), eligible_versions as (
-            select versions.raw_blob_name
-            from auction_lot_versions versions
-            join eligible_lots eligible on eligible.lot_key = versions.lot_key
         )
         select
             (select count(*)::bigint from eligible_lots) as eligible_inactive_lots,
-            count(*)::bigint as eligible_versions,
-            count(distinct raw_blob_name)::bigint as referenced_raw_blobs_eligible
-        from eligible_versions;
+            (select count(*)::bigint
+             from auction_lot_versions versions
+             join eligible_lots eligible on eligible.lot_key = versions.lot_key) as eligible_versions;
         """;
 
     internal const string HistoricalLotStatusInventorySql = """
@@ -3677,8 +3014,7 @@ public sealed partial class PostgresSnapshotStore(
         ), historical_versions as (
             select lots.lot_status,
                    lots.lot_sub_status,
-                   versions.lot_key,
-                   versions.raw_blob_name
+                   versions.lot_key
             from historical_lots lots
             join auction_lot_versions versions on versions.lot_key = lots.lot_key
         )
@@ -3686,8 +3022,7 @@ public sealed partial class PostgresSnapshotStore(
                lot_sub_status,
                count(distinct lot_key)::bigint as lots,
                count(*)::bigint as versions,
-               null::bigint as postgres_payload_bytes,
-               count(distinct raw_blob_name)::bigint as referenced_raw_blobs
+               null::bigint as postgres_payload_bytes
         from historical_versions
         group by lot_status, lot_sub_status
         order by versions desc, lot_status, lot_sub_status

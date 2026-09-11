@@ -39,10 +39,6 @@ builder.Services
     .Bind(builder.Configuration.GetSection(PersistenceOptions.SectionName))
     .ValidateDataAnnotations();
 
-builder.Services
-    .AddOptions<BlobAuditOptions>()
-    .Bind(builder.Configuration.GetSection(BlobAuditOptions.SectionName))
-    .ValidateDataAnnotations();
 
 builder.Services.AddHttpClient<IApibaraClient, ApibaraClient>((serviceProvider, client) =>
 {
@@ -76,7 +72,6 @@ else
 builder.Services.AddScoped<IInventorySyncProcessor, InventorySyncProcessor>();
 builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
 builder.Services.AddScoped<ICopartExcelSnapshotAdapter, CopartExcelSnapshotAdapter>();
-builder.Services.AddScoped<ICopartExcelSnapshotSource, CopartBlobSnapshotSource>();
 builder.Services.AddScoped<ICopartExcelSnapshotProcessor, CopartExcelSnapshotProcessor>();
 builder.Services.AddScoped<ICopartMediaEnrichmentProcessor, CopartMediaEnrichmentProcessor>();
 builder.Services.AddScoped<ICopartMedia404DiagnosticProcessor, CopartMedia404DiagnosticProcessor>();
@@ -457,91 +452,6 @@ if (args.Contains("--sold-lot-retention-dry-run", StringComparer.OrdinalIgnoreCa
     var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
     var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
     var report = await store.GetSoldLotRetentionDryRunAsync(retentionDays, CancellationToken.None);
-    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
-    return;
-}
-
-if (args.Contains("--physical-blob-inventory", StringComparer.OrdinalIgnoreCase))
-{
-    await using var scope = app.Services.CreateAsyncScope();
-    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
-    if (store is not PostgresSnapshotStore postgresStore)
-    {
-        throw new InvalidOperationException("Physical Blob inventory requires Persistence:Provider=Postgres.");
-    }
-
-    var top = Math.Clamp(builder.Configuration.GetValue<int?>("BlobAudit:PhysicalInventoryTop") ?? 100, 1, 100);
-    var report = await postgresStore.GetPhysicalBlobInventoryAsync(top, CancellationToken.None);
-    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
-    return;
-}
-
-if (args.Contains("--blob-path-sample", StringComparer.OrdinalIgnoreCase))
-{
-    await using var scope = app.Services.CreateAsyncScope();
-    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
-    if (store is not PostgresSnapshotStore postgresStore)
-    {
-        throw new InvalidOperationException("Blob path sample requires Persistence:Provider=Postgres.");
-    }
-
-    var sampleSize = Math.Clamp(builder.Configuration.GetValue<int?>("BlobAudit:PathSampleSize") ?? 10, 1, 25);
-    var report = await postgresStore.GetBlobPathSampleAsync(sampleSize, CancellationToken.None);
-    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
-    return;
-}
-
-if (args.Contains("--retention-candidate-blob-inventory", StringComparer.OrdinalIgnoreCase))
-{
-    await using var scope = app.Services.CreateAsyncScope();
-    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
-    if (store is not PostgresSnapshotStore postgresStore)
-    {
-        throw new InvalidOperationException("Retention candidate Blob inventory requires Persistence:Provider=Postgres.");
-    }
-
-    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
-    var top = Math.Clamp(builder.Configuration.GetValue<int?>("BlobAudit:TopLots") ?? 20, 1, 100);
-    var report = await postgresStore.GetRetentionCandidateBlobInventoryAsync(retentionDays, top, CancellationToken.None);
-    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
-    return;
-}
-
-if (args.Contains("--retention-purge-pilot", StringComparer.OrdinalIgnoreCase))
-{
-    await using var scope = app.Services.CreateAsyncScope();
-    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
-    if (store is not PostgresSnapshotStore postgresStore)
-    {
-        throw new InvalidOperationException("Retention purge pilot requires Persistence:Provider=Postgres.");
-    }
-
-    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
-    var lotLimit = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:PurgePilotLotLimit") ?? 500, 1, 500);
-    var execute = builder.Configuration.GetValue<bool?>("Retention:PurgePilotExecute") ?? false;
-    var manifest = await postgresStore.CreateRetentionPurgePilotManifestAsync(retentionDays, lotLimit, CancellationToken.None);
-    if (!execute)
-    {
-        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(PostgresSnapshotStore.ToPilotManifestReport(manifest)));
-        return;
-    }
-
-    var report = await postgresStore.ExecuteRetentionPurgePilotAsync(manifest, CancellationToken.None);
-    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
-    return;
-}
-
-if (args.Contains("--blob-reference-crosscheck", StringComparer.OrdinalIgnoreCase))
-{
-    await using var scope = app.Services.CreateAsyncScope();
-    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
-    if (store is not PostgresSnapshotStore postgresStore)
-    {
-        throw new InvalidOperationException("Blob reference crosscheck requires Persistence:Provider=Postgres.");
-    }
-
-    var retentionDays = Math.Clamp(builder.Configuration.GetValue<int?>("Retention:DryRunDays") ?? 7, 1, 3650);
-    var report = await postgresStore.GetBlobReferenceCrosscheckAsync(retentionDays, CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(report));
     return;
 }
