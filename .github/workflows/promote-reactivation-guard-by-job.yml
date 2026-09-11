@@ -1,0 +1,83 @@
+name: Promote Reactivation Guard By Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type PROMOTE_REACTIVATION_GUARD"
+        required: true
+        type: string
+      target_job:
+        description: "Only the selected idle job will be updated"
+        required: true
+        default: copart
+        type: choice
+        options: [copart, iaai]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Guard target and approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'PROMOTE_REACTIVATION_GUARD'
+          case '${{ inputs.target_job }}' in copart|iaai) ;; *) exit 1 ;; esac
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Select and baseline one idle job
+        shell: bash
+        run: |
+          set -euo pipefail
+          case '${{ inputs.target_job }}' in
+            copart) job='job-lsc-copart-auto-prod' ;;
+            iaai) job='job-lsc-iaai-pilot-prod' ;;
+          esac
+          echo "TARGET_JOB=$job" >> "$GITHUB_ENV"
+          json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+          test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
+          active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+          test "$active" = 0
+          echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/job.before.json"
+      - name: Build immutable engine image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="reactivation-guard-${GITHUB_SHA}"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "PROMOTED_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+      - name: Update only the selected job image
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job update --name "$TARGET_JOB" --resource-group "$RESOURCE_GROUP" --image "$PROMOTED_IMAGE" --only-show-errors
+      - name: Verify immutable configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          json="$(az containerapp job show --name "$TARGET_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
+          echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/job.after.json"
+          diff -u "$RUNNER_TEMP/job.before.json" "$RUNNER_TEMP/job.after.json"
+          test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
+          echo "VERIFIED_JOB=$TARGET_JOB IMAGE=$PROMOTED_IMAGE"
