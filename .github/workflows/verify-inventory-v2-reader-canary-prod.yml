@@ -1,0 +1,60 @@
+name: Verify Inventory V2 Reader Production Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type VERIFY_INVENTORY_V2_READER_CANARY"
+        required: true
+        type: string
+      expected_revision:
+        description: "Expected canary revision"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify confirmation
+        run: test '${{ inputs.confirmation }}' = VERIFY_INVENTORY_V2_READER_CANARY
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Verify revision, traffic, flags and health
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ inputs.expected_revision }}
+        run: |
+          set -euo pipefail
+          current="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" -o json)"
+          latest="$(echo "$current" | jq -r '.properties.latestRevisionName')"
+          test "$latest" = "$EXPECTED_REVISION"
+          test "$(echo "$current" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__ReaderEnabled")][0].value // ""')" = true
+          test "$(echo "$current" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__LegacyReadFallbackEnabled")][0].value // ""')" = true
+          v2_weight="$(echo "$current" | jq -r --arg revision "$EXPECTED_REVISION" '[.properties.ingress.traffic[]? | select(.revisionName==$revision)][0].weight // 0')"
+          old_weight="$(echo "$current" | jq -r --arg revision "$EXPECTED_REVISION" '[.properties.ingress.traffic[]? | select(.revisionName!=$revision)][0].weight // 0')"
+          test "$v2_weight" = 5
+          test "$old_weight" = 95
+          fqdn="$(echo "$current" | jq -r '.properties.configuration.ingress.fqdn')"
+          for _ in $(seq 1 5); do
+            curl --fail --silent --show-error --max-time 30 "https://$fqdn/healthz" >/dev/null
+          done
+          echo "$current" | jq '{latestRevision:.properties.latestRevisionName,traffic:.properties.ingress.traffic,readerEnv:[.properties.template.containers[0].env[]? | select(.name|test("InventoryV2__"))],fqdn:.properties.configuration.ingress.fqdn}'

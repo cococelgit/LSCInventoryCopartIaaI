@@ -152,14 +152,21 @@ jobs:
           done
           test "$state" = Running
           curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 5 "https://$API_FQDN/healthz" >/dev/null
+          echo "NEW_REVISION=$NEW_REVISION" >> "$GITHUB_ENV"
           echo "CURRENT_REVISION=$CURRENT_REVISION NEW_REVISION=$NEW_REVISION TRAFFIC_CURRENT=95 TRAFFIC_V2=5 FALLBACK=true"
           trap - ERR
       - name: Verify canary state
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          rollback() {
+            az containerapp ingress traffic set -g "$RESOURCE_GROUP" -n "$API_APP" --revision-weight "$CURRENT_REVISION=100" --only-show-errors >/dev/null 2>&1 || true
+            az containerapp revision deactivate -g "$RESOURCE_GROUP" -n "$API_APP" --revision "$NEW_REVISION" --only-show-errors >/dev/null 2>&1 || true
+          }
+          trap rollback ERR
           current="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" -o json)"
           test "$(echo "$current" | jq -r '.properties.latestRevisionName')" = "$NEW_REVISION"
           test "$(echo "$current" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__ReaderEnabled")][0].value // ""')" = true
           test "$(echo "$current" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__LegacyReadFallbackEnabled")][0].value // ""')" = true
           echo "$current" | jq '{latestRevision:.properties.latestRevisionName,traffic:.properties.ingress.traffic,readerEnv:[.properties.template.containers[0].env[]? | select(.name|test("InventoryV2__"))]}'
+          trap - ERR
