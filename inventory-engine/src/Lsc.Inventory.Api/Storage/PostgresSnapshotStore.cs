@@ -1823,7 +1823,7 @@ public sealed partial class PostgresSnapshotStore(
         if (string.IsNullOrWhiteSpace(purgeRunId))
             throw new ArgumentException("A purge run id is required.", nameof(purgeRunId));
         var safeRetentionDays = Math.Clamp(retentionDays, 1, 3650);
-        var safeBatchSize = Math.Clamp(batchSize, 1, 1000);
+        var safeBatchSize = Math.Clamp(batchSize, 1, 25);
         var cutoffAt = DateTimeOffset.UtcNow.AddDays(-safeRetentionDays);
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
