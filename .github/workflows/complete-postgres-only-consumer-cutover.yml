@@ -1,0 +1,149 @@
+name: Complete PostgreSQL Only Consumer Cutover
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type COMPLETE_POSTGRES_ONLY_CUTOVER"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: complete-postgres-only-consumer-cutover
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+  POSTGRES_ONLY_IMAGE: acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:postgres-only-531fa9d1f2e242f930f10c27b7e7e3efac85405a
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Guard explicit authorization
+        shell: bash
+        run: test '${{ inputs.confirmation }}' = COMPLETE_POSTGRES_ONLY_CUTOVER
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Capture baselines and precheck no active jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/postgres-only-cutover"
+          az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" -o json > "$RUNNER_TEMP/postgres-only-cutover/$API_APP.before.json"
+          api_fqdn="$(jq -r '.properties.configuration.ingress.fqdn' "$RUNNER_TEMP/postgres-only-cutover/$API_APP.before.json")"
+          test -n "$api_fqdn" && test "$api_fqdn" != null
+          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "https://${api_fqdn}/healthz" >/dev/null
+          echo "API_FQDN=$api_fqdn" >> "$GITHUB_ENV"
+
+          jobs=(
+            job-lsc-inventory-bootstrap-prod
+            job-lsc-inventory-ingestion-prod
+            job-lsc-inventory-scheduled-prod
+            job-lsc-inventory-scoring-prod
+            job-lsc-copart-catchup-prod
+            job-lsc-copart-catchup-v2-prod
+          )
+          for job in "${jobs[@]}"; do
+            az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json > "$RUNNER_TEMP/postgres-only-cutover/$job.before.json"
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+            echo "PRECHECK_JOB=$job TRIGGER=$(jq -r '.properties.configuration.triggerType' "$RUNNER_TEMP/postgres-only-cutover/$job.before.json") ACTIVE=0"
+          done
+
+      - name: Cut over API and remaining jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$API_APP" \
+            --image "$POSTGRES_ONLY_IMAGE" \
+            --revision-suffix "po${GITHUB_RUN_NUMBER}" \
+            --remove-env-vars BlobAudit__AccountUrl BlobAudit__ContainerName \
+            --only-show-errors >/dev/null
+
+          jobs=(
+            job-lsc-inventory-bootstrap-prod
+            job-lsc-inventory-ingestion-prod
+            job-lsc-inventory-scheduled-prod
+            job-lsc-inventory-scoring-prod
+            job-lsc-copart-catchup-prod
+            job-lsc-copart-catchup-v2-prod
+          )
+          for job in "${jobs[@]}"; do
+            az containerapp job update \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$job" \
+              --image "$POSTGRES_ONLY_IMAGE" \
+              --remove-env-vars BlobAudit__AccountUrl BlobAudit__ContainerName CopartExcel__AccountUrl CopartExcel__ContainerName CopartExcel__SnapshotBlobName \
+              --only-show-errors >/dev/null
+          done
+
+      - name: Verify API health and configuration invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=false
+          for attempt in $(seq 1 36); do
+            current="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" -o json)"
+            latest="$(echo "$current" | jq -r '.properties.latestRevisionName')"
+            ready_revision="$(echo "$current" | jq -r '.properties.latestReadyRevisionName')"
+            echo "API_READY attempt=$attempt latest=$latest ready=$ready_revision"
+            if [ "$latest" = "$ready_revision" ] && curl --fail --silent --show-error --max-time 40 "https://${API_FQDN}/healthz" >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 10
+          done
+          test "$ready" = true
+          az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" -o json > "$RUNNER_TEMP/postgres-only-cutover/$API_APP.after.json"
+          test "$(jq -r '.properties.template.containers[0].image' "$RUNNER_TEMP/postgres-only-cutover/$API_APP.after.json")" = "$POSTGRES_ONLY_IMAGE"
+          test "$(jq '[.properties.template.containers[0].env[]? | select(.name | test("^(BlobAudit|CopartExcel)__"))] | length' "$RUNNER_TEMP/postgres-only-cutover/$API_APP.after.json")" = 0
+          jq -S '.properties.template | del(.revisionSuffix,.containers[0].image) | .containers[0].env |= map(select(.name | test("^(BlobAudit|CopartExcel)__") | not))' "$RUNNER_TEMP/postgres-only-cutover/$API_APP.before.json" > "$RUNNER_TEMP/postgres-only-cutover/api.normalized.before.json"
+          jq -S '.properties.template | del(.revisionSuffix,.containers[0].image) | .containers[0].env |= map(select(.name | test("^(BlobAudit|CopartExcel)__") | not))' "$RUNNER_TEMP/postgres-only-cutover/$API_APP.after.json" > "$RUNNER_TEMP/postgres-only-cutover/api.normalized.after.json"
+          diff -u "$RUNNER_TEMP/postgres-only-cutover/api.normalized.before.json" "$RUNNER_TEMP/postgres-only-cutover/api.normalized.after.json"
+
+      - name: Verify jobs preserve commands, triggers and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          jobs=(
+            job-lsc-inventory-bootstrap-prod
+            job-lsc-inventory-ingestion-prod
+            job-lsc-inventory-scheduled-prod
+            job-lsc-inventory-scoring-prod
+            job-lsc-copart-catchup-prod
+            job-lsc-copart-catchup-v2-prod
+          )
+          for job in "${jobs[@]}"; do
+            az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json > "$RUNNER_TEMP/postgres-only-cutover/$job.after.json"
+            after="$RUNNER_TEMP/postgres-only-cutover/$job.after.json"
+            before="$RUNNER_TEMP/postgres-only-cutover/$job.before.json"
+            test "$(jq -r '.properties.template.containers[0].image' "$after")" = "$POSTGRES_ONLY_IMAGE"
+            test "$(jq '[.properties.template.containers[0].env[]? | select(.name | test("^(BlobAudit|CopartExcel)__"))] | length' "$after")" = 0
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+            jq -S '{configuration:.properties.configuration,identity:.identity,environmentId:.properties.environmentId,template:.properties.template} | .template.containers[0] |= (del(.image,.imageType) | .env |= map(select(.name | test("^(BlobAudit|CopartExcel)__") | not)))' "$before" > "$RUNNER_TEMP/postgres-only-cutover/$job.normalized.before.json"
+            jq -S '{configuration:.properties.configuration,identity:.identity,environmentId:.properties.environmentId,template:.properties.template} | .template.containers[0] |= (del(.image,.imageType) | .env |= map(select(.name | test("^(BlobAudit|CopartExcel)__") | not)))' "$after" > "$RUNNER_TEMP/postgres-only-cutover/$job.normalized.after.json"
+            diff -u "$RUNNER_TEMP/postgres-only-cutover/$job.normalized.before.json" "$RUNNER_TEMP/postgres-only-cutover/$job.normalized.after.json"
+            echo "VERIFIED_JOB=$job TRIGGER=$(jq -r '.properties.configuration.triggerType' "$after") ACTIVE=0 BLOB_ENV=0"
+          done
