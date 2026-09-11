@@ -1064,6 +1064,18 @@ if (args.Contains("--inventory-v2-writer-state", StringComparer.OrdinalIgnoreCas
     return;
 }
 
+if (args.Contains("--inventory-v2-parity", StringComparer.OrdinalIgnoreCase))
+{
+    var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));
+    var platform = platformIndex >= 0 && platformIndex + 1 < args.Length ? args[platformIndex + 1] : "all";
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>() as PostgresSnapshotStore
+        ?? throw new InvalidOperationException("Inventory V2 parity requires Persistence:Provider=Postgres.");
+    var result = await store.GetInventoryV2ParityReportAsync(platform, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
 if (args.Contains("--auctionsapi-incremental-canary", StringComparer.OrdinalIgnoreCase))
 {
     var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));

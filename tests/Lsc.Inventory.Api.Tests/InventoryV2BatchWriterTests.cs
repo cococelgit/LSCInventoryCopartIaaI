@@ -76,6 +76,7 @@ public sealed class InventoryV2BatchWriterTests
         var program = File.ReadAllText(FindRepositoryFile("Program.cs"));
         Assert.Contains("--inventory-v2-writer-state", program, StringComparison.Ordinal);
         Assert.Contains("--auctionsapi-incremental-canary", program, StringComparison.Ordinal);
+        Assert.Contains("--inventory-v2-parity", program, StringComparison.Ordinal);
         Assert.Contains("--platform copart|iaai", program, StringComparison.Ordinal);
         Assert.Contains("--write", program, StringComparison.Ordinal);
 
@@ -88,6 +89,11 @@ public sealed class InventoryV2BatchWriterTests
         Assert.DoesNotContain("--tail 500", workflow, StringComparison.Ordinal);
         Assert.Contains("--tail 300", workflow, StringComparison.Ordinal);
         Assert.Contains("reader_enabled = false", File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Schema.cs")), StringComparison.Ordinal);
+
+        var parityWorkflow = File.ReadAllText(FindRepositoryRootFile(".github/workflows/audit-inventory-v2-parity.yml"));
+        Assert.Contains("AUDIT_INVENTORY_V2_PARITY", parityWorkflow, StringComparison.Ordinal);
+        Assert.Contains("--inventory-v2-parity", parityWorkflow, StringComparison.Ordinal);
+        Assert.Contains("triggerType=\"Manual\"", parityWorkflow, StringComparison.Ordinal);
     }
 
     private static AuctionVehicle Vehicle() => new()
