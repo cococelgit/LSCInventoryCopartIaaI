@@ -358,6 +358,7 @@ public sealed record RetentionPurgePilotExecutionReport(
     long DeletedBytes,
     long SkippedMissingBlobs,
     long SkippedChangedBlobs,
+    long SkippedReactivatedLots,
     long PreservedInventoryRows,
     long PreservedLifecycleRows,
     long PreservedVersionRows,

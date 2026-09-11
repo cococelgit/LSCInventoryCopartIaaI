@@ -55,4 +55,20 @@ public sealed class RetentionCandidateBlobInventoryTests
         Assert.False(PostgresSnapshotStore.TryGetPilotLegacyBlobLotKey(
             "snapshots/copart-41621576/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json", selected, out _));
     }
+
+    [Fact]
+    public void PilotPurge_ExcludesAnyLotReactivatedAfterManifestCreation()
+    {
+        var blobs = new[]
+        {
+            new RetentionPurgePilotBlob("copart:1", "snapshots/2026/08/25/copart-1/a.json", 10, DateTimeOffset.UnixEpoch),
+            new RetentionPurgePilotBlob("copart:2", "snapshots/2026/08/25/copart-2/b.json", 20, DateTimeOffset.UnixEpoch)
+        };
+        var stillInactive = new HashSet<string>(StringComparer.Ordinal) { "copart:1" };
+
+        var eligible = PostgresSnapshotStore.GetPilotBlobsForEligibleLots(blobs, stillInactive);
+
+        Assert.Single(eligible);
+        Assert.Equal("copart:1", eligible[0].LotKey);
+    }
 }
