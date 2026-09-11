@@ -79,7 +79,7 @@ jobs:
             | {type:(.identity.type // "UserAssigned"),userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
             | .location as $location
             | .properties.environmentId as $environmentId
-            | {location:$location,identity:$identity,properties:{environmentId:$environmentId,configuration:(.properties.configuration | del(.identitySettings,.secrets,.scheduleTriggerConfig) | .triggerType="Manual" | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1} | .replicaRetryLimit=0 | .replicaTimeout=900),template:.properties.template}}' /tmp/source.json > /tmp/purge-job.json
+            | {location:$location,identity:$identity,properties:{environmentId:$environmentId,configuration:(.properties.configuration | del(.identitySettings,.secrets,.scheduleTriggerConfig) | .triggerType="Manual" | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1} | .replicaRetryLimit=0 | .replicaTimeout=3600),template:.properties.template}}' /tmp/source.json > /tmp/purge-job.json
           uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
           az rest --method put --uri "$uri" --body @/tmp/purge-job.json --output none
           for _ in $(seq 1 24); do
@@ -103,7 +103,7 @@ jobs:
             az containerapp job update --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --set-env-vars RETENTION_PURGE_CURSOR_AT="$cursor_at" RETENTION_PURGE_CURSOR_LOT_KEY="$cursor_lot" >/dev/null
             execution_name=$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name')
             status=Pending
-            for _ in $(seq 1 120); do
+            for _ in $(seq 1 240); do
               status=$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution_name" --query properties.status -o tsv)
               echo "batch=$batch execution=$execution_name status=$status"
               case "$status" in Succeeded|Failed|Canceled) break;; esac
