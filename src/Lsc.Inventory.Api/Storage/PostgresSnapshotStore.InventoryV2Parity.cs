@@ -51,7 +51,10 @@ public sealed partial class PostgresSnapshotStore
                 count(*) filter (where v1.lot_key is not null and v2.media_has_photos is distinct from v1.has_photos)::bigint as has_photos,
                 count(*) filter (where v1.lot_key is not null and v2.media_has_360 is distinct from v1.media_has_360)::bigint as has_360,
                 count(*) filter (where v1.lot_key is not null and v2.is_buy_now is distinct from v1.is_buy_now)::bigint as is_buy_now,
-                count(*) filter (where v1.lot_key is not null and v2.is_active is distinct from v1.is_active)::bigint as is_active
+                count(*) filter (where v1.lot_key is not null and v2.is_active is distinct from v1.is_active)::bigint as is_active,
+                count(*) filter (where v1.lot_key is not null and v1.seller_name is null and v2.seller_name is not null)::bigint as seller_v2_only,
+                count(*) filter (where v1.lot_key is not null and v1.seller_name is not null and v2.seller_name is null)::bigint as seller_v1_only,
+                count(*) filter (where v1.lot_key is not null and v1.seller_name is not null and v2.seller_name is not null and v1.seller_name is distinct from v2.seller_name)::bigint as seller_conflict
             from inventory_current_v2 v2
             left join inventory_search_current v1 on v1.lot_key = v2.lot_key
             where (@platform::text is null or v2.platform = @platform::text);
@@ -79,7 +82,11 @@ public sealed partial class PostgresSnapshotStore
             reader.GetInt64(0),
             reader.GetInt64(1),
             mismatches,
-            mismatches.Values.Sum());
+            mismatches.Values.Sum(),
+            new InventoryV2SellerParity(
+                reader.GetInt64(35),
+                reader.GetInt64(36),
+                reader.GetInt64(37)));
     }
 }
 
@@ -88,4 +95,10 @@ public sealed record InventoryV2ParityReport(
     long V2Rows,
     long MissingV1Rows,
     IReadOnlyDictionary<string, long> FieldMismatches,
-    long TotalFieldMismatches);
+    long TotalFieldMismatches,
+    InventoryV2SellerParity SellerParity);
+
+public sealed record InventoryV2SellerParity(
+    long V2Only,
+    long V1Only,
+    long ConflictingNonNull);

@@ -14,6 +14,7 @@ public sealed class InventoryV2BatchWriterTests
         var options = new InventoryV2Options();
 
         Assert.False(options.ShadowWriteEnabled);
+        Assert.False(options.ReaderEnabled);
         Assert.Equal(1000, options.BatchSize);
     }
 
@@ -105,7 +106,12 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("--inventory-v2-parity", program, StringComparison.Ordinal);
         Assert.Contains("--inventory-v2-reset-shadow", program, StringComparison.Ordinal);
         Assert.Contains("--platform copart|iaai", program, StringComparison.Ordinal);
-        Assert.Contains("--write", program, StringComparison.Ordinal);
+
+        var parity = File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Parity.cs"));
+        Assert.Contains("FieldMismatches", parity, StringComparison.Ordinal);
+        Assert.Contains("seller_v2_only", parity, StringComparison.Ordinal);
+        Assert.Contains("seller_v1_only", parity, StringComparison.Ordinal);
+        Assert.Contains("seller_conflict", parity, StringComparison.Ordinal);
 
         var workflow = File.ReadAllText(FindRepositoryRootFile(".github/workflows/run-inventory-v2-writer-canary.yml"));
         Assert.Contains("RUN_INVENTORY_V2_WRITER_CANARY", workflow, StringComparison.Ordinal);
