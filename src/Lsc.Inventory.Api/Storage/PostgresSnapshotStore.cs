@@ -1426,6 +1426,14 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentAsync(int maximum, CancellationToken cancellationToken)
     {
+        if (_inventoryV2.ReaderEnabled)
+        {
+            await EnsureInventoryV2SchemaAsync(cancellationToken);
+            if (await IsInventoryV2ReaderEnabledAsync(cancellationToken))
+                return await GetRecentInventoryV2Async(maximum, cancellationToken);
+        }
+        if (!_inventoryV2.LegacyReadFallbackEnabled)
+            throw new InvalidOperationException("Inventory V2 reader is required; legacy V1 recent fallback is disabled.");
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         var limit = Math.Clamp(maximum, 1, 5000);

@@ -69,6 +69,29 @@ public sealed partial class PostgresSnapshotStore
         return new InventorySearchPage(page, pageSize, total, generatedAt, rows.Select(ToStoredInventoryV2Snapshot).ToArray());
     }
 
+    private async Task<IReadOnlyCollection<StoredVehicleSnapshot>> GetRecentInventoryV2Async(int maximum, CancellationToken cancellationToken)
+    {
+        var limit = Math.Clamp(maximum, 1, 5000);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
+                   score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
+                   score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
+                   score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
+            from inventory_current_v2 latest
+            left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
+            where latest.is_active
+            order by latest.last_seen_at desc nulls last, latest.lot_key asc
+            limit @limit;
+            """;
+        AddParameter(command, "limit", limit);
+        var rows = await ReadInventoryV2RowsAsync(command, cancellationToken);
+        await AttachInventoryV2MediaAsync(connection, rows, cancellationToken);
+        return rows.Select(ToStoredInventoryV2Snapshot).ToArray();
+    }
+
     private async Task<StoredVehicleSnapshot?> GetByPlatformAndLotInventoryV2Async(string platform, string lotNumber, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
