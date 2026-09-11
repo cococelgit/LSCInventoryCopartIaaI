@@ -1,10 +1,15 @@
-using System.Data.Common;
+using Npgsql;
 
 namespace Lsc.Inventory.Api.Storage;
 
 public sealed partial class PostgresSnapshotStore
 {
-    public async Task<InventoryV2ParityReport> GetInventoryV2ParityReportAsync(string? platform, CancellationToken cancellationToken)
+    /// <summary>
+    /// Operational integrity audit for Inventory V2. This deliberately does not
+    /// query any V1 projection or JSONB table, so it remains usable after V1 is
+    /// retired. Historical V1 parity evidence lives in the migration documents.
+    /// </summary>
+    public async Task<InventoryV2IntegrityReport> GetInventoryV2IntegrityReportAsync(string? platform, CancellationToken cancellationToken)
     {
         var normalizedPlatform = string.IsNullOrWhiteSpace(platform) || platform.Equals("all", StringComparison.OrdinalIgnoreCase)
             ? null
@@ -16,205 +21,87 @@ public sealed partial class PostgresSnapshotStore
         await using var command = connection.CreateCommand();
         command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
         command.CommandText = """
+            with scoped as (
+                select *
+                from inventory_current_v2
+                where (@platform::text is null or platform = @platform::text)
+            ), media_counts as (
+                select m.platform, m.lot_number, count(*) filter (where m.media_type = 'photo')::integer as photo_count
+                from inventory_media_current_v2 m
+                join scoped s on s.platform = m.platform and s.lot_number = m.lot_number
+                group by m.platform, m.lot_number
+            )
             select
-                count(*)::bigint as v2_rows,
-                count(*) filter (where v1.lot_key is null)::bigint as missing_v1,
-                count(*) filter (where v1.lot_key is not null and v2.vin is distinct from v1.vin)::bigint as vin,
-                count(*) filter (where v1.lot_key is not null and v2.year is distinct from v1.year)::bigint as year,
-                count(*) filter (where v1.lot_key is not null and v2.make is distinct from v1.make)::bigint as make,
-                count(*) filter (where v1.lot_key is not null and v2.model is distinct from v1.model)::bigint as model,
-                count(*) filter (where v1.lot_key is not null and v2.vehicle_type is distinct from v1.vehicle_type)::bigint as vehicle_type,
-                count(*) filter (where v1.lot_key is not null and v2.exterior_color is distinct from v1.color)::bigint as color,
-                count(*) filter (where v1.lot_key is not null and v2.fuel_type is distinct from v1.fuel_type)::bigint as fuel_type,
-                count(*) filter (where v1.lot_key is not null and v2.transmission is distinct from v1.transmission)::bigint as transmission,
-                count(*) filter (where v1.lot_key is not null and v2.drive_type is distinct from v1.drive_type)::bigint as drive_type,
-                count(*) filter (where v1.lot_key is not null and v2.body_style is distinct from v1.body_style)::bigint as body_style,
-                count(*) filter (where v1.lot_key is not null and v2.title_type is distinct from v1.title_type)::bigint as title_type,
-                count(*) filter (where v1.lot_key is not null and v2.primary_damage is distinct from v1.primary_damage)::bigint as primary_damage,
-                count(*) filter (where v1.lot_key is not null and v2.secondary_damage is distinct from v1.secondary_damage)::bigint as secondary_damage,
-                count(*) filter (
-                    where v1.lot_key is not null
-                      and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null
-                      and (
-                        nullif(lower(btrim(v2.seller_name)), 'unknown') is null
-                        or not (
-                          lower(btrim(v1.seller_name)) = lower(btrim(v2.seller_name))
-                          or lower(btrim(v1.seller_name)) like '%' || lower(btrim(v2.seller_name)) || '%'
-                          or lower(btrim(v2.seller_name)) like '%' || lower(btrim(v1.seller_name)) || '%'
-                        )
-                      )
-                )::bigint as seller_name,
-                count(*) filter (where v1.lot_key is not null and v2.seller_type is distinct from v1.seller_type)::bigint as seller_type,
-                count(*) filter (where v1.lot_key is not null and v2.auction_state is distinct from v1.auction_state)::bigint as auction_state,
-                count(*) filter (where v1.lot_key is not null and v2.auction_at is distinct from v1.auction_at)::bigint as auction_at,
-                count(*) filter (where v1.lot_key is not null and v2.lot_status is distinct from v1.lot_status)::bigint as lot_status,
-                count(*) filter (where v1.lot_key is not null and v2.lot_sub_status is distinct from v1.lot_sub_status)::bigint as lot_sub_status,
-                count(*) filter (where v1.lot_key is not null and v2.location_display is distinct from v1.location_display)::bigint as location_display,
-                count(*) filter (where v1.lot_key is not null and v2.location_state is distinct from v1.location_state)::bigint as location_state,
-                count(*) filter (where v1.lot_key is not null and v2.facility_id is distinct from v1.facility_id)::bigint as facility_id,
-                count(*) filter (where v1.lot_key is not null and v2.odometer_miles is distinct from v1.odometer)::bigint as odometer,
-                count(*) filter (where v1.lot_key is not null and v2.current_bid_usd is distinct from v1.current_bid_usd)::bigint as current_bid,
-                count(*) filter (where v1.lot_key is not null and v2.buy_now_usd is distinct from v1.buy_now_usd)::bigint as buy_now,
-                count(*) filter (where v1.lot_key is not null and v2.provider_estimate_from_usd is distinct from v1.provider_estimate_from)::bigint as estimate_from,
-                count(*) filter (where v1.lot_key is not null and v2.provider_estimate_to_usd is distinct from v1.provider_estimate_to)::bigint as estimate_to,
-                count(*) filter (where v1.lot_key is not null and v2.has_key is distinct from v1.has_key)::bigint as has_key,
-                count(*) filter (where v1.lot_key is not null and v2.media_photos_count is distinct from coalesce((select count(*)::integer from inventory_media_current_v2 m where m.platform = v2.platform and m.lot_number = v2.lot_number and m.media_type = 'photo'), 0))::bigint as v2_media_internal,
-                count(*) filter (where v1.lot_key is not null and v2.media_has_photos is distinct from v1.has_photos)::bigint as has_photos,
-                count(*) filter (where v1.lot_key is not null and v2.media_has_360 is distinct from v1.media_has_360)::bigint as has_360,
-                count(*) filter (where v1.lot_key is not null and v2.is_buy_now is distinct from v1.is_buy_now)::bigint as is_buy_now,
-                count(*) filter (where v1.lot_key is not null and v2.is_active is distinct from v1.is_active)::bigint as is_active,
-                count(*) filter (where v1.lot_key is not null and nullif(lower(btrim(v1.seller_name)), 'unknown') is null and nullif(lower(btrim(v2.seller_name)), 'unknown') is not null)::bigint as seller_v2_only,
-                count(*) filter (where v1.lot_key is not null and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null and nullif(lower(btrim(v2.seller_name)), 'unknown') is null)::bigint as seller_v1_only,
-                count(*) filter (
-                    where v1.lot_key is not null
-                      and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null
-                      and nullif(lower(btrim(v2.seller_name)), 'unknown') is not null
-                      and lower(btrim(v1.seller_name)) <> lower(btrim(v2.seller_name))
-                      and lower(btrim(v1.seller_name)) not like '%' || lower(btrim(v2.seller_name)) || '%'
-                      and lower(btrim(v2.seller_name)) not like '%' || lower(btrim(v1.seller_name)) || '%'
-                )::bigint as seller_conflict
-            from inventory_current_v2 v2
-            left join inventory_search_current v1 on v1.lot_key = v2.lot_key
-            where (@platform::text is null or v2.platform = @platform::text);
+                (select count(*)::bigint from scoped) as v2_rows,
+                (select count(*) filter (where is_active)::bigint from scoped) as active_rows,
+                (select count(*) filter (where not is_active)::bigint from scoped) as inactive_rows,
+                (select count(*) filter (where nullif(btrim(platform), '') is null or nullif(btrim(lot_number), '') is null or nullif(btrim(lot_key), '') is null)::bigint from scoped) as missing_identity,
+                (select count(*) filter (where nullif(btrim(identity_hash), '') is null or nullif(btrim(spec_hash), '') is null or nullif(btrim(condition_hash), '') is null or nullif(btrim(auction_hash), '') is null or nullif(btrim(seller_location_hash), '') is null or nullif(btrim(media_hash), '') is null or nullif(btrim(score_input_hash), '') is null or nullif(btrim(search_hash), '') is null)::bigint from scoped) as missing_hashes,
+                (select count(*) filter (where s.media_photos_count <> coalesce(mc.photo_count, 0))::bigint from scoped s left join media_counts mc on mc.platform = s.platform and mc.lot_number = s.lot_number) as media_count_mismatches,
+                (select count(*) filter (where seller_needs_review)::bigint from scoped) as seller_needs_review,
+                (select count(distinct platform)::bigint from scoped) as platform_count,
+                (select max(updated_at) from scoped) as as_of;
             """;
         AddParameter(command, "platform", normalizedPlatform);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
-            throw new InvalidOperationException("Inventory V2 parity query returned no result.");
-        var mismatches = new Dictionary<string, long>(StringComparer.Ordinal)
-        {
-            ["vin"] = reader.GetInt64(2), ["year"] = reader.GetInt64(3), ["make"] = reader.GetInt64(4),
-            ["model"] = reader.GetInt64(5), ["vehicle_type"] = reader.GetInt64(6), ["color"] = reader.GetInt64(7),
-            ["fuel_type"] = reader.GetInt64(8), ["transmission"] = reader.GetInt64(9), ["drive_type"] = reader.GetInt64(10),
-            ["body_style"] = reader.GetInt64(11), ["title_type"] = reader.GetInt64(12), ["primary_damage"] = reader.GetInt64(13),
-            ["secondary_damage"] = reader.GetInt64(14), ["seller_name"] = reader.GetInt64(15), ["seller_type"] = reader.GetInt64(16),
-            ["auction_state"] = reader.GetInt64(17), ["auction_at"] = reader.GetInt64(18), ["lot_status"] = reader.GetInt64(19),
-            ["lot_sub_status"] = reader.GetInt64(20), ["location_display"] = reader.GetInt64(21), ["location_state"] = reader.GetInt64(22),
-            ["facility_id"] = reader.GetInt64(23), ["odometer"] = reader.GetInt64(24), ["current_bid"] = reader.GetInt64(25),
-            ["buy_now"] = reader.GetInt64(26), ["estimate_from"] = reader.GetInt64(27), ["estimate_to"] = reader.GetInt64(28),
-            ["has_key"] = reader.GetInt64(29), ["v2_media_internal"] = reader.GetInt64(30), ["has_photos"] = reader.GetInt64(31),
-            ["has_360"] = reader.GetInt64(32), ["is_buy_now"] = reader.GetInt64(33), ["is_active"] = reader.GetInt64(34),
-        };
+            throw new InvalidOperationException("Inventory V2 integrity query returned no result.");
+
+        var failures = new List<string>();
         var v2Rows = reader.GetInt64(0);
-        var missingV1Rows = reader.GetInt64(1);
-        var sellerParity = new InventoryV2SellerParity(
-            reader.GetInt64(35),
-            reader.GetInt64(36),
-            reader.GetInt64(37));
-        await reader.DisposeAsync();
+        var activeRows = reader.GetInt64(1);
+        var inactiveRows = reader.GetInt64(2);
+        var missingIdentity = reader.GetInt64(3);
+        var missingHashes = reader.GetInt64(4);
+        var mediaCountMismatches = reader.GetInt64(5);
+        var sellerNeedsReview = reader.GetInt64(6);
+        var platformCount = reader.GetInt64(7);
+        var asOf = ReadV2Date(reader, 8);
 
-        var sellerSamples = new List<InventoryV2SellerMismatchSample>();
-        await using (var sampleCommand = connection.CreateCommand())
-        {
-            sampleCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-            sampleCommand.CommandText = """
-                select v2.platform, v2.lot_number, v1.seller_name, v2.seller_name
-                from inventory_current_v2 v2
-                join inventory_search_current v1 on v1.lot_key = v2.lot_key
-                where (@platform::text is null or v2.platform = @platform::text)
-                  and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null
-                  and (
-                    nullif(lower(btrim(v2.seller_name)), 'unknown') is null
-                    or (
-                      lower(btrim(v1.seller_name)) <> lower(btrim(v2.seller_name))
-                      and lower(btrim(v1.seller_name)) not like '%' || lower(btrim(v2.seller_name)) || '%'
-                      and lower(btrim(v2.seller_name)) not like '%' || lower(btrim(v1.seller_name)) || '%'
-                    )
-                  )
-                order by v2.platform, v2.lot_number
-                limit 20;
-                """;
-            AddParameter(sampleCommand, "platform", normalizedPlatform);
-            await using var sampleReader = await sampleCommand.ExecuteReaderAsync(cancellationToken);
-            while (await sampleReader.ReadAsync(cancellationToken))
-                sellerSamples.Add(new(
-                    sampleReader.GetString(0),
-                    sampleReader.GetString(1),
-                    sampleReader.IsDBNull(2) ? null : sampleReader.GetString(2),
-                    sampleReader.IsDBNull(3) ? null : sampleReader.GetString(3)));
-        }
+        if (v2Rows == 0) failures.Add("inventory_current_v2 has no rows for the requested scope");
+        if (missingIdentity > 0) failures.Add($"{missingIdentity} rows have incomplete identity columns");
+        if (missingHashes > 0) failures.Add($"{missingHashes} rows have incomplete change-detection hashes");
+        if (mediaCountMismatches > 0) failures.Add($"{mediaCountMismatches} rows have media count mismatches");
+        if (platformCount == 0) failures.Add("no platform is represented in the requested scope");
 
-        var sellerEnrichment = new List<InventoryV2SellerEnrichment>();
-        await using (var enrichmentCommand = connection.CreateCommand())
-        {
-            enrichmentCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
-            enrichmentCommand.CommandText = """
-                select v2.platform, v2.lot_number, v2.vin, v2.seller_name, v2.seller_type,
-                       v2.seller_class, v2.seller_text_class, v2.seller_classification_confidence,
-                       v2.seller_needs_review, v2.seller_classification_evidence,
-                       v2.location_display, v2.location_state, v2.auction_at
-                from inventory_current_v2 v2
-                join inventory_search_current v1 on v1.lot_key = v2.lot_key
-                where (@platform::text is null or v2.platform = @platform::text)
-                  and nullif(lower(btrim(v1.seller_name)), 'unknown') is null
-                  and nullif(lower(btrim(v2.seller_name)), 'unknown') is not null
-                order by v2.platform, v2.lot_number;
-                """;
-            AddParameter(enrichmentCommand, "platform", normalizedPlatform);
-            await using var enrichmentReader = await enrichmentCommand.ExecuteReaderAsync(cancellationToken);
-            while (await enrichmentReader.ReadAsync(cancellationToken))
-            {
-                sellerEnrichment.Add(new(
-                    enrichmentReader.GetString(0),
-                    enrichmentReader.GetString(1),
-                    enrichmentReader.IsDBNull(2) ? null : enrichmentReader.GetString(2),
-                    enrichmentReader.GetString(3),
-                    enrichmentReader.IsDBNull(4) ? null : enrichmentReader.GetString(4),
-                    enrichmentReader.IsDBNull(5) ? null : enrichmentReader.GetString(5),
-                    enrichmentReader.IsDBNull(6) ? null : enrichmentReader.GetString(6),
-                    enrichmentReader.IsDBNull(7) ? null : enrichmentReader.GetDecimal(7),
-                    enrichmentReader.IsDBNull(8) ? null : enrichmentReader.GetBoolean(8),
-                    enrichmentReader.IsDBNull(9) ? null : enrichmentReader.GetString(9),
-                    enrichmentReader.IsDBNull(10) ? null : enrichmentReader.GetString(10),
-                    enrichmentReader.IsDBNull(11) ? null : enrichmentReader.GetString(11),
-                    enrichmentReader.IsDBNull(12) ? null : enrichmentReader.GetFieldValue<DateTimeOffset>(12)));
-            }
-        }
-
-        return new InventoryV2ParityReport(
+        return new InventoryV2IntegrityReport(
             normalizedPlatform ?? "all",
             v2Rows,
-            missingV1Rows,
-            mismatches,
-            mismatches.Values.Sum(),
-            sellerParity,
-            sellerSamples,
-            sellerEnrichment);
+            activeRows,
+            inactiveRows,
+            missingIdentity,
+            missingHashes,
+            mediaCountMismatches,
+            sellerNeedsReview,
+            platformCount,
+            asOf,
+            failures.Count == 0,
+            failures);
+    }
+
+    private static DateTimeOffset? ReadV2Date(NpgsqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return null;
+        var value = reader.GetValue(ordinal);
+        return value switch
+        {
+            DateTimeOffset date => date,
+            DateTime date => new DateTimeOffset(DateTime.SpecifyKind(date, DateTimeKind.Utc)),
+            _ => DateTimeOffset.Parse(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!, System.Globalization.CultureInfo.InvariantCulture)
+        };
     }
 }
 
-public sealed record InventoryV2ParityReport(
+public sealed record InventoryV2IntegrityReport(
     string Platform,
     long V2Rows,
-    long MissingV1Rows,
-    IReadOnlyDictionary<string, long> FieldMismatches,
-    long TotalFieldMismatches,
-    InventoryV2SellerParity SellerParity,
-    IReadOnlyList<InventoryV2SellerMismatchSample> SellerMismatchSamples,
-    IReadOnlyList<InventoryV2SellerEnrichment> SellerEnrichment);
-
-public sealed record InventoryV2SellerEnrichment(
-    string Platform,
-    string LotNumber,
-    string? Vin,
-    string SellerName,
-    string? SellerType,
-    string? SellerClass,
-    string? SellerTextClass,
-    decimal? ClassificationConfidence,
-    bool? NeedsReview,
-    string? ClassificationEvidence,
-    string? LocationDisplay,
-    string? LocationState,
-    DateTimeOffset? AuctionAt);
-
-public sealed record InventoryV2SellerParity(
-    long V2Only,
-    long V1Only,
-    long ConflictingNonNull);
-
-public sealed record InventoryV2SellerMismatchSample(
-    string Platform,
-    string LotNumber,
-    string? V1SellerName,
-    string? V2SellerName);
+    long ActiveRows,
+    long InactiveRows,
+    long RowsMissingIdentity,
+    long RowsMissingHashes,
+    long MediaCountMismatches,
+    long SellerNeedsReview,
+    long PlatformCount,
+    DateTimeOffset? AsOf,
+    bool IsHealthy,
+    IReadOnlyList<string> Failures);

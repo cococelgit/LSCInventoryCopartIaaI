@@ -108,13 +108,14 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("--platform copart|iaai", program, StringComparison.Ordinal);
 
         var parity = File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Parity.cs"));
-        Assert.Contains("FieldMismatches", parity, StringComparison.Ordinal);
-        Assert.Contains("seller_v2_only", parity, StringComparison.Ordinal);
-        Assert.Contains("seller_v1_only", parity, StringComparison.Ordinal);
-        Assert.Contains("seller_conflict", parity, StringComparison.Ordinal);
-        Assert.Contains("nullif(lower(btrim(v1.seller_name)), 'unknown')", parity, StringComparison.Ordinal);
-        Assert.Contains("like '%' || lower(btrim(v2.seller_name)) || '%'", parity, StringComparison.Ordinal);
-        Assert.Contains("SellerMismatchSamples", parity, StringComparison.Ordinal);
+        Assert.Contains("InventoryV2IntegrityReport", parity, StringComparison.Ordinal);
+        Assert.Contains("GetInventoryV2IntegrityReportAsync", parity, StringComparison.Ordinal);
+        Assert.Contains("inventory_current_v2", parity, StringComparison.Ordinal);
+        Assert.Contains("inventory_media_current_v2", parity, StringComparison.Ordinal);
+        Assert.Contains("RowsMissingHashes", parity, StringComparison.Ordinal);
+        Assert.DoesNotContain("inventory_search_current", parity, StringComparison.Ordinal);
+        Assert.DoesNotContain("auction_lot_versions", parity, StringComparison.Ordinal);
+        Assert.DoesNotContain("SellerMismatchSamples", parity, StringComparison.Ordinal);
 
         var workflow = File.ReadAllText(FindRepositoryRootFile(".github/workflows/run-inventory-v2-writer-canary.yml"));
         Assert.Contains("RUN_INVENTORY_V2_WRITER_CANARY", workflow, StringComparison.Ordinal);

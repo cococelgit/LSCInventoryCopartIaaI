@@ -120,6 +120,8 @@ jobs:
           az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 300 --format text | tee "$RUNNER_TEMP/v2-parity.log"
           test "$status" = Succeeded
           grep -q '"V2Rows":' "$RUNNER_TEMP/v2-parity.log"
-          grep -q '"FieldMismatches":' "$RUNNER_TEMP/v2-parity.log"
+          grep -q '"ActiveRows":' "$RUNNER_TEMP/v2-parity.log"
+          grep -q '"IsHealthy":' "$RUNNER_TEMP/v2-parity.log"
+          grep -q '"Failures":' "$RUNNER_TEMP/v2-parity.log"
           cleanup
           trap - EXIT
