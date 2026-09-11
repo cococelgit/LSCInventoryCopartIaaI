@@ -57,8 +57,8 @@ jobs:
             *) exit 2 ;;
           esac
           json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
-          test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
-          test "$(echo "$json" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = "$expected_cron"
+          trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+          test "$trigger" = Manual
           test "$(echo "$json" | jq -r '.properties.configuration.replicaRetryLimit')" = 0
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__Enabled")][0].value // ""')" = true
           test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__AllowWrites")][0].value // ""')" = true
@@ -69,6 +69,7 @@ jobs:
           execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
           test -n "$execution_name"
           echo "JOB=$job" >> "$GITHUB_ENV"
+          echo "EXPECTED_TRIGGER=$trigger" >> "$GITHUB_ENV"
           echo "EXPECTED_CRON=$expected_cron" >> "$GITHUB_ENV"
           echo "EXECUTION_NAME=$execution_name" >> "$GITHUB_ENV"
           echo "Started $execution_name without changing the job template."
@@ -92,16 +93,15 @@ jobs:
             az containerapp job logs show --name "$JOB" --resource-group "$RESOURCE_GROUP" --execution "$EXECUTION_NAME" --replica "$replica" --container "$container" --tail 300 --format text || true
           fi
           test "$status" = Succeeded
-      - name: Verify schedule and isolation were unchanged
+      - name: Verify paused state and isolation were unchanged
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           json="$(az containerapp job show --name "$JOB" --resource-group "$RESOURCE_GROUP" -o json)"
-          test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
-          test "$(echo "$json" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = "$EXPECTED_CRON"
-          excel="$(az containerapp job show --name job-lsc-copart-excel-prod --resource-group "$RESOURCE_GROUP" -o json)"
-          test "$(echo "$excel" | jq -r '.properties.configuration.triggerType')" = Manual
+          test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = "$EXPECTED_TRIGGER"
+          active="$(az containerapp job execution list --name "$JOB" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+          test "$active" = 0
           catchup="$(az containerapp job show --name job-lsc-copart-catchup-prod --resource-group "$RESOURCE_GROUP" -o json)"
           test "$(echo "$catchup" | jq -r '.properties.configuration.triggerType')" = Manual
-          echo "Automatic schedule unchanged; Excel and catch-up remain Manual."
+          echo "Paused trigger unchanged; catch-up remains Manual; no execution overlap remains."
