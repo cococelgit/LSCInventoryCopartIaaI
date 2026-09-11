@@ -1,0 +1,137 @@
+name: Profile Inventory Ingestion Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "copart or iaai"
+        required: true
+        default: "copart"
+        type: choice
+        options: [copart, iaai]
+      run_id:
+        description: "Inventory sync run UUID"
+        required: true
+        type: string
+      job_name:
+        description: "Azure Container Apps Job name"
+        required: true
+        default: "job-lsc-copart-auto-prod"
+        type: string
+      execution_name:
+        description: "Azure job execution name"
+        required: true
+        type: string
+      start_time:
+        description: "UTC ISO start"
+        required: true
+        type: string
+      end_time:
+        description: "UTC ISO end"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Collect execution history and event duplication
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p report
+          api_json="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" -o json)"
+          api_fqdn="$(echo "$api_json" | jq -r '.properties.configuration.ingress.fqdn')"
+          token_ref="$(echo "$api_json" | jq -r '.properties.template.containers[0].env[]? | select(.name=="InventoryApi__Token") | .secretRef')"
+          token="$(az containerapp secret list --resource-group "$RESOURCE_GROUP" --name "$API_APP" --show-values --query "[?name=='$token_ref'].value | [0]" -o tsv)"
+          test -n "$token"
+          curl --fail --silent --show-error --max-time 90 --header "Authorization: Bearer $token" \
+            "https://${api_fqdn}/internal/executions?page=1&pageSize=100&platform=${PLATFORM}" > report/executions.json
+          jq --arg run "$RUN_ID" '[((.items // .Items // []))[] | select((.runId // .RunId) == $run)]' report/executions.json > report/selected-run.json
+          test "$(jq 'length' report/selected-run.json)" = 1
+
+          curl --fail --silent --show-error --max-time 90 --header "Authorization: Bearer $token" \
+            "https://${api_fqdn}/internal/executions/${RUN_ID}/events?page=1&pageSize=100" > report/events-1.json
+          pages="$(jq '(.totalPages // .TotalPages // 1)' report/events-1.json)"
+          cp report/events-1.json report/events-all.tmp.json
+          jq '(.items // .Items // [])' report/events-1.json > report/events-all.json
+          if [ "$pages" -gt 1 ]; then
+            for page in $(seq 2 "$pages"); do
+              curl --fail --silent --show-error --max-time 90 --header "Authorization: Bearer $token" \
+                "https://${api_fqdn}/internal/executions/${RUN_ID}/events?page=${page}&pageSize=100" > "report/events-${page}.json"
+              jq -s '.[0] + (.[1].items // .[1].Items // [])' report/events-all.json "report/events-${page}.json" > report/events-next.json
+              mv report/events-next.json report/events-all.json
+            done
+          fi
+          unset token
+          jq '{eventCount:length,uniqueLotActionCount:(map([(.lotNumber // .LotNumber),(.action // .Action)] | join("|")) | unique | length),duplicateLotActions:(group_by([(.lotNumber // .LotNumber),(.action // .Action)] | join("|")) | map(select(length > 1) | {key:([.[0].lotNumber // .[0].LotNumber, .[0].action // .[0].Action] | join("|")),count:length}) | sort_by(-.count)),actions:(group_by(.action // .Action) | map({action:(.[0].action // .[0].Action),count:length}))}' report/events-all.json > report/event-summary.json
+          jq -n --slurpfile run report/selected-run.json --slurpfile events report/event-summary.json '{run:$run[0][0],events:$events[0]}' | tee report/run-and-events-summary.json
+
+      - name: Collect Azure job and PostgreSQL metrics
+        shell: bash
+        env:
+          JOB_NAME: ${{ inputs.job_name }}
+          EXECUTION_NAME: ${{ inputs.execution_name }}
+          START_TIME: ${{ inputs.start_time }}
+          END_TIME: ${{ inputs.end_time }}
+        run: |
+          set -euo pipefail
+          job_id="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$JOB_NAME" --query id -o tsv)"
+          az monitor metrics list \
+            --resource "$job_id" \
+            --metric UsageNanoCores UsageBytes RequestedCores RequestedBytes RxBytes TxBytes RestartCount Executions \
+            --start-time "$START_TIME" --end-time "$END_TIME" --interval PT1M \
+            --aggregation Average Maximum Total \
+            --filter "executionName eq '$EXECUTION_NAME'" \
+            -o json > report/job-metrics.json || true
+
+          pg_id="$(az resource list --resource-group "$RESOURCE_GROUP" --resource-type Microsoft.DBforPostgreSQL/flexibleServers --query '[0].id' -o tsv)"
+          test -n "$pg_id"
+          az monitor metrics list-definitions --resource "$pg_id" -o json > report/postgres-metric-definitions.json
+          available="$(jq -r '.[].name.value' report/postgres-metric-definitions.json | tr '\n' ' ')"
+          for metric in cpu_percent memory_percent active_connections connections_failed read_iops write_iops read_throughput write_throughput network_bytes_ingress network_bytes_egress storage_percent storage_used; do
+            if grep -qw "$metric" <<<"$available"; then
+              az monitor metrics list --resource "$pg_id" --metric "$metric" --start-time "$START_TIME" --end-time "$END_TIME" --interval PT1M --aggregation Average Maximum Total -o json > "report/postgres-${metric}.json" || true
+            fi
+          done
+
+      - name: Summarize profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq '{jobMetrics:[.value[]? | {name:.name.value,unit:.unit,max:([.timeseries[].data[].maximum // empty] | max),average:([.timeseries[].data[].average // empty] | add / length),total:([.timeseries[].data[].total // empty] | add)}]}' report/job-metrics.json > report/job-metrics-summary.json || echo '{"jobMetrics":[]}' > report/job-metrics-summary.json
+          for file in report/postgres-*.json; do
+            [ -f "$file" ] || continue
+            case "$file" in *definitions*) continue ;; esac
+            jq '{metric:(.value[0].name.value // "unknown"),unit:(.value[0].unit // null),max:([.value[].timeseries[].data[].maximum // empty] | max),average:([.value[].timeseries[].data[].average // empty] | add / length),total:([.value[].timeseries[].data[].total // empty] | add)}' "$file"
+          done | jq -s '{postgresMetrics:.}' > report/postgres-metrics-summary.json
+          jq -s '.[0] + .[1] + .[2]' report/run-and-events-summary.json report/job-metrics-summary.json report/postgres-metrics-summary.json | tee report/profile-summary.json
+
+      - name: Upload profile evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-profile-${{ github.run_id }}
+          path: report
+          retention-days: 30
