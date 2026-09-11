@@ -1466,6 +1466,12 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task<InventorySearchPage> SearchAsync(InventorySearchRequest request, CancellationToken cancellationToken)
     {
+        if (_inventoryV2.ReaderEnabled)
+        {
+            await EnsureInventoryV2SchemaAsync(cancellationToken);
+            if (await IsInventoryV2ReaderEnabledAsync(cancellationToken))
+                return await SearchInventoryV2Async(request, cancellationToken);
+        }
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
@@ -1520,6 +1526,12 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task<InventorySearchSummary> GetInventorySearchSummaryAsync(InventorySearchRequest request, CancellationToken cancellationToken)
     {
+        if (_inventoryV2.ReaderEnabled)
+        {
+            await EnsureInventoryV2SchemaAsync(cancellationToken);
+            if (await IsInventoryV2ReaderEnabledAsync(cancellationToken))
+                return await GetInventorySearchSummaryV2Async(request, cancellationToken);
+        }
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
@@ -2477,6 +2489,12 @@ public sealed partial class PostgresSnapshotStore(
     public async Task<StoredVehicleSnapshot?> GetByPlatformAndLotAsync(string platform, string lotNumber, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(platform)) throw new ArgumentException("Platform is required.", nameof(platform));
+        if (_inventoryV2.ReaderEnabled)
+        {
+            await EnsureInventoryV2SchemaAsync(cancellationToken);
+            if (await IsInventoryV2ReaderEnabledAsync(cancellationToken))
+                return await GetByPlatformAndLotInventoryV2Async(platform, lotNumber, cancellationToken);
+        }
         if (string.IsNullOrWhiteSpace(lotNumber)) throw new ArgumentException("Lot number is required.", nameof(lotNumber));
 
         await EnsureSearchProjectionSchemaAsync(cancellationToken);

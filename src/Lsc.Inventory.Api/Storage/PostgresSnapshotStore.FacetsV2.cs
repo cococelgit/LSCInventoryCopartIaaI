@@ -68,9 +68,18 @@ public sealed partial class PostgresSnapshotStore
     public async Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
-        await EnsureSearchProjectionSchemaAsync(cancellationToken);
-        if (!await IsSearchProjectionReadyAsync(cancellationToken))
-            throw new InvalidOperationException("Facets V2 requires the inventory_search_current projection to be ready.");
+        if (_inventoryV2.ReaderEnabled)
+        {
+            await EnsureInventoryV2SchemaAsync(cancellationToken);
+            if (!await IsInventoryV2ReaderEnabledAsync(cancellationToken))
+                throw new InvalidOperationException("Inventory V2 facets require both writer and reader state to be enabled.");
+        }
+        else
+        {
+            await EnsureSearchProjectionSchemaAsync(cancellationToken);
+            if (!await IsSearchProjectionReadyAsync(cancellationToken))
+                throw new InvalidOperationException("Facets V2 requires the inventory_search_current projection to be ready.");
+        }
 
         var requested = InventoryFacetsV2Groups.NormalizeRequested(request.RequestedFacets);
         var filters = request.Filters with
@@ -313,12 +322,18 @@ public sealed partial class PostgresSnapshotStore
     {
         await using var command = connection.CreateCommand();
         command.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
-        command.CommandText = """
+        command.CommandText = _inventoryV2.ReaderEnabled ? """
+            select reader_enabled and writer_enabled, updated_at,
+                   concat(schema_name, ':v2:', extract(epoch from updated_at)::numeric(20, 6)::text)
+            from inventory_v2_schema_state
+            where schema_name = 'inventory-current-v2' and schema_version >= @schema_version;
+            """ : """
             select is_ready, coalesce(generated_at, updated_at),
                    concat(projection_name, ':', row_count::text, ':', extract(epoch from coalesce(generated_at, updated_at))::numeric(20, 6)::text)
             from inventory_search_projection_state
             where projection_name = 'inventory-current-v1';
             """;
+        if (_inventoryV2.ReaderEnabled) AddParameter(command, "schema_version", InventoryV2SchemaVersion);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
             return new FacetsV2ProjectionVersion(false, DateTimeOffset.UtcNow, "inventory-current-v1:missing");
@@ -451,11 +466,28 @@ public sealed partial class PostgresSnapshotStore
         if (valueExpressions.Count == 0 && matchExpressions.Count == 0)
             valueExpressions.Add("1 as facet_row");
 
+        var latestSource = _inventoryV2.ReaderEnabled ? """
+            (select current.*,
+                    current.engine as engine_layout,
+                    current.cylinders::text as cylinders,
+                    current.exterior_color as color,
+                    current.run_condition_value as start_code,
+                    current.media_has_photos as has_photos,
+                    current.odometer_miles as odometer,
+                    current.provider_estimate_from_usd as provider_estimate_from,
+                    current.provider_estimate_to_usd as provider_estimate_to,
+                    concat_ws(' ', current.lot_number, current.vin, current.make, current.model, current.title_type, current.primary_damage, current.seller_name) as search_text,
+                    (current.title_type = 'SPECIAL') as is_special_title
+             from inventory_current_v2 current
+             where current.is_active) latest
+            """ : """
+            inventory_search_current latest
+            """;
         command.CommandText = $"""
             with base as materialized (
                 select
                     {string.Join(",\n                    ", valueExpressions.Concat(matchExpressions))}
-                from inventory_search_current latest
+                from {latestSource}
                 {scoreJoin}
                 where {string.Join(" and ", fixedWhere)}
             )
