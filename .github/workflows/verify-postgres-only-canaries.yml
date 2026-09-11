@@ -1,0 +1,58 @@
+name: Verify PostgreSQL Only Canaries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_JOB: job-lsc-copart-auto-prod
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify paused jobs and PostgreSQL-backed execution history
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+            test "$(echo "$json" | jq '[.properties.template.containers[0].env[]? | select(.name | test("^(BlobAudit|CopartExcel)__(AccountUrl|ContainerName|SnapshotBlobName)$"))] | length')" = 0
+            echo "CANARY_JOB_READY=$job TRIGGER=Manual ACTIVE=0 BLOB_ENV=0"
+          done
+
+          api_fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          token_secret_ref="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query "properties.template.containers[0].env[?name=='InventoryApi__Token'].secretRef | [0]" -o tsv)"
+          inventory_token="$(az containerapp secret list --resource-group "$RESOURCE_GROUP" --name "$API_APP" --show-values --query "[?name=='$token_secret_ref'].value | [0]" -o tsv)"
+          test -n "$api_fqdn"
+          test -n "$inventory_token"
+
+          for platform in copart iaai; do
+            curl --silent --show-error --fail --max-time 90 \
+              --header "Authorization: Bearer $inventory_token" \
+              "https://${api_fqdn}/internal/executions?page=1&pageSize=10&platform=${platform}" \
+              --output "/tmp/${platform}-executions.json"
+            jq '{platform:"'"$platform"'",total:(.total // .Total),items:[(.items // .Items // [])[] | {runId:(.runId // .RunId),status:(.status // .Status),startedAt:(.startedAt // .StartedAt),finishedAt:(.finishedAt // .FinishedAt),observed:(.observed // .Observed),loaded:(.loaded // .Loaded),marked:(.marked // .Marked),discarded:(.discarded // .Discarded),errors:(.errors // .Errors),requests:(.requests // .Requests),failures:(.failures // .Failures)}]}' "/tmp/${platform}-executions.json"
+            test "$(jq '(.items // .Items // []) | length' "/tmp/${platform}-executions.json")" -gt 0
+          done
+          unset inventory_token
