@@ -134,6 +134,43 @@ public sealed partial class PostgresSnapshotStore
                     sampleReader.IsDBNull(3) ? null : sampleReader.GetString(3)));
         }
 
+        var sellerEnrichment = new List<InventoryV2SellerEnrichment>();
+        await using (var enrichmentCommand = connection.CreateCommand())
+        {
+            enrichmentCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            enrichmentCommand.CommandText = """
+                select v2.platform, v2.lot_number, v2.vin, v2.seller_name, v2.seller_type,
+                       v2.seller_class, v2.seller_text_class, v2.seller_classification_confidence,
+                       v2.seller_needs_review, v2.seller_classification_evidence,
+                       v2.location_display, v2.location_state, v2.auction_at
+                from inventory_current_v2 v2
+                join inventory_search_current v1 on v1.lot_key = v2.lot_key
+                where (@platform::text is null or v2.platform = @platform::text)
+                  and nullif(lower(btrim(v1.seller_name)), 'unknown') is null
+                  and nullif(lower(btrim(v2.seller_name)), 'unknown') is not null
+                order by v2.platform, v2.lot_number;
+                """;
+            AddParameter(enrichmentCommand, "platform", normalizedPlatform);
+            await using var enrichmentReader = await enrichmentCommand.ExecuteReaderAsync(cancellationToken);
+            while (await enrichmentReader.ReadAsync(cancellationToken))
+            {
+                sellerEnrichment.Add(new(
+                    enrichmentReader.GetString(0),
+                    enrichmentReader.GetString(1),
+                    enrichmentReader.IsDBNull(2) ? null : enrichmentReader.GetString(2),
+                    enrichmentReader.GetString(3),
+                    enrichmentReader.IsDBNull(4) ? null : enrichmentReader.GetString(4),
+                    enrichmentReader.IsDBNull(5) ? null : enrichmentReader.GetString(5),
+                    enrichmentReader.IsDBNull(6) ? null : enrichmentReader.GetString(6),
+                    enrichmentReader.IsDBNull(7) ? null : enrichmentReader.GetDecimal(7),
+                    enrichmentReader.IsDBNull(8) ? null : enrichmentReader.GetBoolean(8),
+                    enrichmentReader.IsDBNull(9) ? null : enrichmentReader.GetString(9),
+                    enrichmentReader.IsDBNull(10) ? null : enrichmentReader.GetString(10),
+                    enrichmentReader.IsDBNull(11) ? null : enrichmentReader.GetString(11),
+                    enrichmentReader.IsDBNull(12) ? null : enrichmentReader.GetFieldValue<DateTimeOffset>(12)));
+            }
+        }
+
         return new InventoryV2ParityReport(
             normalizedPlatform ?? "all",
             v2Rows,
@@ -141,7 +178,8 @@ public sealed partial class PostgresSnapshotStore
             mismatches,
             mismatches.Values.Sum(),
             sellerParity,
-            sellerSamples);
+            sellerSamples,
+            sellerEnrichment);
     }
 }
 
@@ -152,7 +190,23 @@ public sealed record InventoryV2ParityReport(
     IReadOnlyDictionary<string, long> FieldMismatches,
     long TotalFieldMismatches,
     InventoryV2SellerParity SellerParity,
-    IReadOnlyList<InventoryV2SellerMismatchSample> SellerMismatchSamples);
+    IReadOnlyList<InventoryV2SellerMismatchSample> SellerMismatchSamples,
+    IReadOnlyList<InventoryV2SellerEnrichment> SellerEnrichment);
+
+public sealed record InventoryV2SellerEnrichment(
+    string Platform,
+    string LotNumber,
+    string? Vin,
+    string SellerName,
+    string? SellerType,
+    string? SellerClass,
+    string? SellerTextClass,
+    decimal? ClassificationConfidence,
+    bool? NeedsReview,
+    string? ClassificationEvidence,
+    string? LocationDisplay,
+    string? LocationState,
+    DateTimeOffset? AuctionAt);
 
 public sealed record InventoryV2SellerParity(
     long V2Only,
