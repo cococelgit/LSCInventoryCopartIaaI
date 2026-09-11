@@ -1,0 +1,111 @@
+name: Retention Purge Parallel Isolated
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RUN_PARALLEL_RETENTION_PURGE to authorize raw blob deletion
+        required: true
+        type: string
+      max_batches:
+        description: Maximum number of 500-lot batches in this execution
+        required: true
+        default: '10'
+        type: string
+      retention_days:
+        description: Inactive days before eligibility
+        required: true
+        default: '7'
+        type: string
+
+env:
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  SOURCE_JOB: job-lsc-copart-auto-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retention-purge-parallel-production
+  cancel-in-progress: false
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard authorization
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = 'RUN_PARALLEL_RETENTION_PURGE'
+          [[ '${{ inputs.max_batches }}' =~ ^[1-9][0-9]{0,2}$ ]]
+          [[ '${{ inputs.retention_days }}' =~ ^[1-9][0-9]{0,2}$ ]]
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Build immutable engine image
+        run: |
+          set -euo pipefail
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:retention-parallel-${GITHUB_SHA}" inventory-engine
+      - name: Create isolated manual purge job
+        env:
+          TEMP_JOB: job-lsc-retention-purge-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          az containerapp job show --name "$SOURCE_JOB" --resource-group "$RESOURCE_GROUP" -o json > /tmp/source.json
+          image="$ACR_SERVER/$IMAGE_NAME:retention-parallel-${GITHUB_SHA}"
+          jq --arg name "$TEMP_JOB" --arg image "$image" --arg days '${{ inputs.retention_days }}' '
+            del(.id,.name,.type,.systemData,.properties.provisioningState,.properties.runningStatus)
+            | .name=$name
+            | .properties.configuration.triggerType="Manual"
+            | .properties.configuration.manualTriggerConfig.parallelism=1
+            | .properties.configuration.manualTriggerConfig.replicaCompletionCount=1
+            | .properties.configuration.replicaRetryLimit=0
+            | .properties.template.containers[0].image=$image
+            | .properties.template.containers[0].command=["dotnet"]
+            | .properties.template.containers[0].args=["Lsc.Inventory.Api.dll","--retention-purge-pilot"]
+            | .properties.template.containers[0].env=((.properties.template.containers[0].env // []) | map(select(.name != "Retention__DryRunDays" and .name != "Retention__PurgePilotLotLimit" and .name != "Retention__PurgePilotExecute")) + [{name:"Retention__DryRunDays",value:$days},{name:"Retention__PurgePilotLotLimit",value:"500"},{name:"Retention__PurgePilotExecute",value:"true"}])
+            | {location:.location,properties:.properties}' /tmp/source.json > /tmp/purge-job.json
+          az containerapp job create --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yaml /tmp/purge-job.json
+      - name: Run bounded purge batches with cursor
+        env:
+          TEMP_JOB: job-lsc-retention-purge-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          cursor_at=""
+          cursor_lot=""
+          for batch in $(seq 1 '${{ inputs.max_batches }}'); do
+            az containerapp job update --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --set-env-vars RETENTION_PURGE_CURSOR_AT="$cursor_at" RETENTION_PURGE_CURSOR_LOT_KEY="$cursor_lot" >/dev/null
+            execution_name=$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name')
+            status=Pending
+            for _ in $(seq 1 120); do
+              status=$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution_name" --query properties.status -o tsv)
+              echo "batch=$batch execution=$execution_name status=$status"
+              case "$status" in Succeeded|Failed|Canceled) break;; esac
+              sleep 15
+            done
+            test "$status" = Succeeded
+            replicas=$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" -o json)
+            replica=$(echo "$replicas" | jq -r '.[0].name // empty')
+            container=$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')
+            test -n "$replica" && test -n "$container"
+            logs=$(az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" --replica "$replica" --container "$container" --tail 300 --format text)
+            echo "$logs"
+            report=$(echo "$logs" | grep -o '{.*}' | grep 'LastSelectedLotKey' | tail -1 || true)
+            if [ -z "$report" ]; then echo 'No candidates remain; stopping.'; break; fi
+            next_at=$(echo "$report" | jq -r '.LastSelectedDeactivatedAt // empty')
+            next_lot=$(echo "$report" | jq -r '.LastSelectedLotKey // empty')
+            test -n "$next_at" && test -n "$next_lot"
+            cursor_at="$next_at"
+            cursor_lot="$next_lot"
+          done
+      - name: Delete isolated purge job
+        if: always()
+        env:
+          TEMP_JOB: job-lsc-retention-purge-${{ github.run_id }}
+        run: az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes

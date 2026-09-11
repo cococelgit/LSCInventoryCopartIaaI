@@ -365,7 +365,9 @@ public sealed record RetentionPurgePilotExecutionReport(
     long PreservedMotivationSignals,
     IReadOnlyList<string> FailureSamples,
     string ManifestSha256,
-    bool ReadOnly);
+    bool ReadOnly,
+    DateTimeOffset? LastSelectedDeactivatedAt = null,
+    string? LastSelectedLotKey = null);
 
 /// <summary>
 /// Read-only reconciliation between version rows and Blob references. It measures duplicate references precisely but

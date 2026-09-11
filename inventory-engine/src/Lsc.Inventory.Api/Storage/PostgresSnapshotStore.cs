@@ -2091,9 +2091,14 @@ public sealed partial class PostgresSnapshotStore(
                     where not is_active
                       and deactivated_at is not null
                       and deactivated_at <= @cutoff_at
+                      and (@cursor_at is null or (deactivated_at, lot_key) > (@cursor_at, @cursor_lot_key))
                     order by deactivated_at asc, lot_key asc
                     limit @lot_limit;
                     """;
+                var cursorText = Environment.GetEnvironmentVariable("RETENTION_PURGE_CURSOR_AT");
+                DateTimeOffset? cursorAt = DateTimeOffset.TryParse(cursorText, out var parsedCursor) ? parsedCursor : null;
+                AddParameter(command, "cursor_at", cursorAt);
+                AddParameter(command, "cursor_lot_key", Environment.GetEnvironmentVariable("RETENTION_PURGE_CURSOR_LOT_KEY") ?? string.Empty);
                 AddParameter(command, "cutoff_at", cutoffAt);
                 AddParameter(command, "lot_limit", safeLotLimit);
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -2190,7 +2195,8 @@ public sealed partial class PostgresSnapshotStore(
             eligibleBlobs.Sum(blob => blob.ContentLength), deletedBlobs, deletedBytes, skippedMissing, skippedChanged,
             manifest.Lots.Count - eligibleLotKeys.Count,
             preservation.InventoryRows, preservation.LifecycleRows, preservation.VersionRows, preservation.MotivationSignals,
-            failures.OrderBy(value => value, StringComparer.Ordinal).ToArray(), manifest.ManifestSha256, ReadOnly: false);
+            failures.OrderBy(value => value, StringComparer.Ordinal).ToArray(), manifest.ManifestSha256, ReadOnly: false,
+            manifest.Lots.LastOrDefault()?.DeactivatedAt, manifest.Lots.LastOrDefault()?.LotKey);
     }
 
     public static RetentionPurgePilotManifestReport ToPilotManifestReport(RetentionPurgePilotManifest manifest) =>
