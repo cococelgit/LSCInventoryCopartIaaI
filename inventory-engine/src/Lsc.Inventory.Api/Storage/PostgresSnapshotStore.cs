@@ -2091,7 +2091,7 @@ public sealed partial class PostgresSnapshotStore(
                     where not is_active
                       and deactivated_at is not null
                       and deactivated_at <= @cutoff_at
-                      and (@cursor_at is null or (deactivated_at, lot_key) > (@cursor_at, @cursor_lot_key))
+                      and (CAST(@cursor_at AS timestamptz) is null or (deactivated_at, lot_key) > (CAST(@cursor_at AS timestamptz), CAST(@cursor_lot_key AS text)))
                     order by deactivated_at asc, lot_key asc
                     limit @lot_limit;
                     """;
