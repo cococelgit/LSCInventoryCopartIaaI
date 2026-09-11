@@ -2149,8 +2149,8 @@ public sealed partial class PostgresSnapshotStore(
         var lotKeys = manifest.Lots.Select(lot => lot.LotKey).ToArray();
         var eligibleLotKeys = await GetStillEligibleRetentionLotKeysAsync(lotKeys, manifest.CutoffAt, cancellationToken);
         var eligibleBlobs = GetPilotBlobsForEligibleLots(manifest.Blobs, eligibleLotKeys);
-        if (eligibleBlobs.Count == 0)
-            throw new InvalidOperationException("All pilot lots changed lifecycle state before deletion; no raw blobs were deleted.");
+        // A concurrent auction load may reactivate every lot after manifest creation. Treat that as a
+        // successful no-op so the cursor can advance; the lifecycle recheck remains the deletion guard.
 
         var serviceClient = new BlobServiceClient(new Uri(_blob.AccountUrl), _credential);
         var containerClient = serviceClient.GetBlobContainerClient(_blob.ContainerName);
