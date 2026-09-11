@@ -109,13 +109,16 @@ jobs:
               case "$status" in Succeeded|Failed|Canceled) break;; esac
               sleep 15
             done
-            test "$status" = Succeeded
             replicas=$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" -o json)
             replica=$(echo "$replicas" | jq -r '.[0].name // empty')
             container=$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')
-            test -n "$replica" && test -n "$container"
-            logs=$(az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" --replica "$replica" --container "$container" --tail 300 --format text)
-            echo "$logs"
+            if [ -n "$replica" ] && [ -n "$container" ]; then
+              logs=$(az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution_name" --replica "$replica" --container "$container" --tail 300 --format text || true)
+              echo "$logs"
+            else
+              echo "No replica/container metadata available for failed execution" >&2
+            fi
+            test "$status" = Succeeded
             report=$(echo "$logs" | grep -o '{.*}' | grep 'LastSelectedLotKey' | tail -1 || true)
             if [ -z "$report" ]; then echo 'No candidates remain; stopping.'; break; fi
             next_at=$(echo "$report" | jq -r '.LastSelectedDeactivatedAt // empty')
