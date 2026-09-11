@@ -128,6 +128,9 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("CONFIGURE_INVENTORY_V2_DUAL_WRITE", rolloutWorkflow, StringComparison.Ordinal);
         Assert.Contains("InventoryV2__ShadowWriteEnabled", rolloutWorkflow, StringComparison.Ordinal);
         Assert.Contains("--inventory-v2-writer-state", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("expected_sha", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("Build immutable dual-write image", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("$job-template.json", rolloutWorkflow, StringComparison.Ordinal);
         Assert.Contains("--inventory-v2-reader-state", rolloutWorkflow, StringComparison.Ordinal);
         Assert.Contains("rollback_needed=true", rolloutWorkflow, StringComparison.Ordinal);
         Assert.DoesNotContain("scheduleTriggerConfig", rolloutWorkflow, StringComparison.Ordinal);

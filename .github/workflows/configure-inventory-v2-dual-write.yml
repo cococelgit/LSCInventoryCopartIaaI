@@ -12,6 +12,10 @@ on:
         description: "Type CONFIGURE_INVENTORY_V2_DUAL_WRITE"
         required: true
         type: string
+      expected_sha:
+        description: "Exact full source SHA"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +30,9 @@ env:
   AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
   IAAI_JOB: job-lsc-iaai-pilot-prod
   COPART_JOB: job-lsc-copart-auto-prod
   TEMP_JOB: job-lsc-v2-state-prod
@@ -35,10 +42,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+
       - name: Validate confirmation
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
-        run: test "$CONFIRMATION" = CONFIGURE_INVENTORY_V2_DUAL_WRITE
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = CONFIGURE_INVENTORY_V2_DUAL_WRITE
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -49,6 +63,14 @@ jobs:
 
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Build immutable dual-write image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="inventory-v2-dual-write-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "DUAL_WRITE_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
 
       - name: Configure paused jobs and global writer state
         shell: bash
@@ -61,12 +83,16 @@ jobs:
             test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
             test "$active" = 0
+            echo "$json" | jq '{properties:{template:.properties.template}}' > "/tmp/$job-template.json"
           done
 
           rollback_needed=false
           cleanup() {
             if [ "$rollback_needed" = true ]; then
-              patch_jobs false || true
+              for job in "$IAAI_JOB" "$COPART_JOB"; do
+                job_id="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query id -o tsv 2>/dev/null || true)"
+                test -z "$job_id" || az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "@/tmp/$job-template.json" --output none || true
+              done
               run_state false || true
             fi
             az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
@@ -75,7 +101,7 @@ jobs:
           cleanup
 
           source="$(az containerapp job show --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
-          image="$(echo "$source" | jq -r '.properties.template.containers[0].image')"
+          image="$DUAL_WRITE_IMAGE"
           body="$(echo "$source" | jq --arg name "$TEMP_JOB" --arg image "$image" '
             .location as $location
             | .properties.environmentId as $environmentId
@@ -133,8 +159,8 @@ jobs:
             for job in "$IAAI_JOB" "$COPART_JOB"; do
               current="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
               job_id="$(echo "$current" | jq -r '.id')"
-              patch="$(echo "$current" | jq --arg enabled "$enabled" '
-                .properties.template.containers[0] |= del(.imageType)
+              patch="$(echo "$current" | jq --arg enabled "$enabled" --arg image "$DUAL_WRITE_IMAGE" '
+                .properties.template.containers[0] |= (del(.imageType) | .image=$image)
                 | .properties.template.containers[0].env=((.properties.template.containers[0].env // [])
                     | map(select(.name != "InventoryV2__ShadowWriteEnabled" and .name != "InventoryV2__BatchSize" and .name != "InventoryV2__ReaderEnabled"))
                     + [{name:"InventoryV2__ShadowWriteEnabled",value:$enabled},{name:"InventoryV2__BatchSize",value:"1000"}])
@@ -158,6 +184,7 @@ jobs:
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__ShadowWriteEnabled")][0].value // ""')" = "$ENABLED"
             test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__ReaderEnabled")] | length')" = 0
+            test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$DUAL_WRITE_IMAGE"
           done
           echo "DUAL_WRITE_CONFIGURED=$ENABLED reader_enabled=false schedules_unchanged=true"
 
