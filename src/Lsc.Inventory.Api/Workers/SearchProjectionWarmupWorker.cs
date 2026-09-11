@@ -1,15 +1,24 @@
 using Lsc.Inventory.Api.Storage;
 
+using Lsc.Inventory.Api.Options;
+using Microsoft.Extensions.Options;
+
 namespace Lsc.Inventory.Api.Workers;
 
 public sealed class SearchProjectionWarmupWorker(
     IInventorySnapshotStore store,
+    IOptions<InventoryV2Options> inventoryV2,
     ILogger<SearchProjectionWarmupWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
+            if (!inventoryV2.Value.LegacyReadFallbackEnabled)
+            {
+                logger.LogInformation("Search projection warmup skipped because the V1 fallback is disabled; Inventory V2 is authoritative.");
+                return;
+            }
             var current = await store.GetSearchProjectionStatusAsync(stoppingToken);
             if (current.Ready && current.SchemaVersion >= 3)
             {
@@ -29,7 +38,7 @@ public sealed class SearchProjectionWarmupWorker(
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Search projection warmup failed; legacy search remains available.");
+            logger.LogError(exception, "Search projection warmup failed.");
         }
     }
 }

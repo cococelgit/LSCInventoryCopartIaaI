@@ -1472,6 +1472,8 @@ public sealed partial class PostgresSnapshotStore(
             if (await IsInventoryV2ReaderEnabledAsync(cancellationToken))
                 return await SearchInventoryV2Async(request, cancellationToken);
         }
+        if (!_inventoryV2.LegacyReadFallbackEnabled)
+            throw new InvalidOperationException("Inventory V2 reader is required; legacy V1 search fallback is disabled.");
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
@@ -1532,6 +1534,8 @@ public sealed partial class PostgresSnapshotStore(
             if (await IsInventoryV2ReaderEnabledAsync(cancellationToken))
                 return await GetInventorySearchSummaryV2Async(request, cancellationToken);
         }
+        if (!_inventoryV2.LegacyReadFallbackEnabled)
+            throw new InvalidOperationException("Inventory V2 reader is required; legacy V1 summary fallback is disabled.");
         await EnsureSchemaAsync(cancellationToken);
         await EnsureLifecycleSchemaAsync(cancellationToken);
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
@@ -2165,6 +2169,8 @@ public sealed partial class PostgresSnapshotStore(
 
     public async Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken)
     {
+        if (!_inventoryV2.LegacyReadFallbackEnabled)
+            throw new InvalidOperationException("Inventory V2 is authoritative; rebuilding the legacy V1 search projection is disabled.");
         var startedAt = DateTimeOffset.UtcNow;
         var titleCategorySql = TitleFacetCategory.BuildSqlCaseExpression("title_normalized.normalized_document", "lower(lots.platform)");
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
@@ -2496,6 +2502,8 @@ public sealed partial class PostgresSnapshotStore(
                 return await GetByPlatformAndLotInventoryV2Async(platform, lotNumber, cancellationToken);
         }
         if (string.IsNullOrWhiteSpace(lotNumber)) throw new ArgumentException("Lot number is required.", nameof(lotNumber));
+        if (!_inventoryV2.LegacyReadFallbackEnabled)
+            throw new InvalidOperationException("Inventory V2 reader is required; legacy V1 detail fallback is disabled.");
 
         await EnsureSearchProjectionSchemaAsync(cancellationToken);
         if (await IsSearchProjectionReadyAsync(cancellationToken))

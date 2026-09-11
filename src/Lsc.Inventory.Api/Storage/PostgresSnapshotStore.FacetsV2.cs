@@ -68,6 +68,8 @@ public sealed partial class PostgresSnapshotStore
     public async Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
+        if (!_inventoryV2.ReaderEnabled && !_inventoryV2.LegacyReadFallbackEnabled)
+            throw new InvalidOperationException("Inventory V2 reader is required; legacy V1 facets fallback is disabled.");
         if (_inventoryV2.ReaderEnabled)
         {
             await EnsureInventoryV2SchemaAsync(cancellationToken);

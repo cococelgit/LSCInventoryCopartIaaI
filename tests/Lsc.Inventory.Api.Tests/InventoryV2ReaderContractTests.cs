@@ -8,7 +8,13 @@ public sealed class InventoryV2ReaderContractTests
     [Fact]
     public void Reader_is_disabled_by_default_and_schema_contains_required_public_fields()
     {
-        Assert.False(new InventoryV2Options().ReaderEnabled);
+        var defaults = new InventoryV2Options();
+        Assert.False(defaults.ReaderEnabled);
+        Assert.True(defaults.LegacyReadFallbackEnabled);
+
+        var strict = new InventoryV2Options { ReaderEnabled = true, LegacyReadFallbackEnabled = false };
+        Assert.True(strict.ReaderEnabled);
+        Assert.False(strict.LegacyReadFallbackEnabled);
 
         var schema = File.ReadAllText(FindRepositoryRootFile("infra/sql/20260911_inventory_v2_schema.sql"));
         var requiredColumns = new[]
@@ -31,6 +37,20 @@ public sealed class InventoryV2ReaderContractTests
         foreach (var column in requiredColumns)
             Assert.Contains(column, schema, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("jsonb", schema, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Legacy_fallback_is_explicit_in_operational_paths()
+    {
+        var store = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.cs"));
+        var facets = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.FacetsV2.cs"));
+        var warmup = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Workers/SearchProjectionWarmupWorker.cs"));
+
+        Assert.Contains("LegacyReadFallbackEnabled", store, StringComparison.Ordinal);
+        Assert.Contains("LegacyReadFallbackEnabled", facets, StringComparison.Ordinal);
+        Assert.Contains("LegacyReadFallbackEnabled", warmup, StringComparison.Ordinal);
+        Assert.Contains("Inventory V2 reader is required", store, StringComparison.Ordinal);
+        Assert.Contains("warmup skipped", warmup, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
