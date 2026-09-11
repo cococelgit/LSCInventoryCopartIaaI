@@ -1787,7 +1787,7 @@ public sealed partial class PostgresSnapshotStore(
         await using (var eligibleVersionsCommand = connection.CreateCommand())
         {
             eligibleVersionsCommand.Transaction = transaction;
-            eligibleVersionsCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            eligibleVersionsCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 900);
             eligibleVersionsCommand.CommandText = """
                 select count(*)::bigint,
                        coalesce(sum(pg_column_size(versions.payload)), 0)::bigint
