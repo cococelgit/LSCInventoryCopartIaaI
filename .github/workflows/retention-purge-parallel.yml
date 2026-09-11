@@ -58,7 +58,7 @@ jobs:
           az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:retention-parallel-${GITHUB_SHA}" inventory-engine
       - name: Create isolated manual purge job
         env:
-          TEMP_JOB: job-lsc-retention-purge-${{ github.run_id }}
+          TEMP_JOB: lsc-retention-${{ github.run_id }}
         run: |
           set -euo pipefail
           az containerapp job show --name "$SOURCE_JOB" --resource-group "$RESOURCE_GROUP" -o json > /tmp/source.json
@@ -78,7 +78,7 @@ jobs:
           az containerapp job create --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yaml /tmp/purge-job.json
       - name: Run bounded purge batches with cursor
         env:
-          TEMP_JOB: job-lsc-retention-purge-${{ github.run_id }}
+          TEMP_JOB: lsc-retention-${{ github.run_id }}
         run: |
           set -euo pipefail
           cursor_at=""
@@ -111,5 +111,5 @@ jobs:
       - name: Delete isolated purge job
         if: always()
         env:
-          TEMP_JOB: job-lsc-retention-purge-${{ github.run_id }}
+          TEMP_JOB: lsc-retention-${{ github.run_id }}
         run: az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes
