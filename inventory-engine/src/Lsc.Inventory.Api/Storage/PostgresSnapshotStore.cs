@@ -1782,12 +1782,35 @@ public sealed partial class PostgresSnapshotStore(
             eligibleInactiveLots = (long)(await eligibleLotsCommand.ExecuteScalarAsync(cancellationToken) ?? 0L);
         }
 
+        long eligibleVersions;
+        long payloadBytesRecoverable;
+        await using (var eligibleVersionsCommand = connection.CreateCommand())
+        {
+            eligibleVersionsCommand.Transaction = transaction;
+            eligibleVersionsCommand.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            eligibleVersionsCommand.CommandText = """
+                select count(*)::bigint,
+                       coalesce(sum(pg_column_size(versions.payload)), 0)::bigint
+                from auction_lot_versions versions
+                join inventory_lot_lifecycle lifecycle on lifecycle.lot_key = versions.lot_key
+                where not lifecycle.is_active
+                  and lifecycle.deactivated_at is not null
+                  and lifecycle.deactivated_at <= @cutoff_at;
+                """;
+            AddParameter(eligibleVersionsCommand, "cutoff_at", cutoffAt);
+            await using var reader = await eligibleVersionsCommand.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new InvalidOperationException("Retention dry-run aggregate returned no row.");
+            eligibleVersions = reader.GetInt64(0);
+            payloadBytesRecoverable = reader.GetInt64(1);
+        }
+
         var report = new SoldLotRetentionDryRunReport(
             safeRetentionDays,
             cutoffAt,
             eligibleInactiveLots,
-            EligibleVersions: null,
-            PostgresPayloadBytesRecoverable: null,
+            eligibleVersions,
+            payloadBytesRecoverable,
             Array.Empty<HistoricalLotStatusBucket>(),
             HistoricalDiagnostics: null,
             ReadOnly: true);
