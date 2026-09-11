@@ -1,0 +1,74 @@
+name: Hotfix Inventory API Availability
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type HOTFIX_INVENTORY_API_AVAILABILITY"
+        required: true
+        type: string
+      source_ref:
+        description: "Reviewed source ref"
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Verify confirmation
+        run: test '${{ inputs.confirmation }}' = HOTFIX_INVENTORY_API_AVAILABILITY
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Build hotfix image
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:hotfix-${GITHUB_SHA}" --file Dockerfile .
+      - name: Capture current revision and update image only
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" -o json)"
+          previous="$(printf '%s' "$before" | jq -r '.properties.latestRevisionName')"
+          image="$ACR_SERVER/$IMAGE_NAME:hotfix-${GITHUB_SHA}"
+          az containerapp update -g "$RESOURCE_GROUP" -n "$API_APP" --image "$image" --revision-suffix "hotfix-${GITHUB_SHA:0:8}-${GITHUB_RUN_NUMBER}" --only-show-errors
+          new_revision="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.latestRevisionName -o tsv)"
+          test -n "$new_revision" && test "$new_revision" != "$previous"
+          echo "NEW_REVISION=$new_revision" >> "$GITHUB_ENV"
+          echo "PREVIOUS_REVISION=$previous" >> "$GITHUB_ENV"
+      - name: Verify hotfix health and database-backed recent endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          fqdn="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.configuration.ingress.fqdn -o tsv)"
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 "https://$fqdn/healthz" >/dev/null
+          echo "HOTFIX_HEALTH_OK=true"
+          echo "NEW_REVISION=$NEW_REVISION"
+          echo "PREVIOUS_REVISION=$PREVIOUS_REVISION"

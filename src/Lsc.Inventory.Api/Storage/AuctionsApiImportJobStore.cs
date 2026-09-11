@@ -83,6 +83,7 @@ public sealed partial class PostgresSnapshotStore
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
+            await reader.DisposeAsync();
             await transaction.RollbackAsync(cancellationToken);
             return null;
         }
@@ -96,7 +97,7 @@ public sealed partial class PostgresSnapshotStore
         var processedLots = reader.GetInt32(14);
         var pagesProcessed = reader.GetInt32(15);
         var requestsIssued = reader.GetInt32(16);
-        await reader.CloseAsync();
+        await reader.DisposeAsync();
         var leaseUntil = now.Add(leaseDuration);
         await using var update = connection.CreateCommand();
         update.Transaction = transaction;
