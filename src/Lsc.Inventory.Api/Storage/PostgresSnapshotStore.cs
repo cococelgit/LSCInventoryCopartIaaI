@@ -3153,6 +3153,18 @@ public sealed partial class PostgresSnapshotStore(
                     unique (lot_key, payload_hash)
                 );
 
+                do $$
+                begin
+                    if exists (
+                        select 1 from information_schema.columns
+                        where table_schema = 'public'
+                          and table_name = 'auction_lot_versions'
+                          and column_name = 'raw_blob_name'
+                    ) then
+                        alter table auction_lot_versions alter column raw_blob_name drop not null;
+                    end if;
+                end $$;
+
                 create index if not exists ix_auction_lot_versions_lot_observed on auction_lot_versions (lot_key, observed_at desc);
                 create index if not exists ix_auction_lot_versions_lot_observed_id on auction_lot_versions (lot_key, observed_at desc, id desc);
                 """;
@@ -3346,6 +3358,18 @@ public sealed partial class PostgresSnapshotStore(
                     created_at timestamptz not null default now(),
                     updated_at timestamptz not null default now()
                 );
+
+                do $$
+                begin
+                    if exists (
+                        select 1 from information_schema.columns
+                        where table_schema = 'public'
+                          and table_name = 'eligibility_decisions'
+                          and column_name = 'audit_blob_name'
+                    ) then
+                        alter table eligibility_decisions alter column audit_blob_name drop not null;
+                    end if;
+                end $$;
 
                 create index if not exists ix_eligibility_decisions_decision_evaluated on eligibility_decisions (decision, evaluated_at desc);
                 create index if not exists ix_eligibility_decisions_discard_reasons on eligibility_decisions using gin (discard_reasons);

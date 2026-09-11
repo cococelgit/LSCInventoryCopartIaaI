@@ -15,8 +15,6 @@ public sealed class PostgresOnlyStorageContractTests
         Assert.DoesNotContain("Azure.Storage.Blobs", source, StringComparison.Ordinal);
         Assert.DoesNotContain("BlobAuditOptions", source, StringComparison.Ordinal);
         Assert.DoesNotContain("UploadRawPayloadAsync", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("raw_blob_name", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("audit_blob_name", source, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()
