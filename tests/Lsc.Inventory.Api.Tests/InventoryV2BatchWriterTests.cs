@@ -100,6 +100,7 @@ public sealed class InventoryV2BatchWriterTests
 
         var program = File.ReadAllText(FindRepositoryFile("Program.cs"));
         Assert.Contains("--inventory-v2-writer-state", program, StringComparison.Ordinal);
+        Assert.Contains("--inventory-v2-reader-state", program, StringComparison.Ordinal);
         Assert.Contains("--auctionsapi-incremental-canary", program, StringComparison.Ordinal);
         Assert.Contains("--inventory-v2-parity", program, StringComparison.Ordinal);
         Assert.Contains("--inventory-v2-reset-shadow", program, StringComparison.Ordinal);
@@ -113,6 +114,14 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("--auctionsapi-incremental-canary", workflow, StringComparison.Ordinal);
         Assert.Contains("trap cleanup EXIT", workflow, StringComparison.Ordinal);
         Assert.Contains("reset_platform", workflow, StringComparison.Ordinal);
+
+        var rolloutWorkflow = File.ReadAllText(FindRepositoryRootFile(".github/workflows/configure-inventory-v2-dual-write.yml"));
+        Assert.Contains("CONFIGURE_INVENTORY_V2_DUAL_WRITE", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("InventoryV2__ShadowWriteEnabled", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("--inventory-v2-writer-state", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("--inventory-v2-reader-state", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.Contains("rollback_needed=true", rolloutWorkflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("scheduleTriggerConfig", rolloutWorkflow, StringComparison.Ordinal);
         Assert.DoesNotContain("--tail 500", workflow, StringComparison.Ordinal);
         Assert.Contains("--tail 300", workflow, StringComparison.Ordinal);
         Assert.Contains("reader_enabled = false", File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Schema.cs")), StringComparison.Ordinal);

@@ -1064,6 +1064,19 @@ if (args.Contains("--inventory-v2-writer-state", StringComparer.OrdinalIgnoreCas
     return;
 }
 
+if (args.Contains("--inventory-v2-reader-state", StringComparer.OrdinalIgnoreCase))
+{
+    var enabledIndex = Array.FindIndex(args, argument => string.Equals(argument, "--enabled", StringComparison.OrdinalIgnoreCase));
+    if (enabledIndex < 0 || enabledIndex + 1 >= args.Length || !bool.TryParse(args[enabledIndex + 1], out var enabled))
+        throw new ArgumentException("--inventory-v2-reader-state requires --enabled true|false.");
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>() as PostgresSnapshotStore
+        ?? throw new InvalidOperationException("Inventory V2 reader state requires Persistence:Provider=Postgres.");
+    var result = await store.SetInventoryV2ReaderStateAsync(enabled, CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
 if (args.Contains("--inventory-v2-parity", StringComparer.OrdinalIgnoreCase))
 {
     var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));

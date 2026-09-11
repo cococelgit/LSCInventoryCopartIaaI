@@ -121,6 +121,32 @@ public sealed partial class PostgresSnapshotStore
             reader.GetFieldValue<DateTimeOffset>(3));
     }
 
+    public async Task<InventoryV2ReaderStateResult> SetInventoryV2ReaderStateAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            update inventory_v2_schema_state
+            set reader_enabled = @enabled,
+                updated_at = now()
+            where schema_name = 'inventory-current-v2'
+              and schema_version >= @schemaVersion
+              and (not @enabled or writer_enabled)
+            returning schema_version, writer_enabled, reader_enabled, updated_at;
+            """;
+        AddParameter(command, "enabled", enabled);
+        AddParameter(command, "schemaVersion", InventoryV2SchemaVersion);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            throw new InvalidOperationException("Inventory V2 reader cannot be enabled until the schema exists and writer_enabled=true.");
+        return new InventoryV2ReaderStateResult(
+            reader.GetInt32(0),
+            reader.GetBoolean(1),
+            reader.GetBoolean(2),
+            reader.GetFieldValue<DateTimeOffset>(3));
+    }
+
     public async Task<InventoryV2ShadowResetResult> ResetInventoryV2ShadowAsync(string platform, CancellationToken cancellationToken)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
@@ -182,6 +208,12 @@ public sealed record InventoryV2SchemaPreparationResult(
     DateTimeOffset PreparedAt);
 
 public sealed record InventoryV2WriterStateResult(
+    int SchemaVersion,
+    bool WriterEnabled,
+    bool ReaderEnabled,
+    DateTimeOffset UpdatedAt);
+
+public sealed record InventoryV2ReaderStateResult(
     int SchemaVersion,
     bool WriterEnabled,
     bool ReaderEnabled,

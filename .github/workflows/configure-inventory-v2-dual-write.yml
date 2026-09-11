@@ -1,0 +1,165 @@
+name: Configure Inventory V2 Dual Write
+
+on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        description: "Enable or disable automatic Inventory V2 shadow writes"
+        required: true
+        type: boolean
+        default: false
+      confirmation:
+        description: "Type CONFIGURE_INVENTORY_V2_DUAL_WRITE"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: configure-inventory-v2-dual-write
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_JOB: job-lsc-copart-auto-prod
+  TEMP_JOB: job-lsc-v2-state-prod
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = CONFIGURE_INVENTORY_V2_DUAL_WRITE
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Configure paused jobs and global writer state
+        shell: bash
+        env:
+          ENABLED: ${{ inputs.enabled }}
+        run: |
+          set -euo pipefail
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+          done
+
+          rollback_needed=false
+          cleanup() {
+            if [ "$rollback_needed" = true ]; then
+              patch_jobs false || true
+              run_state false || true
+            fi
+            az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
+          }
+          trap cleanup EXIT
+          cleanup
+
+          source="$(az containerapp job show --name "$IAAI_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          image="$(echo "$source" | jq -r '.properties.template.containers[0].image')"
+          body="$(echo "$source" | jq --arg name "$TEMP_JOB" --arg image "$image" '
+            .location as $location
+            | .properties.environmentId as $environmentId
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | (.properties.template.containers[0]
+                | del(.imageType)
+                | .name=$name
+                | .image=$image
+                | .command=["dotnet"]
+                | .args=["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","false"]
+                | .env=((.env // []) | map(select((.secretRef // "") == "")))) as $container
+            | {location:$location,identity:$identity,properties:{environmentId:$environmentId,configuration:{triggerType:"Manual",replicaTimeout:900,replicaRetryLimit:0,manualTriggerConfig:{parallelism:1,replicaCompletionCount:1}},template:{containers:[$container]}}}')"
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+
+          run_state() {
+            local enabled="$1"
+            patch="$(az rest --method get --uri "$uri" -o json | jq --arg enabled "$enabled" '
+              .properties.template.containers[0] |= (del(.imageType) | .command=["dotnet"] | .args=["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled",$enabled])
+              | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+            az rest --method patch --uri "$uri" --body "$patch" --output none
+            execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+            test -n "$execution"
+            for _ in $(seq 1 180); do
+              status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+              case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+              sleep 5
+            done
+            test "$status" = Succeeded
+          }
+
+          force_reader_disabled() {
+            patch="$(az rest --method get --uri "$uri" -o json | jq '
+              .properties.template.containers[0] |= (del(.imageType) | .command=["dotnet"] | .args=["Lsc.Inventory.Api.dll","--inventory-v2-reader-state","--enabled","false"])
+              | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+            az rest --method patch --uri "$uri" --body "$patch" --output none
+            execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+            test -n "$execution"
+            for _ in $(seq 1 180); do
+              status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+              case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+              sleep 5
+            done
+            test "$status" = Succeeded
+          }
+
+          patch_jobs() {
+            local enabled="$1"
+            for job in "$IAAI_JOB" "$COPART_JOB"; do
+              current="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+              job_id="$(echo "$current" | jq -r '.id')"
+              patch="$(echo "$current" | jq --arg enabled "$enabled" '
+                .properties.template.containers[0] |= del(.imageType)
+                | .properties.template.containers[0].env=((.properties.template.containers[0].env // [])
+                    | map(select(.name != "InventoryV2__ShadowWriteEnabled" and .name != "InventoryV2__BatchSize" and .name != "InventoryV2__ReaderEnabled"))
+                    + [{name:"InventoryV2__ShadowWriteEnabled",value:$enabled},{name:"InventoryV2__BatchSize",value:"1000"}])
+                | {properties:{template:.properties.template}}')"
+              az rest --method patch --url "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$patch" --output none
+            done
+          }
+
+          if [ "$ENABLED" = true ]; then
+            force_reader_disabled
+            rollback_needed=true
+            patch_jobs true
+            run_state true
+            rollback_needed=false
+          else
+            patch_jobs false
+            run_state false
+          fi
+
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__ShadowWriteEnabled")][0].value // ""')" = "$ENABLED"
+            test "$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="InventoryV2__ReaderEnabled")] | length')" = 0
+          done
+          echo "DUAL_WRITE_CONFIGURED=$ENABLED reader_enabled=false schedules_unchanged=true"
+
+          cleanup
+          trap - EXIT
