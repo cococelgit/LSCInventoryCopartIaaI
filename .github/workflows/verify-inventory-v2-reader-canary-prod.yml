@@ -49,10 +49,10 @@ jobs:
           test "$latest" = "$EXPECTED_REVISION"
           reader_flag="$(printf '%s' "$current" | jq -r --arg n InventoryV2__ReaderEnabled '[.properties.template.containers[0].env[]? | select(.name==$n)][0].value // empty')"
           fallback_flag="$(printf '%s' "$current" | jq -r --arg n InventoryV2__LegacyReadFallbackEnabled '[.properties.template.containers[0].env[]? | select(.name==$n)][0].value // empty')"
-          v2_weight="$(printf '%s' "$current" | jq -r --arg revision "$EXPECTED_REVISION" '[.properties.ingress.traffic[]? | select(.revisionName==$revision)][0].weight // 0')"
-          old_weight="$(printf '%s' "$current" | jq -r --arg revision "$EXPECTED_REVISION" '[.properties.ingress.traffic[]? | select(.revisionName!=$revision)][0].weight // 0')"
+          v2_weight="$(printf '%s' "$current" | jq -r --arg revision "$EXPECTED_REVISION" '[.properties.configuration.ingress.traffic[]? | select(.revisionName==$revision)][0].weight // 0')"
+          old_weight="$(printf '%s' "$current" | jq -r --arg revision "$EXPECTED_REVISION" '[.properties.configuration.ingress.traffic[]? | select(.revisionName!=$revision)][0].weight // 0')"
           echo "DEBUG latest=$latest expected=$EXPECTED_REVISION reader=$reader_flag fallback=$fallback_flag v2_weight=$v2_weight old_weight=$old_weight"
-          printf '%s' "$current" | jq --arg prefix InventoryV2__ '{latestRevision:.properties.latestRevisionName,traffic:.properties.ingress.traffic,readerEnv:[.properties.template.containers[0].env[]? | select(.name|startswith($prefix))]}'
+          printf '%s' "$current" | jq --arg prefix InventoryV2__ '{latestRevision:.properties.latestRevisionName,traffic:.properties.configuration.ingress.traffic,readerEnv:[.properties.template.containers[0].env[]? | select(.name|startswith($prefix))]}'
           test "$reader_flag" = true
           test "$fallback_flag" = true
           test "$v2_weight" = 5
@@ -61,4 +61,4 @@ jobs:
           for _ in $(seq 1 5); do
             curl --fail --silent --show-error --max-time 30 "https://$fqdn/healthz" >/dev/null
           done
-          printf '%s' "$current" | jq --arg prefix InventoryV2__ '{latestRevision:.properties.latestRevisionName,traffic:.properties.ingress.traffic,readerEnv:[.properties.template.containers[0].env[]? | select(.name|startswith($prefix))],fqdn:.properties.configuration.ingress.fqdn}'
+          printf '%s' "$current" | jq --arg prefix InventoryV2__ '{latestRevision:.properties.latestRevisionName,traffic:.properties.configuration.ingress.traffic,readerEnv:[.properties.template.containers[0].env[]? | select(.name|startswith($prefix))],fqdn:.properties.configuration.ingress.fqdn}'
