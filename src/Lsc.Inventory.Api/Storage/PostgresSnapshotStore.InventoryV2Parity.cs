@@ -32,7 +32,18 @@ public sealed partial class PostgresSnapshotStore
                 count(*) filter (where v1.lot_key is not null and v2.title_type is distinct from v1.title_type)::bigint as title_type,
                 count(*) filter (where v1.lot_key is not null and v2.primary_damage is distinct from v1.primary_damage)::bigint as primary_damage,
                 count(*) filter (where v1.lot_key is not null and v2.secondary_damage is distinct from v1.secondary_damage)::bigint as secondary_damage,
-                count(*) filter (where v1.lot_key is not null and v1.seller_name is not null and btrim(v2.seller_name) is distinct from btrim(v1.seller_name))::bigint as seller_name,
+                count(*) filter (
+                    where v1.lot_key is not null
+                      and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null
+                      and (
+                        nullif(lower(btrim(v2.seller_name)), 'unknown') is null
+                        or not (
+                          lower(btrim(v1.seller_name)) = lower(btrim(v2.seller_name))
+                          or lower(btrim(v1.seller_name)) like '%' || lower(btrim(v2.seller_name)) || '%'
+                          or lower(btrim(v2.seller_name)) like '%' || lower(btrim(v1.seller_name)) || '%'
+                        )
+                      )
+                )::bigint as seller_name,
                 count(*) filter (where v1.lot_key is not null and v2.seller_type is distinct from v1.seller_type)::bigint as seller_type,
                 count(*) filter (where v1.lot_key is not null and v2.auction_state is distinct from v1.auction_state)::bigint as auction_state,
                 count(*) filter (where v1.lot_key is not null and v2.auction_at is distinct from v1.auction_at)::bigint as auction_at,
@@ -52,9 +63,16 @@ public sealed partial class PostgresSnapshotStore
                 count(*) filter (where v1.lot_key is not null and v2.media_has_360 is distinct from v1.media_has_360)::bigint as has_360,
                 count(*) filter (where v1.lot_key is not null and v2.is_buy_now is distinct from v1.is_buy_now)::bigint as is_buy_now,
                 count(*) filter (where v1.lot_key is not null and v2.is_active is distinct from v1.is_active)::bigint as is_active,
-                count(*) filter (where v1.lot_key is not null and v1.seller_name is null and v2.seller_name is not null)::bigint as seller_v2_only,
-                count(*) filter (where v1.lot_key is not null and v1.seller_name is not null and v2.seller_name is null)::bigint as seller_v1_only,
-                count(*) filter (where v1.lot_key is not null and v1.seller_name is not null and v2.seller_name is not null and btrim(v1.seller_name) is distinct from btrim(v2.seller_name))::bigint as seller_conflict
+                count(*) filter (where v1.lot_key is not null and nullif(lower(btrim(v1.seller_name)), 'unknown') is null and nullif(lower(btrim(v2.seller_name)), 'unknown') is not null)::bigint as seller_v2_only,
+                count(*) filter (where v1.lot_key is not null and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null and nullif(lower(btrim(v2.seller_name)), 'unknown') is null)::bigint as seller_v1_only,
+                count(*) filter (
+                    where v1.lot_key is not null
+                      and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null
+                      and nullif(lower(btrim(v2.seller_name)), 'unknown') is not null
+                      and lower(btrim(v1.seller_name)) <> lower(btrim(v2.seller_name))
+                      and lower(btrim(v1.seller_name)) not like '%' || lower(btrim(v2.seller_name)) || '%'
+                      and lower(btrim(v2.seller_name)) not like '%' || lower(btrim(v1.seller_name)) || '%'
+                )::bigint as seller_conflict
             from inventory_current_v2 v2
             left join inventory_search_current v1 on v1.lot_key = v2.lot_key
             where (@platform::text is null or v2.platform = @platform::text);
@@ -94,8 +112,15 @@ public sealed partial class PostgresSnapshotStore
                 from inventory_current_v2 v2
                 join inventory_search_current v1 on v1.lot_key = v2.lot_key
                 where (@platform::text is null or v2.platform = @platform::text)
-                  and v1.seller_name is not null
-                  and btrim(v2.seller_name) is distinct from btrim(v1.seller_name)
+                  and nullif(lower(btrim(v1.seller_name)), 'unknown') is not null
+                  and (
+                    nullif(lower(btrim(v2.seller_name)), 'unknown') is null
+                    or (
+                      lower(btrim(v1.seller_name)) <> lower(btrim(v2.seller_name))
+                      and lower(btrim(v1.seller_name)) not like '%' || lower(btrim(v2.seller_name)) || '%'
+                      and lower(btrim(v2.seller_name)) not like '%' || lower(btrim(v1.seller_name)) || '%'
+                    )
+                  )
                 order by v2.platform, v2.lot_number
                 limit 20;
                 """;

@@ -112,7 +112,8 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("seller_v2_only", parity, StringComparison.Ordinal);
         Assert.Contains("seller_v1_only", parity, StringComparison.Ordinal);
         Assert.Contains("seller_conflict", parity, StringComparison.Ordinal);
-        Assert.Contains("v1.seller_name is not null and btrim(v2.seller_name) is distinct from btrim(v1.seller_name)", parity, StringComparison.Ordinal);
+        Assert.Contains("nullif(lower(btrim(v1.seller_name)), 'unknown')", parity, StringComparison.Ordinal);
+        Assert.Contains("like '%' || lower(btrim(v2.seller_name)) || '%'", parity, StringComparison.Ordinal);
         Assert.Contains("SellerMismatchSamples", parity, StringComparison.Ordinal);
 
         var workflow = File.ReadAllText(FindRepositoryRootFile(".github/workflows/run-inventory-v2-writer-canary.yml"));
