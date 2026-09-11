@@ -197,7 +197,7 @@ public sealed partial class PostgresSnapshotStore
             var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
             for (var index = 0; index < reader.FieldCount; index++)
                 values[reader.GetName(index)] = reader.IsDBNull(index) ? null : reader.GetValue(index);
-            result.Add(new InventoryV2ReadRow { Values = values, ObservedAt = (DateTimeOffset)values["observed_at"]! });
+            result.Add(new InventoryV2ReadRow { Values = values, ObservedAt = ReadV2Date(values, "observed_at") ?? throw new InvalidOperationException("Inventory V2 row is missing last_seen_at.") });
         }
         return result;
     }
