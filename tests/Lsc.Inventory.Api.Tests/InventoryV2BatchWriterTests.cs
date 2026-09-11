@@ -85,6 +85,8 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("--inventory-v2-writer-state", workflow, StringComparison.Ordinal);
         Assert.Contains("--auctionsapi-incremental-canary", workflow, StringComparison.Ordinal);
         Assert.Contains("trap cleanup EXIT", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("--tail 500", workflow, StringComparison.Ordinal);
+        Assert.Contains("--tail 300", workflow, StringComparison.Ordinal);
         Assert.Contains("reader_enabled = false", File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Schema.cs")), StringComparison.Ordinal);
     }
 
