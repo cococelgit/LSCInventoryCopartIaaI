@@ -1,4 +1,5 @@
 using Lsc.Inventory.Api.Options;
+using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Services;
 using Lsc.Inventory.Api.Storage;
 using Microsoft.Extensions.Options;
@@ -105,7 +106,7 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                 runId,
                 new InventorySyncRunCompletion(DateTimeOffset.UtcNow, 0, 0, skipped),
                 cancellationToken);
-            return new(runId, normalizedPlatform, persist, maximumLots, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, stopwatch.ElapsedMilliseconds, skipped);
+            return new(runId, normalizedPlatform, persist, maximumLots, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, stopwatch.ElapsedMilliseconds, skipped, Array.Empty<EligibilityReasonBreakdown>(), Array.Empty<EligibilityReasonBreakdown>());
         }
 
         var failures = new List<string>();
