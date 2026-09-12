@@ -251,4 +251,3 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
 
     private static int DomainId(string platform) => platform == "iaai" ? 1 : 3;
 }
-EOF
