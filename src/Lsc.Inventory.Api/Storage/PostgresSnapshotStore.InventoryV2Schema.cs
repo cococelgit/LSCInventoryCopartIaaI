@@ -283,6 +283,75 @@ public sealed partial class PostgresSnapshotStore
         return new InventoryDataResetResult(beforeRows, afterRows, deletedRows);
     }
 
+    public async Task<LegacyInventoryDropResult> DropLegacyInventoryAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var guard = connection.CreateCommand();
+        guard.Transaction = transaction;
+        guard.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+        guard.CommandText = """
+            select writer_enabled, reader_enabled
+            from inventory_v2_schema_state
+            where schema_name = 'inventory-current-v2'
+            for update;
+            """;
+        await using (var reader = await guard.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new InvalidOperationException("Inventory V2 schema state is missing.");
+            if (reader.GetBoolean(0) || reader.GetBoolean(1))
+                throw new InvalidOperationException("Legacy inventory DROP requires writer_enabled=false and reader_enabled=false.");
+        }
+
+        var legacyTables = new[] { "inventory_search_current", "auction_lot_versions", "auction_lots" };
+        var existing = new List<string>();
+        foreach (var table in legacyTables)
+        {
+            await using var exists = connection.CreateCommand();
+            exists.Transaction = transaction;
+            exists.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            exists.CommandText = "select to_regclass(@qualified) is not null;";
+            AddParameter(exists, "qualified", $"public.{table}");
+            if (Convert.ToBoolean(await exists.ExecuteScalarAsync(cancellationToken))) existing.Add(table);
+        }
+
+        var beforeRows = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var table in existing)
+        {
+            await using var count = connection.CreateCommand();
+            count.Transaction = transaction;
+            count.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            count.CommandText = $"select count(*) from public.{table};";
+            beforeRows[table] = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
+        }
+
+        foreach (var table in existing)
+        {
+            await using var drop = connection.CreateCommand();
+            drop.Transaction = transaction;
+            drop.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            drop.CommandText = $"drop table public.{table};";
+            await drop.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var remaining = new List<string>();
+        foreach (var table in legacyTables)
+        {
+            await using var verify = connection.CreateCommand();
+            verify.Transaction = transaction;
+            verify.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            verify.CommandText = "select to_regclass(@qualified);";
+            AddParameter(verify, "qualified", $"public.{table}");
+            if (await verify.ExecuteScalarAsync(cancellationToken) is not null and not DBNull) remaining.Add(table);
+        }
+        if (remaining.Count > 0)
+            throw new InvalidOperationException($"Legacy tables remain after DROP: {string.Join(", ", remaining)}.");
+
+        await transaction.CommitAsync(cancellationToken);
+        return new LegacyInventoryDropResult(beforeRows, existing, remaining);
+    }
+
     private static string ReadInventoryV2SchemaSql()
     {
         using var stream = typeof(PostgresSnapshotStore).Assembly.GetManifestResourceStream(InventoryV2SchemaResourceName)
@@ -323,3 +392,7 @@ public sealed record InventoryDataResetResult(
     IReadOnlyDictionary<string, long> BeforeRows,
     IReadOnlyDictionary<string, long> AfterRows,
     IReadOnlyDictionary<string, long> DeletedRows);
+public sealed record LegacyInventoryDropResult(
+    IReadOnlyDictionary<string, long> BeforeRows,
+    IReadOnlyList<string> DroppedTables,
+    IReadOnlyList<string> RemainingTables);

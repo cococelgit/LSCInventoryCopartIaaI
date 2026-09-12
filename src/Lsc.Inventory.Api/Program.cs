@@ -1118,6 +1118,18 @@ if (args.Contains("--postgres-lock-diagnostic", StringComparer.OrdinalIgnoreCase
     return;
 }
 
+if (args.Contains("--drop-legacy-inventory", StringComparer.OrdinalIgnoreCase))
+{
+    if (!args.Contains("--confirm-drop-legacy-inventory", StringComparer.OrdinalIgnoreCase))
+        throw new ArgumentException("--drop-legacy-inventory requires --confirm-drop-legacy-inventory.");
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>() as PostgresSnapshotStore
+        ?? throw new InvalidOperationException("Legacy inventory DROP requires Persistence:Provider=Postgres.");
+    var result = await store.DropLegacyInventoryAsync(CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
 if (args.Contains("--inventory-data-reset", StringComparer.OrdinalIgnoreCase))
 {
     if (!args.Contains("--confirm-inventory-data-reset", StringComparer.OrdinalIgnoreCase))
