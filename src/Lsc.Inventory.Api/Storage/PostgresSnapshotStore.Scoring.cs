@@ -52,10 +52,10 @@ public sealed partial class PostgresSnapshotStore
         command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
         command.CommandText = """
             with eligible as (
-                select current.lot_key, current.platform, current.observed_at,
+                select current.lot_key, current.platform, current.last_seen_at,
                        row_number() over (
                            partition by current.platform
-                           order by current.observed_at asc, current.lot_key asc) as platform_position
+                           order by current.last_seen_at asc, current.lot_key asc) as platform_position
                 from inventory_current_v2 current
                 left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
                 left join inventory_vehicle_scoring_queue queue on queue.lot_key = current.lot_key
@@ -63,18 +63,18 @@ public sealed partial class PostgresSnapshotStore
                   and (
                     score.lot_key is null
                     or score.policy_version <> @policy_version
-                    or score.source_observed_at <> current.observed_at
+                    or score.source_observed_at <> current.last_seen_at
                     or (queue.status = 'failed' and queue.attempts < @maximum_attempts)
                   )
             ), candidates as (
-                select lot_key, platform, observed_at
+                select lot_key, platform, last_seen_at
                 from eligible
                 order by platform_position asc, platform asc, lot_key asc
                 limit @limit
             ), upserted as (
                 insert into inventory_vehicle_scoring_queue (
                     lot_key, platform, source_observed_at, status, attempts, priority, requested_at, updated_at)
-                select lot_key, platform, observed_at, 'queued', 0, @priority, now(), now()
+                select lot_key, platform, last_seen_at, 'queued', 0, @priority, now(), now()
                 from candidates
                 on conflict (lot_key) do update set
                     platform = excluded.platform,
@@ -288,7 +288,7 @@ public sealed partial class PostgresSnapshotStore
                    count(*)::bigint as active_count,
                    count(*) filter (where score.lot_key is not null
                        and score.policy_version = @policy_version
-                       and score.source_observed_at = active.observed_at)::bigint as current_count,
+                       and score.source_observed_at = active.last_seen_at)::bigint as current_count,
                    count(*) filter (where queue.status = 'queued')::bigint as queued_count,
                    count(*) filter (where queue.status = 'processing')::bigint as processing_count,
                    count(*) filter (where queue.status = 'failed')::bigint as failed_count,
@@ -296,7 +296,7 @@ public sealed partial class PostgresSnapshotStore
                    min(queue.requested_at) filter (where queue.status = 'queued'),
                    max(score.scored_at) filter (where score.lot_key is not null
                        and score.policy_version = @policy_version
-                       and score.source_observed_at = active.observed_at)
+                       and score.source_observed_at = active.last_seen_at)
             from active_inventory active
             left join inventory_vehicle_score_current score on score.lot_key = active.lot_key
             left join inventory_vehicle_scoring_queue queue on queue.lot_key = active.lot_key
