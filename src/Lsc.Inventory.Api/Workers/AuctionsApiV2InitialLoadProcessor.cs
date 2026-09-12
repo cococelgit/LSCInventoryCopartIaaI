@@ -1,4 +1,5 @@
 using Lsc.Inventory.Api.Options;
+using System.Text.Json;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Services;
 using Lsc.Inventory.Api.Storage;
@@ -10,6 +11,12 @@ public sealed record EligibilityReasonBreakdown(
     string Code,
     string Name,
     int Count,
+    IReadOnlyList<string> SampleLots);
+
+public sealed record DateCandidateBreakdown(
+    string Path,
+    int Count,
+    IReadOnlyList<string> SampleValues,
     IReadOnlyList<string> SampleLots);
 
 public sealed record AuctionsApiV2InitialLoadResult(
@@ -31,7 +38,8 @@ public sealed record AuctionsApiV2InitialLoadResult(
     long DurationMs,
     IReadOnlyList<string> Failures,
     IReadOnlyList<EligibilityReasonBreakdown> DiscardReasonBreakdown,
-    IReadOnlyList<EligibilityReasonBreakdown> QuarantineReasonBreakdown);
+    IReadOnlyList<EligibilityReasonBreakdown> QuarantineReasonBreakdown,
+    IReadOnlyList<DateCandidateBreakdown> MissingSaleDateCandidates);
 
 public interface IAuctionsApiV2InitialLoadProcessor
 {
@@ -106,12 +114,13 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                 runId,
                 new InventorySyncRunCompletion(DateTimeOffset.UtcNow, 0, 0, skipped),
                 cancellationToken);
-            return new(runId, normalizedPlatform, persist, maximumLots, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, stopwatch.ElapsedMilliseconds, skipped, Array.Empty<EligibilityReasonBreakdown>(), Array.Empty<EligibilityReasonBreakdown>());
+            return new(runId, normalizedPlatform, persist, maximumLots, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, stopwatch.ElapsedMilliseconds, skipped, Array.Empty<EligibilityReasonBreakdown>(), Array.Empty<EligibilityReasonBreakdown>(), Array.Empty<DateCandidateBreakdown>());
         }
 
         var failures = new List<string>();
         var discardReasons = new Dictionary<string, (string Name, int Count, List<string> SampleLots)>(StringComparer.Ordinal);
         var quarantineReasons = new Dictionary<string, (string Name, int Count, List<string> SampleLots)>(StringComparer.Ordinal);
+        var missingSaleDateCandidates = new Dictionary<string, (int Count, List<string> SampleValues, List<string> SampleLots)>(StringComparer.Ordinal);
         var sourceRowsMapped = 0;
         var observed = 0;
         var eligible = 0;
@@ -150,6 +159,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                 foreach (var vehicle in mapped)
                 {
                     observed++;
+                    if (vehicle.Auction?.AuctionAt is null && vehicle.RawSource is { } rawSource)
+                        CollectDateCandidates(rawSource, vehicle.LotNumber, missingSaleDateCandidates);
                     var eligibility = Eligibility.AuctionEligibilityEvaluator.Evaluate(vehicle, DateTimeOffset.UtcNow);
                     if (!eligibility.LoadToSystem)
                     {
@@ -213,7 +224,7 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     false),
                 CancellationToken.None);
 
-            return new(runId, normalizedPlatform, persist, maximumLots, sourceRowsMapped, observed, eligible, discarded, quarantined, created, updated, unchanged, mediaRowsWritten, pages, requests, stopwatch.ElapsedMilliseconds, failures, ToBreakdown(discardReasons), ToBreakdown(quarantineReasons));
+            return new(runId, normalizedPlatform, persist, maximumLots, sourceRowsMapped, observed, eligible, discarded, quarantined, created, updated, unchanged, mediaRowsWritten, pages, requests, stopwatch.ElapsedMilliseconds, failures, ToBreakdown(discardReasons), ToBreakdown(quarantineReasons), ToDateBreakdown(missingSaleDateCandidates));
         }
         catch (OperationCanceledException)
         {
@@ -279,6 +290,66 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
             target[reason.Code] = aggregate;
         }
     }
+
+    private static void CollectDateCandidates(
+        JsonElement raw,
+        string? lotNumber,
+        Dictionary<string, (int Count, List<string> SampleValues, List<string> SampleLots)> target)
+    {
+        WalkDateCandidates(raw, string.Empty, lotNumber, target);
+    }
+
+    private static void WalkDateCandidates(
+        JsonElement value,
+        string path,
+        string? lotNumber,
+        Dictionary<string, (int Count, List<string> SampleValues, List<string> SampleLots)> target)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in value.EnumerateObject())
+            {
+                var childPath = string.IsNullOrEmpty(path) ? property.Name : $"{path}.{property.Name}";
+                if (IsDateCandidateName(property.Name) && property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number)
+                {
+                    var rawValue = property.Value.ToString();
+                    if (!string.IsNullOrWhiteSpace(rawValue))
+                    {
+                        if (!target.TryGetValue(childPath, out var aggregate))
+                            aggregate = (0, new List<string>(), new List<string>());
+                        aggregate.Count++;
+                        if (aggregate.SampleValues.Count < 5 && !aggregate.SampleValues.Contains(rawValue, StringComparer.Ordinal))
+                            aggregate.SampleValues.Add(rawValue);
+                        if (!string.IsNullOrWhiteSpace(lotNumber) && aggregate.SampleLots.Count < 5 && !aggregate.SampleLots.Contains(lotNumber, StringComparer.Ordinal))
+                            aggregate.SampleLots.Add(lotNumber);
+                        target[childPath] = aggregate;
+                    }
+                }
+                WalkDateCandidates(property.Value, childPath, lotNumber, target);
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+                WalkDateCandidates(item, path, lotNumber, target);
+        }
+    }
+
+    private static bool IsDateCandidateName(string name)
+    {
+        var normalized = name.Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+        return normalized.Contains("date", StringComparison.Ordinal)
+            || normalized.Contains("auction", StringComparison.Ordinal)
+            || normalized.Contains("sale", StringComparison.Ordinal)
+            || normalized.Contains("start", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<DateCandidateBreakdown> ToDateBreakdown(
+        Dictionary<string, (int Count, List<string> SampleValues, List<string> SampleLots)> source) =>
+        source.OrderByDescending(pair => pair.Value.Count)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new DateCandidateBreakdown(pair.Key, pair.Value.Count, pair.Value.SampleValues, pair.Value.SampleLots))
+            .ToArray();
 
     private static IReadOnlyList<EligibilityReasonBreakdown> ToBreakdown(
         Dictionary<string, (string Name, int Count, List<string> SampleLots)> source) =>
