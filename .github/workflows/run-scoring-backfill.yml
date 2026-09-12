@@ -1,0 +1,165 @@
+name: Run Inventory V2 Scoring Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type RUN_INVENTORY_V2_SCORING_BACKFILL"
+        required: true
+        type: string
+      max_executions:
+        description: "Maximum sequential scoring executions"
+        required: true
+        default: "12"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: inventory-v2-scoring-backfill
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e89e89e
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+  SCORING_JOB: job-lsc-inventory-scoring-prod
+  SCORING_IMAGE: acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:api-ca9872c7e9250395c8f9ce89c58b1a2747a9fc45
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Guard explicit authorization
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = RUN_INVENTORY_V2_SCORING_BACKFILL
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Verify ingestion jobs are paused and no execution overlaps
+        shell: bash
+        run: |
+          set -euo pipefail
+          names="$(az containerapp job list --resource-group "$RESOURCE_GROUP" -o json)"
+          mapfile -t jobs < <(echo "$names" | jq -r '.[].name | select(test("copart|iaai|ingestion|scheduled|bootstrap|catchup"; "i")) | select(. != env.SCORING_JOB)')
+          for job in "${jobs[@]}"; do
+            json="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json)"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType // "unknown"')"
+            active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$job" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            echo "GUARD_JOB=$job TRIGGER=$trigger ACTIVE=$active"
+            test "$active" = 0
+            test "$trigger" != Schedule
+          done
+
+      - name: Update only the scoring worker image
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json)"
+          before_image="$(echo "$before" | jq -r '.properties.template.containers[0].image')"
+          before_args="$(echo "$before" | jq -c '.properties.template.containers[0].args // []')"
+          before_trigger="$(echo "$before" | jq -r '.properties.configuration.triggerType')"
+          before_cron="$(echo "$before" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression // ""')"
+          echo "SCORING_BEFORE_IMAGE=$before_image"
+          echo "SCORING_BEFORE_ARGS=$before_args"
+          echo "SCORING_BEFORE_TRIGGER=$before_trigger"
+          echo "SCORING_BEFORE_CRON=$before_cron"
+          az containerapp job update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$SCORING_JOB" \
+            --image "$SCORING_IMAGE" \
+            --only-show-errors >/dev/null
+          for attempt in $(seq 1 36); do
+            state="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --query 'properties.provisioningState' -o tsv)"
+            echo "SCORING_PROVISIONING attempt=$attempt state=$state"
+            [ "$state" = Succeeded ] && break
+            [ "$state" = Failed ] && exit 1
+            sleep 5
+          done
+          after="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json)"
+          test "$(echo "$after" | jq -r '.properties.template.containers[0].image')" = "$SCORING_IMAGE"
+          test "$(echo "$after" | jq -c '.properties.template.containers[0].args // []')" = '["--scoring-backfill"]'
+          test "$(echo "$after" | jq -r '.properties.configuration.triggerType')" = Schedule
+          test -n "$(echo "$after" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
+          echo "SCORING_WORKER_IMAGE_UPDATED=true"
+          echo "PREVIOUS_SCORING_IMAGE=$before_image"
+
+      - name: Run sequential scoring backfill executions
+        shell: bash
+        env:
+          MAX_EXECUTIONS: ${{ inputs.max_executions }}
+        run: |
+          set -euo pipefail
+          api_fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          token_ref="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query "properties.template.containers[0].env[?name=='InventoryApi__Token'].secretRef | [0]" -o tsv)"
+          inventory_token="$(az containerapp secret list --resource-group "$RESOURCE_GROUP" --name "$API_APP" --show-values --query "[?name=='$token_ref'].value | [0]" -o tsv)"
+          test -n "$api_fqdn" && test -n "$inventory_token"
+          base="https://${api_fqdn}"
+          max="$(printf '%s' "$MAX_EXECUTIONS" | tr -cd '0-9')"
+          test -n "$max"
+          pending=4497
+          for round in $(seq 1 "$max"); do
+            active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+            execution="$(az containerapp job start --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json)"
+            execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+            test -n "$execution_name"
+            echo "SCORING_EXECUTION_START round=$round name=$execution_name"
+            status=Unknown
+            for attempt in $(seq 1 120); do
+              current="$(az containerapp job execution show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --job-execution-name "$execution_name" -o json)"
+              status="$(echo "$current" | jq -r '.properties.status // .status // "Unknown"')"
+              echo "SCORING_EXECUTION_STATUS round=$round attempt=$attempt status=$status"
+              case "$status" in Succeeded|Failed|Canceled|Cancelled|Stopped) break ;; esac
+              sleep 15
+            done
+            test "$status" = Succeeded
+            response="$(curl --silent --show-error --fail --max-time 90 --header "Authorization: Bearer $inventory_token" "$base/internal/scoring/status")"
+            pending="$(echo "$response" | jq '[.platforms[]?.pending] | add // 0')"
+            completed="$(echo "$response" | jq '[.platforms[]?.current] | add // 0')"
+            failed="$(echo "$response" | jq '.failed // 0')"
+            echo "SCORING_PROGRESS round=$round current=$completed pending=$pending failed=$failed"
+            if [ "$pending" -eq 0 ]; then
+              break
+            fi
+          done
+          unset inventory_token
+          test "$pending" -eq 0
+          echo "SCORING_BACKFILL_COMPLETE current=$completed pending=$pending"
+
+      - name: Verify final scoring coverage and paused ingestion state
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          token_ref="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query "properties.template.containers[0].env[?name=='InventoryApi__Token'].secretRef | [0]" -o tsv)"
+          inventory_token="$(az containerapp secret list --resource-group "$RESOURCE_GROUP" --name "$API_APP" --show-values --query "[?name=='$token_ref'].value | [0]" -o tsv)"
+          response="$(curl --silent --show-error --fail --max-time 90 --header "Authorization: Bearer $inventory_token" "https://${api_fqdn}/internal/scoring/status")"
+          echo "$response" | jq '{policyVersion,queued,processing,completed,failed,platforms}'
+          test "$(echo "$response" | jq '[.platforms[]?.pending] | add // 0')" -eq 0
+          test "$(echo "$response" | jq '[.platforms[]?.current] | add // 0')" -eq 4497
+          names="$(az containerapp job list --resource-group "$RESOURCE_GROUP" -o json)"
+          mapfile -t jobs < <(echo "$names" | jq -r '.[].name | select(test("copart|iaai|ingestion|scheduled|bootstrap|catchup"; "i")) | select(. != env.SCORING_JOB)')
+          for job in "${jobs[@]}"; do
+            json="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$job" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType // "unknown"')" != Schedule
+            active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$job" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+          done
+          unset inventory_token
+          echo "INGESTION_PAUSED_AND_SCORING_COVERAGE_VERIFIED=true"
