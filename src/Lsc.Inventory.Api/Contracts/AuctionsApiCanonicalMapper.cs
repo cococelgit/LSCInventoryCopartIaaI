@@ -97,7 +97,10 @@ public static class AuctionsApiCanonicalMapper
             DateValue(lot, "sale_date"),
             DateTimeValue(lot, "archived_at"),
             DateTimeValue(lot, "updated_at") ?? DateTimeValue(vehicle, "updated_at"),
-            lot.Clone());
+            lot.Clone(),
+            DecimalValue(lot, "odometer.miles", "odometer.mi", "odometer"),
+            DecimalValue(lot, "odometer.km", "odometer.kilometers"),
+            BoolValue(lot, "keys_available", "key_available", "keys"));
     }
 
     private static AuctionLocation? LocationValue(JsonElement value, string path)
@@ -191,8 +194,22 @@ public static class AuctionsApiCanonicalMapper
 
     private static decimal? DecimalValue(JsonElement value)
     {
-        var raw = Scalar(value);
+        var raw = value.ValueKind == JsonValueKind.Object
+            ? FirstValue(value, "value", "miles", "mi", "kilometers", "km")
+            : Scalar(value);
         return decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var result) ? result : null;
+    }
+
+    private static decimal? DecimalValue(JsonElement value, params string[] paths)
+    {
+        foreach (var path in paths)
+        {
+            var item = At(value, path);
+            if (item is null) continue;
+            var number = DecimalValue(item.Value);
+            if (number.HasValue) return number;
+        }
+        return null;
     }
 
     private static bool? BoolValue(JsonElement value, params string[] paths)
@@ -260,6 +277,7 @@ public static class AuctionsApiCanonicalMapper
             {
                 PrimaryDamage = lot.DamageMain?.Name,
                 SecondaryDamage = lot.DamageSecond?.Name,
+                HasKey = lot.HasKey,
                 RunCondition = new RunConditionInfo { Value = lot.Status?.Name, Label = lot.Status?.Name },
             },
             Seller = new AuctionSeller
@@ -277,7 +295,16 @@ public static class AuctionsApiCanonicalMapper
                     State = lot.Location.State,
                     FacilityId = lot.Location.FacilityId,
                 },
-            OdometerInfo = lot.OdometerStatus is null ? null : new OdometerInfo { Status = lot.OdometerStatus.Name },
+            OdometerInfo = lot.OdometerStatus is null
+                && !lot.OdometerMiles.HasValue
+                && !lot.OdometerKilometers.HasValue
+                ? null
+                : new OdometerInfo
+                {
+                    Miles = lot.OdometerMiles,
+                    Kilometers = lot.OdometerKilometers,
+                    Status = lot.OdometerStatus?.Name,
+                },
             Auction = new AuctionInfo
             {
                 LotStatus = lot.Status?.Name,

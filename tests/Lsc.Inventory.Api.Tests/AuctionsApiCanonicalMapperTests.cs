@@ -135,6 +135,42 @@ public sealed class AuctionsApiCanonicalMapperTests
     }
 
     [Fact]
+    public void Maps_real_copart_odometer_and_keys_into_canonical_vehicle()
+    {
+        var payload = ReadFixture("copart_cars_page1.json");
+        var row = payload.GetProperty("data")[0];
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(row, "copart");
+        var lot = Assert.Single(provider!.Lots);
+        var vehicle = Assert.Single(AuctionsApiCanonicalMapper.ToAuctionVehicles(provider));
+
+        Assert.Equal(57577m, lot.OdometerMiles);
+        Assert.Equal(92661m, lot.OdometerKilometers);
+        Assert.True(lot.HasKey);
+        Assert.Equal(57577m, vehicle.OdometerInfo!.Miles);
+        Assert.Equal(92661m, vehicle.OdometerInfo.Kilometers);
+        Assert.Equal("actual", vehicle.OdometerInfo.Status);
+        Assert.True(vehicle.Condition!.HasKey);
+    }
+
+    [Fact]
+    public void Maps_real_iaai_odometer_and_keys_into_canonical_vehicle()
+    {
+        var payload = ReadFixture("iaai_cars_page1.json");
+        var row = payload.GetProperty("data")[0];
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(row, "iaai");
+        var lot = Assert.Single(provider!.Lots);
+        var vehicle = Assert.Single(AuctionsApiCanonicalMapper.ToAuctionVehicles(provider));
+
+        Assert.Equal(160041m, lot.OdometerMiles);
+        Assert.Equal(257561m, lot.OdometerKilometers);
+        Assert.True(lot.HasKey);
+        Assert.Equal(160041m, vehicle.OdometerInfo!.Miles);
+        Assert.Equal(257561m, vehicle.OdometerInfo.Kilometers);
+        Assert.Equal("actual", vehicle.OdometerInfo.Status);
+        Assert.True(vehicle.Condition!.HasKey);
+    }
+
+    [Fact]
     public void Shadow_comparison_against_real_copart_fixture_exposes_current_mapping_gaps()
     {
         var payload = ReadFixture("copart_cars_page1.json");

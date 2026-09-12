@@ -59,7 +59,10 @@ public sealed record AuctionsApiProviderLot(
     AuctionsApiDateValue? SaleDate,
     DateTimeOffset? ArchivedAt,
     DateTimeOffset? UpdatedAt,
-    JsonElement Raw);
+    JsonElement Raw,
+    decimal? OdometerMiles = null,
+    decimal? OdometerKilometers = null,
+    bool? HasKey = null);
 
 public sealed record AuctionsApiProviderVehicle(
     string Platform,
