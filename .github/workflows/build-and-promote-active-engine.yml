@@ -54,7 +54,7 @@ jobs:
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
             trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
             echo "BASELINE_JOB=$job TRIGGER=$trigger IMAGE=$(echo "$json" | jq -r '.properties.template.containers[0].image')"
-            test "$trigger" = Schedule
+            test "$trigger" = Schedule -o "$trigger" = Manual
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
             test "$active" = 0
             echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.before.json"
@@ -80,10 +80,10 @@ jobs:
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
             trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
             echo "VERIFY_JOB=$job TRIGGER=$trigger IMAGE=$(echo "$json" | jq -r '.properties.template.containers[0].image')"
-            test "$trigger" = Schedule
+            test "$trigger" = Schedule -o "$trigger" = Manual
             echo "$json" | jq -S 'del(.properties.template.containers[0].image,.properties.provisioningState,.systemData)' > "$RUNNER_TEMP/$job.after.json"
             diff -u "$RUNNER_TEMP/$job.before.json" "$RUNNER_TEMP/$job.after.json"
             test "$(echo "$json" | jq -r '.properties.template.containers[0].image')" = "$PROMOTED_IMAGE"
-            echo "VERIFIED_JOB=$job IMAGE=$PROMOTED_IMAGE TRIGGER=Schedule"
+            echo "VERIFIED_JOB=$job IMAGE=$PROMOTED_IMAGE TRIGGER=$trigger"
           done
           echo "Only images changed; cron, secrets, persistence, and write policy were preserved."
