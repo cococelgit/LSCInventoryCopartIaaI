@@ -1,0 +1,76 @@
+name: Audit Inventory V2 Field N-R
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Read all V2 pages and aggregate field coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p report
+          fqdn="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          ref="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query "properties.template.containers[0].env[?name=='InventoryApi__Token'].secretRef | [0]" -o tsv)"
+          token="$(az containerapp secret list -g "$RESOURCE_GROUP" -n "$API_APP" --show-values --query "[?name=='$ref'].value | [0]" -o tsv)"
+          test -n "$fqdn" && test -n "$token"
+          : > report/all.ndjson
+          page=1
+          total=0
+          while :; do
+            curl --silent --show-error --fail --max-time 90 \
+              --header "Authorization: Bearer $token" \
+              "https://${fqdn}/api/v1/inventory/search?page=${page}&pageSize=100&sort=recent" \
+              -o "/tmp/page-${page}.json"
+            current_total="$(jq -r '.total' "/tmp/page-${page}.json")"
+            [ "$total" -eq 0 ] && total="$current_total"
+            jq -c '.items[]' "/tmp/page-${page}.json" >> report/all.ndjson
+            count="$(jq '.items | length' "/tmp/page-${page}.json")"
+            echo "PAGE=$page COUNT=$count TOTAL=$current_total"
+            [ "$count" -eq 0 ] && break
+            [ "$((page * 100))" -ge "$current_total" ] && break
+            page=$((page + 1))
+          done
+          jq -s '
+            def present($v): ($v != null and (($v|type) != "string" or ($v|gsub("\\s"; "") != "")));
+            def summary($rows; $field): {
+              present: ($rows | map(select(present(.[$field]))) | length),
+              missing: ($rows | map(select(present(.[$field]) | not)) | length)
+            };
+            {
+              total_rows:length,
+              by_platform: (group_by(.platform) | map({platform: .[0].platform, total:length, odometer:summary(.;"odometer"), odometer_km:summary(.;"odometerKm"), odometer_status:summary(.;"odometerStatus"), has_key:summary(.;"hasKey"), run_condition:summary(.;"runCondition"), damage:summary(.;"damage"), state:summary(.;"state"), seller_name:summary(.;"sellerName"), seller_type:summary(.;"sellerType"), auction_at:summary(.;"auctionAt"), vin:summary(.;"vin")})),
+              overall: {odometer:summary(.;"odometer"), odometer_km:summary(.;"odometerKm"), odometer_status:summary(.;"odometerStatus"), has_key:summary(.;"hasKey"), run_condition:summary(.;"runCondition"), damage:summary(.;"damage"), state:summary(.;"state"), seller_name:summary(.;"sellerName"), seller_type:summary(.;"sellerType"), auction_at:summary(.;"auctionAt"), vin:summary(.;"vin")},
+              samples: ($rows | map(select(.odometer != null or .hasKey != null)) | .[0:10] | map({lot,platform,odometer,odometerKm,odometerStatus,hasKey,runCondition,damage,state,sellerName,sellerType}))
+            }
+          ' report/all.ndjson > report/field-coverage.json
+          jq . report/field-coverage.json
+          unset token
+      - name: Upload read-only evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventory-v2-field-coverage-${{ github.run_id }}
+          path: report/field-coverage.json
+          retention-days: 14
