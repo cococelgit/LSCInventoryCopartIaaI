@@ -35,7 +35,7 @@ public sealed partial class PostgresSnapshotStore
                     nameParameter.Value = name;
                     var confidenceParameter = seedCommand.Parameters.Add($"confidence_{seedCommand.Parameters.Count}", NpgsqlTypes.NpgsqlDbType.Numeric);
                     confidenceParameter.Value = confidence;
-                    seedCommand.CommandText += $"insert into seller_reclassification_targets (seller_name_key, confidence) values ({nameParameter.ParameterName}, {confidenceParameter.ParameterName});\n";
+                    seedCommand.CommandText += $"insert into seller_reclassification_targets (seller_name_key, confidence) values (@{nameParameter.ParameterName}, @{confidenceParameter.ParameterName});\n";
                 }
                 await seedCommand.ExecuteNonQueryAsync(cancellationToken);
             }
