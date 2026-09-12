@@ -41,6 +41,9 @@ jobs:
             echo "ENDPOINT=$endpoint HTTP_CODE=$code"
             cat "/tmp/${safe_name}.json"
             printf '\n'
-            test "$code" = 200
+            if [ "$code" != 200 ]; then
+              echo "READ_ONLY_DIAGNOSTIC_FAILED endpoint=$endpoint http_code=$code" >&2
+              exit 1
+            fi
           done
           unset inventory_token
