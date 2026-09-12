@@ -25,7 +25,7 @@ env:
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
   IMAGE_NAME: lsc-inventory-engine
   SOURCE_JOB: job-lsc-copart-auto-prod
-  TEMP_JOB: job-lsc-seller-reclass-${{ github.run_id }}
+  TEMP_JOB: job-lsc-sell-${{ github.run_id }}
 
 jobs:
   apply:
