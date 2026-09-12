@@ -105,7 +105,7 @@ public sealed partial class PostgresSnapshotStore
             set writer_enabled = @enabled,
                 updated_at = now()
             where schema_name = 'inventory-current-v2'
-              and schema_version >= @schemaVersion
+              and (schema_version >= @schemaVersion or @enabled = false)
               and reader_enabled = false
             returning schema_version, writer_enabled, reader_enabled, updated_at;
             """;
@@ -131,7 +131,7 @@ public sealed partial class PostgresSnapshotStore
             set reader_enabled = @enabled,
                 updated_at = now()
             where schema_name = 'inventory-current-v2'
-              and schema_version >= @schemaVersion
+              and (schema_version >= @schemaVersion or @enabled = false)
             returning schema_version, writer_enabled, reader_enabled, updated_at;
             """;
         AddParameter(command, "enabled", enabled);

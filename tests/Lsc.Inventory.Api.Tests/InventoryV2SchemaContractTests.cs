@@ -89,6 +89,16 @@ public sealed class InventoryV2SchemaContractTests
     }
 
     [Fact]
+    public void State_disable_path_allows_schema_v1_to_be_quiesced_before_an_additive_migration()
+    {
+        var schema = ReadRepositoryFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.InventoryV2Schema.cs");
+        var normalized = Normalize(schema);
+
+        Assert.Contains("schema_version >= @schemaversion or @enabled = false", normalized);
+        Assert.Contains("reader_enabled = false", normalized);
+    }
+
+    [Fact]
     public void PreparationWorkflow_IsManualCommitPinnedIsolatedAndNonDestructive()
     {
         var workflow = Normalize(ReadRepositoryFile(".github/workflows/prepare-inventory-v2-schema.yml"));
