@@ -1,11 +1,14 @@
 name: Diagnose Inventory Scoring
 
+
 on:
   workflow_dispatch:
+
 
 permissions:
   contents: read
   id-token: write
+
 
 env:
   AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
@@ -13,6 +16,7 @@ env:
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
   API_APP: ca-lsc-inventory-api-prod
+
 
 jobs:
   diagnose:
@@ -40,15 +44,20 @@ jobs:
           test -n "$api_fqdn"
           test -n "$inventory_token"
           base="https://${api_fqdn}"
+          failed=0
           for endpoint in /internal/scoring/status '/internal/scoring/runs?take=20'; do
             safe_name="$(printf '%s' "$endpoint" | tr '/?' '__' | tr -cd '[:alnum:]_.-')"
             code="$(curl --silent --show-error --max-time 90 --output "/tmp/${safe_name}.json" --write-out '%{http_code}' --header "Authorization: Bearer $inventory_token" "$base$endpoint")"
             echo "ENDPOINT=$endpoint HTTP_CODE=$code"
+            echo "RESPONSE_BEGIN endpoint=$endpoint"
             cat "/tmp/${safe_name}.json"
-            printf '\n'
+            echo
+            echo "RESPONSE_END endpoint=$endpoint"
             if [ "$code" != 200 ]; then
               echo "READ_ONLY_DIAGNOSTIC_FAILED endpoint=$endpoint http_code=$code" >&2
-              exit 1
+              failed=1
             fi
           done
           unset inventory_token
+          exit "$failed"
+
