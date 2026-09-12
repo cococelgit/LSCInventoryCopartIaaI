@@ -263,6 +263,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
         var snapshot = batch.ToArray();
         batch.Clear();
         var result = await batchWriter.WriteShadowBatchAsync(snapshot, cancellationToken);
+        if (!result.Attempted)
+            throw new InvalidOperationException($"V2 initial-load write was skipped: {result.SkipReason ?? "unknown"}.");
         collect(result);
         logger.LogInformation(
             "V2 initial block flush input={Input} distinct={Distinct} created={Created} updated={Updated} unchanged={Unchanged} media={Media} durationMs={DurationMs} skip={SkipReason}",
