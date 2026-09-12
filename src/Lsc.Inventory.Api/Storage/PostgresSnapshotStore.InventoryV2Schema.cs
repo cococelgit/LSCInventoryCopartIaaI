@@ -246,6 +246,16 @@ public sealed partial class PostgresSnapshotStore
                 existingTables.Add(table);
         }
 
+        var beforeRows = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var table in existingTables)
+        {
+            await using var count = connection.CreateCommand();
+            count.Transaction = transaction;
+            count.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 1800);
+            count.CommandText = $"select count(*) from public.{table};";
+            beforeRows[table] = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
+        }
+
         if (existingTables.Count > 0)
         {
             await using var truncate = connection.CreateCommand();
@@ -256,7 +266,21 @@ public sealed partial class PostgresSnapshotStore
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return new InventoryDataResetResult(existingTables.ToDictionary(table => table, _ => -1L, StringComparer.Ordinal));
+
+        var afterRows = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var table in existingTables)
+        {
+            await using var count = connection.CreateCommand();
+            count.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 1800);
+            count.CommandText = $"select count(*) from public.{table};";
+            afterRows[table] = Convert.ToInt64(await count.ExecuteScalarAsync(cancellationToken));
+        }
+
+        var deletedRows = existingTables.ToDictionary(
+            table => table,
+            table => beforeRows[table] - afterRows[table],
+            StringComparer.Ordinal);
+        return new InventoryDataResetResult(beforeRows, afterRows, deletedRows);
     }
 
     private static string ReadInventoryV2SchemaSql()
@@ -295,4 +319,7 @@ public sealed record InventoryV2ShadowResetResult(
     int TombstoneRows,
     int CheckpointRows);
 
-public sealed record InventoryDataResetResult(IReadOnlyDictionary<string, long> DeletedRows);
+public sealed record InventoryDataResetResult(
+    IReadOnlyDictionary<string, long> BeforeRows,
+    IReadOnlyDictionary<string, long> AfterRows,
+    IReadOnlyDictionary<string, long> DeletedRows);
