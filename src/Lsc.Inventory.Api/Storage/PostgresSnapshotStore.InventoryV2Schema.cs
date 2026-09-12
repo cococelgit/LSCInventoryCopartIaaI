@@ -251,7 +251,7 @@ public sealed partial class PostgresSnapshotStore
             await using var truncate = connection.CreateCommand();
             truncate.Transaction = transaction;
             truncate.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 1800);
-            truncate.CommandText = $"truncate table {string.Join(", ", existingTables.Select(table => $"public.{table}"))} restart identity;";
+            truncate.CommandText = $"truncate table {string.Join(", ", existingTables.Select(table => $"public.{table}"))};";
             await truncate.ExecuteNonQueryAsync(cancellationToken);
         }
 
