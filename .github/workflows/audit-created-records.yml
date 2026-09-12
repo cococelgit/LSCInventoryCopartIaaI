@@ -1,0 +1,76 @@
+name: Audit Created Inventory V2 Records
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Query created records read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          runner_ip="$(curl -fsS https://api.ipify.org)"
+          firewall_rule="allow-created-audit-${GITHUB_RUN_ID}"
+          cleanup() { az postgres flexible-server firewall-rule delete --resource-group "$RESOURCE_GROUP" --server-name psql-lsc-inventory-cu --name "$firewall_rule" --yes --only-show-errors >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          az postgres flexible-server firewall-rule create --resource-group "$RESOURCE_GROUP" --server-name psql-lsc-inventory-cu --name "$firewall_rule" --start-ip-address "$runner_ip" --end-ip-address "$runner_ip" --only-show-errors >/dev/null
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          conn="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require"
+          mkdir -p report
+          psql "$conn" -v ON_ERROR_STOP=1 -At -F '|' -c "
+            with candidates as (
+              select platform, lot_number, lot_key, provider_vehicle_id, provider_lot_id, vin,
+                     year, make, model, auction_at, source_created_at, source_updated_at,
+                     first_seen_at, last_seen_at, created_at, updated_at,
+                     location_city, location_state, facility_id,
+                     count(*) over (partition by nullif(upper(btrim(vin)), '')) as same_vin_count,
+                     count(*) over (partition by platform, lot_number) as same_lot_count
+              from public.inventory_current_v2
+              where created_at >= timestamptz '2026-09-12 23:08:00+00'
+            )
+            select * from candidates order by created_at, platform, lot_number;
+          " > report/created-records.txt
+          psql "$conn" -v ON_ERROR_STOP=1 -At -F '|' -c "
+            select 'TOTAL_ACTIVE|' || count(*) from public.inventory_current_v2 where is_active;
+            select 'TOTAL_BY_PLATFORM|' || platform || '|' || count(*) from public.inventory_current_v2 where is_active group by platform order by platform;
+            select 'CREATED_CANDIDATES|' || count(*) from public.inventory_current_v2 where created_at >= timestamptz '2026-09-12 23:08:00+00';
+            select 'DUPLICATE_VINS|' || count(*) from (
+              select upper(btrim(vin)) from public.inventory_current_v2
+              where is_active and nullif(btrim(vin), '') is not null
+              group by upper(btrim(vin)) having count(*) > 1
+            ) d;
+          " > report/reconciliation-summary.txt
+          cat report/reconciliation-summary.txt
+          cat report/created-records.txt
+          unset PGPASSWORD
+      - name: Upload read-only evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventory-v2-created-reconciliation-${{ github.run_id }}
+          path: report/
+          retention-days: 14
