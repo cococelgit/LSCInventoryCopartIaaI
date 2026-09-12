@@ -101,6 +101,7 @@ create table if not exists inventory_current_v2 (
     actual_cash_value_usd numeric(14,2),
     estimated_repair_cost_usd numeric(14,2),
     location_display text,
+    location_city text,
     location_state text,
     facility_id text,
     facility_office_name text,
@@ -140,6 +141,9 @@ create table if not exists inventory_current_v2 (
     constraint ck_inventory_current_v2_misses check (consecutive_misses >= 0)
 );
 
+alter table inventory_current_v2
+    add column if not exists location_city text;
+
 create unique index if not exists ux_inventory_current_v2_lot_key
     on inventory_current_v2 (lot_key);
 create index if not exists ix_inventory_current_v2_vin
@@ -148,8 +152,8 @@ create index if not exists ix_inventory_current_v2_active_auction
     on inventory_current_v2 (auction_at, platform, lot_number) where is_active;
 create index if not exists ix_inventory_current_v2_active_make_model_year
     on inventory_current_v2 (make, model, year, lot_number) where is_active;
-create index if not exists ix_inventory_current_v2_active_location
-    on inventory_current_v2 (location_state, facility_id, auction_at, lot_number) where is_active;
+create index if not exists ix_inventory_current_v2_active_location_v2
+    on inventory_current_v2 (location_state, location_city, facility_id, auction_at, lot_number) where is_active;
 create index if not exists ix_inventory_current_v2_active_buy_now
     on inventory_current_v2 (buy_now_usd, lot_number)
     where is_active and buy_now_usd is not null;
@@ -266,7 +270,7 @@ create table if not exists inventory_v2_schema_state (
 );
 
 insert into inventory_v2_schema_state (schema_name, schema_version, writer_enabled, reader_enabled)
-values ('inventory-current-v2', 1, false, false)
+values ('inventory-current-v2', 2, false, false)
 on conflict (schema_name) do update set
     schema_version = greatest(inventory_v2_schema_state.schema_version, excluded.schema_version),
     updated_at = now();

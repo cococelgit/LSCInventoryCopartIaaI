@@ -183,6 +183,7 @@ public sealed partial class PostgresSnapshotStore
         AddAny("v2_titles", request.Titles, "latest.title_type");
         AddAny("v2_title_categories", request.TitleCategories, "latest.title_type");
         AddAny("v2_states", request.States, "latest.location_state");
+        AddAny("v2_cities", request.Cities, "latest.location_city");
         AddAny("v2_facilities", request.Facilities, "latest.location_display");
         AddAny("v2_primary_damages", request.PrimaryDamages, "latest.primary_damage");
         AddAny("v2_secondary_damages", request.SecondaryDamages, "latest.secondary_damage");
@@ -321,7 +322,7 @@ public sealed partial class PostgresSnapshotStore
             },
             OdometerInfo = new OdometerInfo { Miles = ReadV2Decimal(r, "odometer_miles"), Kilometers = ReadV2Decimal(r, "odometer_km"), Status = ReadV2String(r, "odometer_status") },
             Facility = new AuctionFacility { Id = ReadV2String(r, "facility_id"), OfficeName = ReadV2String(r, "facility_office_name"), State = ReadV2String(r, "location_state"), Zip = ReadV2String(r, "facility_zip") },
-            Location = new VehicleLocation { Display = ReadV2String(r, "location_display"), State = ReadV2String(r, "location_state"), FacilityId = ReadV2String(r, "facility_id"), SendFrom = ReadV2String(r, "send_from") },
+            Location = new VehicleLocation { Display = ReadV2String(r, "location_display"), City = ReadV2String(r, "location_city"), State = ReadV2String(r, "location_state"), FacilityId = ReadV2String(r, "facility_id"), SendFrom = ReadV2String(r, "send_from") },
             Seller = new AuctionSeller { Name = ReadV2String(r, "seller_name"), RawType = ReadV2String(r, "seller_type"), Type = ReadV2String(r, "seller_type"), Class = ReadV2String(r, "seller_class"), TextClass = ReadV2String(r, "seller_text_class"), ClassificationConfidence = ReadV2Decimal(r, "seller_classification_confidence"), NeedsReview = ReadV2Bool(r, "seller_needs_review"), ClassificationEvidence = ReadV2String(r, "seller_classification_evidence"), TaxonomyVersion = ReadV2String(r, "seller_taxonomy_version") },
             SaleDocument = new SaleDocument { Name = ReadV2String(r, "detailed_title"), IsPending = ReadV2Bool(r, "title_pending"), Group = ReadV2String(r, "title_group"), Export = ReadV2Bool(r, "title_export"), Registration = ReadV2Bool(r, "title_registration"), PageId = ReadV2String(r, "title_page_id") },
             Details = new VehicleDetails

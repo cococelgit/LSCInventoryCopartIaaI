@@ -32,7 +32,7 @@ public sealed partial class PostgresSnapshotStore
         "current_bid_usd", "current_bid_updated_at", "pre_bid_usd", "buy_now_usd", "buy_now_updated_at",
         "final_bid_usd", "final_bid_updated_at", "sale_price_usd", "sale_price_updated_at",
         "provider_estimate_from_usd", "provider_estimate_to_usd", "provider_estimate_text",
-        "actual_cash_value_usd", "estimated_repair_cost_usd", "location_display", "location_state", "facility_id",
+        "actual_cash_value_usd", "estimated_repair_cost_usd", "location_display", "location_city", "location_state", "facility_id",
         "facility_office_name", "facility_zip", "send_from", "lane", "aisle", "media_photos_count",
         "media_has_photos", "media_has_360", "media_has_video", "source_created_at", "source_updated_at",
         "identity_hash", "spec_hash", "condition_hash", "auction_hash", "seller_location_hash", "media_hash",
@@ -298,6 +298,7 @@ public sealed partial class PostgresSnapshotStore
                 nullif(actual_cash_value_usd, '')::numeric(14,2) as actual_cash_value_usd,
                 nullif(estimated_repair_cost_usd, '')::numeric(14,2) as estimated_repair_cost_usd,
                 nullif(location_display, '')::text as location_display,
+                nullif(location_city, '')::text as location_city,
                 nullif(location_state, '')::text as location_state,
                 nullif(facility_id, '')::text as facility_id,
                 nullif(facility_office_name, '')::text as facility_office_name,
@@ -588,6 +589,7 @@ public sealed partial class PostgresSnapshotStore
             ["actual_cash_value_usd"] = InvariantDecimal(vehicle.Details?.SaleInformation?.ActualCashValue),
             ["estimated_repair_cost_usd"] = InvariantDecimal(vehicle.Details?.SaleInformation?.EstimatedRepairCost),
             ["location_display"] = NormalizeText(vehicle.Location?.Display),
+            ["location_city"] = NormalizeText(vehicle.Location?.City),
             ["location_state"] = NormalizeText(vehicle.Location?.State ?? vehicle.Facility?.State),
             ["facility_id"] = NormalizeText(vehicle.Location?.FacilityId ?? vehicle.Facility?.Id),
             ["facility_office_name"] = NormalizeText(vehicle.Facility?.OfficeName),
@@ -609,10 +611,10 @@ public sealed partial class PostgresSnapshotStore
         values["spec_hash"] = StableHash(values, "vehicle_type_id", "vehicle_type", "body_type_id", "body_style", "fuel_id", "fuel_type", "engine_id", "engine", "engine_size_liters", "horsepower", "cylinders", "transmission_id", "transmission", "drive_id", "drive_type", "exterior_color", "manufactured_in", "vehicle_class", "series");
         values["condition_hash"] = StableHash(values, "condition_id", "condition_name", "primary_damage_id", "primary_damage", "secondary_damage_id", "secondary_damage", "loss_type", "run_condition_value", "run_condition_label", "run_condition_class_hint", "has_key", "airbags", "restraint_system", "odometer_miles", "odometer_km", "odometer_status", "title_id", "title_type", "detailed_title_id", "detailed_title", "title_group", "title_pending", "title_export", "title_registration", "title_page_id", "title_brand", "title_notes", "special_note", "announcements");
         values["auction_hash"] = StableHash(values, "auction_state", "lot_status_id", "lot_status", "lot_sub_status", "auction_at", "archived_at", "is_buy_now", "is_timed", "current_bid_usd", "pre_bid_usd", "buy_now_usd", "final_bid_usd", "sale_price_usd", "provider_estimate_from_usd", "provider_estimate_to_usd", "provider_estimate_text", "actual_cash_value_usd", "estimated_repair_cost_usd");
-        values["seller_location_hash"] = StableHash(values, "seller_name", "seller_type_id", "seller_type", "seller_class", "seller_text_class", "seller_is_insurance", "seller_is_rental", "seller_is_credit_company", "seller_classification_confidence", "seller_needs_review", "seller_classification_evidence", "seller_taxonomy_version", "location_display", "location_state", "facility_id", "facility_office_name", "facility_zip", "send_from", "lane", "aisle");
+        values["seller_location_hash"] = StableHash(values, "seller_name", "seller_type_id", "seller_type", "seller_class", "seller_text_class", "seller_is_insurance", "seller_is_rental", "seller_is_credit_company", "seller_classification_confidence", "seller_needs_review", "seller_classification_evidence", "seller_taxonomy_version", "location_display", "location_city", "location_state", "facility_id", "facility_office_name", "facility_zip", "send_from", "lane", "aisle");
         values["media_hash"] = StableHash(media.Select(static item => $"{item.MediaType}\u001f{item.Position}\u001f{item.SourceUrl}\u001f{item.ThumbnailUrl}\u001f{item.LargeUrl}"));
         values["score_input_hash"] = StableHash(values, "year", "make", "model", "vehicle_type", "odometer_miles", "odometer_status", "title_type", "title_group", "primary_damage", "secondary_damage", "loss_type", "run_condition_value", "has_key", "seller_class", "seller_is_insurance", "actual_cash_value_usd", "estimated_repair_cost_usd", "location_state");
-        values["search_hash"] = StableHash(values, "vin", "year", "make", "model", "vehicle_type", "body_style", "fuel_type", "transmission", "drive_type", "exterior_color", "odometer_miles", "title_type", "title_group", "primary_damage", "secondary_damage", "run_condition_value", "seller_name", "seller_type", "seller_class", "auction_state", "auction_at", "lot_status", "lot_sub_status", "current_bid_usd", "buy_now_usd", "location_display", "location_state", "facility_id", "media_has_photos", "media_has_360");
+        values["search_hash"] = StableHash(values, "vin", "year", "make", "model", "vehicle_type", "body_style", "fuel_type", "transmission", "drive_type", "exterior_color", "odometer_miles", "title_type", "title_group", "primary_damage", "secondary_damage", "run_condition_value", "seller_name", "seller_type", "seller_class", "auction_state", "auction_at", "lot_status", "lot_sub_status", "current_bid_usd", "buy_now_usd", "location_display", "location_city", "location_state", "facility_id", "media_has_photos", "media_has_360");
 
         return new PreparedInventoryV2Lot(platform, lotNumber, item.ObservedAt, values, media);
     }

@@ -73,7 +73,7 @@ public static class AuctionVehicleMerger
     };
     private static VehicleLocation? MergeLocation(VehicleLocation? preferred, VehicleLocation? fallback) => preferred is null ? fallback : fallback is null ? preferred : preferred with
     {
-        Display = Text(preferred.Display, fallback.Display), State = Text(preferred.State, fallback.State), FacilityId = Text(preferred.FacilityId, fallback.FacilityId), SendFrom = Text(preferred.SendFrom, fallback.SendFrom)
+        Display = Text(preferred.Display, fallback.Display), City = Text(preferred.City, fallback.City), State = Text(preferred.State, fallback.State), FacilityId = Text(preferred.FacilityId, fallback.FacilityId), SendFrom = Text(preferred.SendFrom, fallback.SendFrom)
     };
     private static MediaInfo? MergeMedia(MediaInfo? preferred, MediaInfo? fallback) => preferred is null ? fallback : fallback is null ? preferred : preferred with
     {

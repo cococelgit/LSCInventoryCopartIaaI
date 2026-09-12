@@ -81,6 +81,7 @@ public static class AuctionsApiCanonicalMapper
             EnumValue(lot, "status"),
             EnumValue(lot, "seller_type"),
             FirstValue(lot, "seller.name", "seller"),
+            LocationValue(lot, "location"),
             flags,
             EnumValue(lot, "title"),
             EnumValue(lot, "detailed_title"),
@@ -97,6 +98,25 @@ public static class AuctionsApiCanonicalMapper
             DateTimeValue(lot, "archived_at"),
             DateTimeValue(lot, "updated_at") ?? DateTimeValue(vehicle, "updated_at"),
             lot.Clone());
+    }
+
+    private static AuctionLocation? LocationValue(JsonElement value, string path)
+    {
+        var raw = At(value, path);
+        if (raw is null || raw.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+
+        var item = raw.Value;
+        return new AuctionLocation
+        {
+            Platform = FirstValue(item, "platform.name", "platform"),
+            FacilityId = FirstValue(item, "facility_id", "branch_id", "id"),
+            Name = FirstValue(item, "name", "branch", "location", "office"),
+            City = FirstValue(item, "city", "city.name"),
+            State = FirstValue(item, "state", "state.code", "state.name"),
+        };
     }
 
     private static AuctionsApiEnumValue? EnumValue(JsonElement value, string path)
@@ -248,6 +268,15 @@ public static class AuctionsApiCanonicalMapper
                 RawType = lot.SellerType?.Name,
                 Type = lot.SellerType?.NormalizedValue,
             },
+            Location = lot.Location is null
+                ? null
+                : new VehicleLocation
+                {
+                    Display = lot.Location.Name ?? lot.Location.City,
+                    City = lot.Location.City,
+                    State = lot.Location.State,
+                    FacilityId = lot.Location.FacilityId,
+                },
             OdometerInfo = lot.OdometerStatus is null ? null : new OdometerInfo { Status = lot.OdometerStatus.Name },
             Auction = new AuctionInfo
             {

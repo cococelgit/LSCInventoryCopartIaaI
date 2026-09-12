@@ -205,6 +205,9 @@ public sealed record VehicleLocation
     [JsonPropertyName("state")]
     public string? State { get; init; }
 
+    [JsonPropertyName("city")]
+    public string? City { get; init; }
+
     [JsonPropertyName("facility_id")]
     [JsonConverter(typeof(StringOrNumberJsonConverter))]
     public string? FacilityId { get; init; }

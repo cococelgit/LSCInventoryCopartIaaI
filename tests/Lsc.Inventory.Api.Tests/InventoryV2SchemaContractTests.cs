@@ -23,7 +23,7 @@ public sealed class InventoryV2SchemaContractTests
 
         Assert.DoesNotContain(" json ", normalized);
         Assert.DoesNotContain("jsonb", normalized);
-        Assert.DoesNotContain("alter table", normalized);
+        Assert.Contains("alter table inventory_current_v2", normalized);
         Assert.DoesNotContain("drop table", normalized);
         Assert.DoesNotContain("truncate", normalized);
         Assert.DoesNotContain("delete from", normalized);
@@ -83,7 +83,7 @@ public sealed class InventoryV2SchemaContractTests
         Assert.Contains("prepareinventoryv2schemaasync", program);
         Assert.Contains("writer_enabled boolean not null default false", migration);
         Assert.Contains("reader_enabled boolean not null default false", migration);
-        Assert.Contains("values ('inventory-current-v2', 1, false, false)", migration);
+        Assert.Contains("values ('inventory-current-v2', 2, false, false)", migration);
         Assert.Contains("select schema_version, writer_enabled, reader_enabled, prepared_at", preparation);
         Assert.Contains("if (writerenabled || readerenabled)", preparation);
     }

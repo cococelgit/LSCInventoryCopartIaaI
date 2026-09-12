@@ -43,6 +43,7 @@ public sealed record AuctionsApiProviderLot(
     AuctionsApiEnumValue? Status,
     AuctionsApiEnumValue? SellerType,
     string? SellerName,
+    AuctionLocation? Location,
     IReadOnlyDictionary<string, bool?> SellerFlags,
     AuctionsApiEnumValue? Title,
     AuctionsApiEnumValue? DetailedTitle,

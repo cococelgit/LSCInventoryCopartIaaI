@@ -60,6 +60,7 @@ public static partial class CanonicalVehicleCleaner
             Location = vehicle.Location is null ? null : vehicle.Location with
             {
                 Display = Compact(vehicle.Location.Display),
+                City = Compact(vehicle.Location.City),
                 State = Upper(vehicle.Location.State),
                 FacilityId = DigitsOrTrimmed(vehicle.Location.FacilityId)
             },

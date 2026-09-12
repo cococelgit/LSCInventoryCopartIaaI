@@ -236,7 +236,8 @@ public sealed record InventorySearchRequest(
     IReadOnlyCollection<string>? TitleCategories = null,
     decimal? BuyNowFrom = null,
     decimal? BuyNowTo = null,
-    IReadOnlyCollection<string>? SellerNames = null);
+    IReadOnlyCollection<string>? SellerNames = null,
+    IReadOnlyCollection<string>? Cities = null);
 
 public sealed record InventorySearchProjectionStatus(
     bool Ready,

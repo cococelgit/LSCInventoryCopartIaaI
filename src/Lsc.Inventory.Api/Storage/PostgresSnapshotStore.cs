@@ -1211,6 +1211,7 @@ public sealed partial class PostgresSnapshotStore(
         AddAny("titles", request.Titles, titleCategory);
         AddAny("title_categories", request.TitleCategories, "latest.title_group");
         AddAny("states", request.States, "latest.location_state");
+        AddAny("cities", request.Cities, "latest.location_city");
         AddAny("facilities", request.Facilities, "latest.location_display");
         AddAny("primary_damages", request.PrimaryDamages, "latest.primary_damage");
         AddAny("secondary_damages", request.SecondaryDamages, "latest.secondary_damage");

@@ -37,6 +37,7 @@ public sealed partial class PostgresSnapshotStore
         new(InventoryFacetsV2Groups.VehicleTypes, "vehicle_type_value", "nullif(btrim(latest.vehicle_type), '')", "facet_vehicle_types"),
         new(InventoryFacetsV2Groups.Titles, "title_value", "nullif(btrim(latest.title_type), '')", "facet_titles"),
         new(InventoryFacetsV2Groups.States, "state_value", "nullif(btrim(latest.location_state), '')", "facet_states"),
+        new(InventoryFacetsV2Groups.Cities, "city_value", "nullif(btrim(latest.location_city), '')", "facet_cities"),
         new(InventoryFacetsV2Groups.Facilities, "facility_value", "nullif(btrim(latest.location_display), '')", "facet_facilities"),
         new(InventoryFacetsV2Groups.PrimaryDamages, "primary_damage_value", "nullif(btrim(latest.primary_damage), '')", "facet_primary_damages"),
         new(InventoryFacetsV2Groups.SecondaryDamages, "secondary_damage_value", "nullif(btrim(latest.secondary_damage), '')", "facet_secondary_damages"),

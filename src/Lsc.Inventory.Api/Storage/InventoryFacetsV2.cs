@@ -13,6 +13,7 @@ public static class InventoryFacetsV2Groups
     public const string VehicleTypes = "vehicleTypes";
     public const string Titles = "titles";
     public const string States = "states";
+    public const string Cities = "cities";
     public const string Facilities = "facilities";
     public const string PrimaryDamages = "primaryDamages";
     public const string SecondaryDamages = "secondaryDamages";
@@ -51,7 +52,7 @@ public static class InventoryFacetsV2Groups
 
     public static readonly IReadOnlySet<string> Categorical = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        Platforms, SellerTypes, Makes, Models, VehicleTypes, Titles, States, Facilities,
+        Platforms, SellerTypes, Makes, Models, VehicleTypes, Titles, States, Cities, Facilities,
         PrimaryDamages, SecondaryDamages, EngineLayouts, Cylinders, Transmissions, Fuels,
         Drives, BodyStyles, Colors, LossTypes, StartCodes, RunConditions, ScoringStatuses
     };
@@ -100,6 +101,7 @@ public static class InventoryFacetsV2Fingerprint
         AppendArray(builder, "vehicleTypes", filters.VehicleTypes);
         AppendArray(builder, "titles", Merge(filters.Titles, filters.TitleCategories));
         AppendArray(builder, "states", filters.States);
+        AppendArray(builder, "cities", filters.Cities);
         AppendArray(builder, "facilities", filters.Facilities);
         AppendArray(builder, "primaryDamages", filters.PrimaryDamages);
         AppendArray(builder, "secondaryDamages", filters.SecondaryDamages);
@@ -191,6 +193,7 @@ public static class InventoryFacetsV2Selections
             InventoryFacetsV2Groups.VehicleTypes => request.VehicleTypes,
             InventoryFacetsV2Groups.Titles => InventoryFacetsV2Fingerprint.Merge(request.Titles, request.TitleCategories),
             InventoryFacetsV2Groups.States => request.States,
+            InventoryFacetsV2Groups.Cities => request.Cities,
             InventoryFacetsV2Groups.Facilities => request.Facilities,
             InventoryFacetsV2Groups.PrimaryDamages => request.PrimaryDamages,
             InventoryFacetsV2Groups.SecondaryDamages => request.SecondaryDamages,

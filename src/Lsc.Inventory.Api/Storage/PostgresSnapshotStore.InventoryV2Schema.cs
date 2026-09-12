@@ -4,7 +4,7 @@ namespace Lsc.Inventory.Api.Storage;
 
 public sealed partial class PostgresSnapshotStore
 {
-    internal const int InventoryV2SchemaVersion = 1;
+    internal const int InventoryV2SchemaVersion = 2;
     internal const string InventoryV2SchemaResourceName = "InventoryV2Schema.sql";
 
     internal static readonly IReadOnlyList<string> InventoryV2OwnedTables =
