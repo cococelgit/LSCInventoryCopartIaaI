@@ -11,6 +11,7 @@ namespace Lsc.Inventory.Api.Storage;
 
 public interface IInventorySnapshotStore
 {
+    Task<SellerReclassificationResult> ApplyVerifiedSellerInsuranceReclassificationAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<Guid> StartSyncRunAsync(InventorySyncRunStart start, CancellationToken cancellationToken);
     Task CompleteSyncRunAsync(Guid runId, InventorySyncRunCompletion completion, CancellationToken cancellationToken);
     Task UpdateSyncRunProgressAsync(Guid runId, InventorySyncRunProgress progress, CancellationToken cancellationToken);
@@ -276,6 +277,13 @@ public sealed record SellerTaxonomyPlatformAudit(
     IReadOnlyList<InventoryFacetValue> SourceClasses,
     IReadOnlyList<InventoryFacetValue> SourceTextClasses,
     IReadOnlyList<InventoryFacetValue> TopSellerNamesMissingSourceType);
+
+public sealed record SellerReclassificationResult(
+    int Candidates,
+    int Updated,
+    IReadOnlyList<string> SellerNames,
+    string TaxonomyVersion,
+    DateTimeOffset AppliedAt);
 
 public sealed record InventorySearchPage(
     int Page,

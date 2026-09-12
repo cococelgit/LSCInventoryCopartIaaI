@@ -1266,6 +1266,17 @@ if (args.Contains("--iaai-auctionsapi-backfill", StringComparer.OrdinalIgnoreCas
     return;
 }
 
+if (args.Contains("--apply-verified-seller-insurance-reclassification", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>();
+    var result = await store.ApplyVerifiedSellerInsuranceReclassificationAsync(CancellationToken.None);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    if (result.Candidates != 648 || result.Updated != 648)
+        Environment.ExitCode = 1;
+    return;
+}
+
 if (args.Contains("--run-once", StringComparer.OrdinalIgnoreCase))
 {
     await using var scope = app.Services.CreateAsyncScope();

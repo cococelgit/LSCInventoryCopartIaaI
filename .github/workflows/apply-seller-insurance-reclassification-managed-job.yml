@@ -1,0 +1,119 @@
+name: Apply Seller Insurance Reclassification Managed Job
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type APPLY_SELLER_INSURANCE_RECLASSIFICATION_MANAGED_JOB_20260912"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: apply-seller-insurance-reclassification-managed-job
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  SOURCE_JOB: job-lsc-copart-auto-prod
+  TEMP_JOB: job-lsc-seller-reclass-${{ github.run_id }}
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify confirmation and paused jobs
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = APPLY_SELLER_INSURANCE_RECLASSIFICATION_MANAGED_JOB_20260912
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            trigger="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$trigger" = Manual
+            test "$active" = 0
+            echo "RECLASSIFICATION_PRECHECK job=$job trigger=$trigger active_executions=$active"
+          done
+
+      - name: Build immutable maintenance image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="inventory-seller-reclass-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "MAINTENANCE_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+
+      - name: Create and run isolated managed-identity job
+        shell: bash
+        run: |
+          set -euo pipefail
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+          cleanup() { az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true; }
+          trap cleanup EXIT
+          cleanup
+          source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
+          args_json='["Lsc.Inventory.Api.dll","--apply-verified-seller-insurance-reclassification"]'
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$MAINTENANCE_IMAGE" --argjson args "$args_json" '
+            .location as $location
+            | .properties.environmentId as $environmentId
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | .properties.configuration as $sourceConfiguration
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
+                | del(.imageType)
+                | .name=$name
+                | .image=$image
+                | .command=["dotnet"]
+                | .args=$args) as $container
+            | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
+                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=900)), template:($sourceTemplate | .containers=[$container])}}')"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+          execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+          test -n "$execution"
+          status=Unknown
+          for _ in $(seq 1 180); do
+            status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+            case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+            sleep 5
+          done
+          replicas="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json)"
+          replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+          container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+          az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 200 --format text | tee "$RUNNER_TEMP/seller-reclass.log"
+          test "$status" = Succeeded
+          grep -q '"Candidates":648' "$RUNNER_TEMP/seller-reclass.log"
+          grep -q '"Updated":648' "$RUNNER_TEMP/seller-reclass.log"
+          cleanup
+          trap - EXIT
