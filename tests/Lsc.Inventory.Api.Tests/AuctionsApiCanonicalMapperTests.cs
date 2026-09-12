@@ -38,6 +38,13 @@ public sealed class AuctionsApiCanonicalMapperTests
         Assert.Equal("sedan", mapped.BodyType!.NormalizedValue);
         Assert.Equal("automatic", mapped.Transmission!.NormalizedValue);
         Assert.Equal("actual", lot.OdometerStatus!.NormalizedValue);
+        var vehicle = Assert.Single(AuctionsApiCanonicalMapper.ToAuctionVehicles(mapped));
+        Assert.Equal("intact", vehicle.VehicleSpecs!.Airbags);
+        Assert.Equal("run_and_drives", vehicle.Condition!.RunCondition!.Value);
+        Assert.Equal("run_and_drives", vehicle.Condition.RunCondition.Label);
+        Assert.Equal("gardena, california", vehicle.Location!.Display);
+        Assert.Equal("gardena", vehicle.Location.City);
+        Assert.Equal("california", vehicle.Location.State);
         Assert.NotNull(mapped.Engine);
         Assert.Equal(4, mapped.Cylinders);
     }

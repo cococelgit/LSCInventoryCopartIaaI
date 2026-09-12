@@ -271,6 +271,7 @@ public static class AuctionsApiCanonicalMapper
                 FuelType = provider.Fuel?.Name,
                 Transmission = provider.Transmission?.Name,
                 DriveType = provider.DriveWheel?.Name,
+                Airbags = lot.Airbags?.Name,
                 Engine = provider.Engine is null ? null : new VehicleEngine { Raw = provider.Engine.Name },
             },
             Condition = new VehicleCondition
@@ -278,7 +279,13 @@ public static class AuctionsApiCanonicalMapper
                 PrimaryDamage = lot.DamageMain?.Name,
                 SecondaryDamage = lot.DamageSecond?.Name,
                 HasKey = lot.HasKey,
-                RunCondition = new RunConditionInfo { Value = lot.Status?.Name, Label = lot.Status?.Name },
+                RunCondition = lot.Condition is null
+                    ? null
+                    : new RunConditionInfo
+                    {
+                        Value = lot.Condition.NormalizedValue,
+                        Label = lot.Condition.Name,
+                    },
             },
             Seller = new AuctionSeller
             {
@@ -290,7 +297,7 @@ public static class AuctionsApiCanonicalMapper
                 ? null
                 : new VehicleLocation
                 {
-                    Display = lot.Location.Name ?? lot.Location.City,
+                    Display = LocationDisplay(lot.Location),
                     City = lot.Location.City,
                     State = lot.Location.State,
                     FacilityId = lot.Location.FacilityId,
@@ -320,6 +327,16 @@ public static class AuctionsApiCanonicalMapper
             Media = MapMedia(lot.Raw, provider.Raw),
             RawSource = provider.Raw,
         }).ToArray();
+    }
+
+    private static string? LocationDisplay(AuctionLocation location)
+    {
+        var city = string.IsNullOrWhiteSpace(location.City) ? null : location.City.Trim();
+        var state = string.IsNullOrWhiteSpace(location.State) ? null : location.State.Trim();
+        if (city is not null && state is not null) return $"{city}, {state}";
+        if (city is not null) return city;
+        if (state is not null) return state;
+        return string.IsNullOrWhiteSpace(location.Name) ? null : location.Name.Trim();
     }
 
     private static MediaInfo? MapMedia(params JsonElement[] rows)

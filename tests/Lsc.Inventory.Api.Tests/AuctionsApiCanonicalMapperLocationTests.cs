@@ -40,7 +40,7 @@ public sealed class AuctionsApiCanonicalMapperLocationTests
 
         Assert.Equal("insurance_company", vehicle.Seller?.Type);
         Assert.Equal("Example Insurance", vehicle.Seller?.Name);
-        Assert.Equal("Miami South", vehicle.Location?.Display);
+        Assert.Equal("Miami, FL", vehicle.Location?.Display);
         Assert.Equal("Miami", vehicle.Location?.City);
         Assert.Equal("FL", vehicle.Location?.State);
         Assert.Equal("55", vehicle.Location?.FacilityId);
