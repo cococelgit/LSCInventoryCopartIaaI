@@ -87,7 +87,15 @@ jobs:
             test -n "$execution"
             status=Unknown
             for _ in $(seq 1 180); do status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"; case "$status" in Succeeded|Failed|Canceled|Stopped) break;; esac; sleep 5; done
-            test "$status" = Succeeded
+            if [ "$status" != "Succeeded" ]; then
+              replica_json="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json || true)"
+              replica="$(echo "$replica_json" | jq -r '.[0].name // empty')"
+              container="$(echo "$replica_json" | jq -r '.[0].properties.containers[0].name // empty')"
+              if [ -n "$replica" ] && [ -n "$container" ]; then
+                az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 200 --format text || true
+              fi
+              exit 1
+            fi
           }
           run_state "$ENABLED"
           echo "Writer state set to $ENABLED; reader remains disabled."
