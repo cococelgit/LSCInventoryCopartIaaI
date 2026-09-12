@@ -191,6 +191,58 @@ public sealed partial class PostgresSnapshotStore
         return new InventoryV2ShadowResetResult(normalizedPlatform, current, media, attempts, tombstones, checkpoints);
     }
 
+    public async Task<InventoryDataResetResult> ResetInventoryDataAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var guard = connection.CreateCommand();
+        guard.Transaction = transaction;
+        guard.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+        guard.CommandText = """
+            select writer_enabled, reader_enabled
+            from inventory_v2_schema_state
+            where schema_name = 'inventory-current-v2'
+            for update;
+            """;
+        await using (var reader = await guard.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new InvalidOperationException("Inventory V2 schema state is missing.");
+            if (reader.GetBoolean(0) || reader.GetBoolean(1))
+                throw new InvalidOperationException("Inventory data reset requires writer_enabled=false and reader_enabled=false.");
+        }
+
+        var tables = new[]
+        {
+            "inventory_media_current_v2", "inventory_sale_attempts_v2", "inventory_tombstones_v2",
+            "inventory_sync_checkpoints_v2", "inventory_current_v2",
+            "inventory_search_facet_counts", "inventory_search_projection_state", "inventory_search_current",
+            "inventory_vehicle_scoring_queue", "inventory_vehicle_score_results", "inventory_vehicle_score_current", "inventory_vehicle_scoring_runs",
+            "inventory_lot_lifecycle", "auction_lot_versions", "auction_lots", "eligibility_decisions",
+            "inventory_sync_run_events", "inventory_execution_run_metrics", "inventory_sync_runs", "inventory_sync_leases",
+            "provider_usage_snapshots", "copart_snapshot_manifests", "auctions_api_import_jobs", "iaai_national_cycle_observations"
+        };
+        var deleted = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var table in tables)
+        {
+            await using var exists = connection.CreateCommand();
+            exists.Transaction = transaction;
+            exists.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            exists.CommandText = "select to_regclass(@qualified) is not null;";
+            AddParameter(exists, "qualified", $"public.{table}");
+            if (!Convert.ToBoolean(await exists.ExecuteScalarAsync(cancellationToken))) continue;
+
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            command.CommandText = $"delete from public.{table};";
+            deleted[table] = await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new InventoryDataResetResult(deleted);
+    }
+
     private static string ReadInventoryV2SchemaSql()
     {
         using var stream = typeof(PostgresSnapshotStore).Assembly.GetManifestResourceStream(InventoryV2SchemaResourceName)
@@ -226,3 +278,5 @@ public sealed record InventoryV2ShadowResetResult(
     int SaleAttemptRows,
     int TombstoneRows,
     int CheckpointRows);
+
+public sealed record InventoryDataResetResult(IReadOnlyDictionary<string, long> DeletedRows);
