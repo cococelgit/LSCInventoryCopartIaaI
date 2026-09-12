@@ -197,7 +197,7 @@ public sealed partial class PostgresSnapshotStore
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var guard = connection.CreateCommand();
         guard.Transaction = transaction;
-        guard.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+        guard.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 1800);
         guard.CommandText = """
             select writer_enabled, reader_enabled
             from inventory_v2_schema_state
@@ -246,7 +246,7 @@ public sealed partial class PostgresSnapshotStore
 
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 1800);
             command.CommandText = $"delete from public.{table};";
             deleted[table] = await command.ExecuteNonQueryAsync(cancellationToken);
         }
