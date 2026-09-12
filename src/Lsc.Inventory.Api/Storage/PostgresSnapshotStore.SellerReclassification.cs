@@ -80,7 +80,8 @@ public sealed partial class PostgresSnapshotStore
                     from public.inventory_current_v2 v
                     join seller_reclassification_targets t on lower(btrim(v.seller_name)) = t.seller_name_key
                     where v.is_active and lower(btrim(v.platform)) = 'copart'
-                      and lower(coalesce(v.seller_type, '')) in ('unknown', 'unclassified', 'other');
+                      and v.seller_type is null
+                      and v.seller_class is null;
                     """;
                 candidateCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken));
             }
@@ -109,7 +110,8 @@ public sealed partial class PostgresSnapshotStore
                     from seller_reclassification_targets t
                     where v.is_active and lower(btrim(v.platform)) = 'copart'
                       and lower(btrim(v.seller_name)) = t.seller_name_key
-                      and lower(coalesce(v.seller_type, '')) in ('unknown', 'unclassified', 'other');
+                      and v.seller_type is null
+                      and v.seller_class is null;
                     """;
                 updated = await updateCommand.ExecuteNonQueryAsync(cancellationToken);
             }
