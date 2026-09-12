@@ -1,0 +1,57 @@
+name: Promote Latest Scoring API Traffic
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type PROMOTE_SCORING_API_TRAFFIC"
+        required: true
+        type: string
+      expected_image:
+        description: "Exact deployed API image to receive traffic"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify latest revision and promote traffic only
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_IMAGE: ${{ inputs.expected_image }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "PROMOTE_SCORING_API_TRAFFIC"
+          json="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" -o json)"
+          latest="$(echo "$json" | jq -r '.properties.latestRevisionName')"
+          image="$(echo "$json" | jq -r '.properties.template.containers[0].image')"
+          test -n "$latest" && test "$latest" != "null"
+          test "$image" = "$EXPECTED_IMAGE"
+          state="$(az containerapp revision list --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query "[?name=='$latest'].properties.runningState | [0]" -o tsv)"
+          test "$state" = "Running"
+          az containerapp ingress traffic set --resource-group "$RESOURCE_GROUP" --name "$API_APP" --revision-weight "$latest=100" --only-show-errors
+          final="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" -o json)"
+          test "$(echo "$final" | jq -r '.properties.configuration.ingress.traffic[] | select(.revisionName=="'"$latest"'") | .weight')" = "100"
+          echo "Promoted revision: $latest"
+          echo "Image: $image"
+          echo "Previous revisions remain available for rollback; no job or environment flags were changed."
