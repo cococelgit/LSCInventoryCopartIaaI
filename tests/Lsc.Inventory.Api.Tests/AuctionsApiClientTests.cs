@@ -38,6 +38,19 @@ public sealed class AuctionsApiClientTests
     }
 
     [Fact]
+    public async Task Adds_the_documented_sale_date_from_filter_to_active_inventory_requests()
+    {
+        var handler = new CapturingHandler("{\"data\":[],\"meta\":{\"current_page\":1}}");
+        var client = CreateClient(handler, enabled: true);
+        var cutoff = new DateTimeOffset(2026, 9, 11, 0, 0, 0, TimeSpan.FromHours(-4));
+
+        await client.GetChangedLotsAsync(new AuctionsApiWindowRequest(3, null, 2, 1000, cutoff), CancellationToken.None);
+
+        Assert.Equal(1, handler.Requests);
+        Assert.Equal("/api/cars?domain_id=3&page=2&per_page=1000&sale_date_from=2026-09-11T04%3A00%3A00Z", handler.LastRequest!.RequestUri!.PathAndQuery);
+    }
+
+    [Fact]
     public async Task Builds_a_directed_iaai_lot_request_with_documented_parameters()
     {
         var handler = new CapturingHandler("{\"data\":{\"lot\":\"12345678\"},\"meta\":{}}" );

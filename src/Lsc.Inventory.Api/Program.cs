@@ -1162,10 +1162,18 @@ if (args.Contains("--auctionsapi-v2-initial-block", StringComparer.OrdinalIgnore
     var startPage = startPageIndex >= 0 && startPageIndex + 1 < args.Length && int.TryParse(args[startPageIndex + 1], out var parsedStartPage)
         ? Math.Max(1, parsedStartPage)
         : 1;
+    var saleDateFromIndex = Array.FindIndex(args, argument => string.Equals(argument, "--sale-date-from", StringComparison.OrdinalIgnoreCase));
+    DateTimeOffset? saleDateFrom = null;
+    if (saleDateFromIndex >= 0 && saleDateFromIndex + 1 < args.Length)
+    {
+        if (!DateTimeOffset.TryParse(args[saleDateFromIndex + 1], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsedSaleDateFrom))
+            throw new ArgumentException("--sale-date-from must be a valid ISO-8601 timestamp.");
+        saleDateFrom = parsedSaleDateFrom.ToUniversalTime();
+    }
     var persist = args.Contains("--write", StringComparer.OrdinalIgnoreCase);
     await using var scope = app.Services.CreateAsyncScope();
     var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiV2InitialLoadProcessor>();
-    var result = await processor.RunAsync(platform, maximum, persist, CancellationToken.None, startPage);
+    var result = await processor.RunAsync(platform, maximum, persist, CancellationToken.None, startPage, saleDateFrom: saleDateFrom);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
     if (result.Failures.Count > 0) Environment.ExitCode = 1;
     return;

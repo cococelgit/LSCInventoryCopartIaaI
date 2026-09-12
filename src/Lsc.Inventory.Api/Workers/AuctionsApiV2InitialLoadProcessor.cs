@@ -49,7 +49,8 @@ public interface IAuctionsApiV2InitialLoadProcessor
         bool persist,
         CancellationToken cancellationToken,
         int startPage = 1,
-        Guid? requestedRunId = null);
+        Guid? requestedRunId = null,
+        DateTimeOffset? saleDateFrom = null);
 }
 
 /// <summary>
@@ -72,7 +73,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
         bool persist,
         CancellationToken cancellationToken,
         int startPage = 1,
-        Guid? requestedRunId = null)
+        Guid? requestedRunId = null,
+        DateTimeOffset? saleDateFrom = null)
     {
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (normalizedPlatform is not ("copart" or "iaai"))
@@ -145,7 +147,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     DomainId(normalizedPlatform),
                     null,
                     page,
-                    Math.Min(Math.Max(1, _options.PageSize), remaining));
+                    Math.Min(Math.Max(1, _options.PageSize), remaining),
+                    saleDateFrom);
                 var response = await client.GetChangedLotsAsync(request, cancellationToken);
                 requests++;
                 pages++;

@@ -21,7 +21,8 @@ public sealed record AuctionsApiWindowRequest(
     int DomainId,
     int? Minutes,
     int Page = 1,
-    int? PerPage = null);
+    int? PerPage = null,
+    DateTimeOffset? SaleDateFrom = null);
 
 public sealed record AuctionsApiPage(JsonElement Data, JsonElement Meta, int? NextPage = null);
 
@@ -78,6 +79,7 @@ public sealed class AuctionsApiClient(
                 ["minutes"] = request.Minutes?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["page"] = request.Page.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["per_page"] = perPage.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["sale_date_from"] = request.SaleDateFrom?.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
             }
             : new Dictionary<string, string?>(explicitQuery);
         var uri = QueryHelpers.AddQueryString(path, query);
