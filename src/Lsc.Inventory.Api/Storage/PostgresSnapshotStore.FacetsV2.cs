@@ -54,7 +54,7 @@ public sealed partial class PostgresSnapshotStore
         new(InventoryFacetsV2Groups.ScoringStatuses, "scoring_status_value", "nullif(btrim(score.status), '')", "facet_scoring_statuses")
     ];
 
-    private static string SqlSellerTypeTaxonomy(string expression) => $"nullif(btrim({expression}), '')";
+    private static string SqlSellerTypeTaxonomy(string expression) => $"coalesce(nullif(btrim({expression}), ''), 'unknown')";
 
     private static string PublicRunConditionSql(string alias) => $"nullif(btrim({alias}.run_condition_value), '')";
 
@@ -372,7 +372,7 @@ public sealed partial class PostgresSnapshotStore
         {
             valueExpressions.Add("latest.platform as seller_platform_value");
             valueExpressions.Add("latest.seller_name as seller_name_value");
-            valueExpressions.Add("latest.seller_type as seller_category_value");
+            valueExpressions.Add($"{SqlSellerTypeTaxonomy("latest.seller_type")} as seller_category_value");
             valueExpressions.Add("coalesce(latest.seller_classification_confidence, 0.35) as seller_confidence_value");
             valueExpressions.Add("coalesce(latest.seller_needs_review, true) as seller_needs_review_value");
         }
@@ -414,7 +414,7 @@ public sealed partial class PostgresSnapshotStore
                        )::text,
                        count(*)::int, null::numeric, null::numeric, null::timestamptz, null::timestamptz
                 from base
-                where {sellerExceptPredicate} and base.seller_name_value is not null
+                where {sellerExceptPredicate}
                 group by base.seller_category_value, base.seller_name_value, base.seller_platform_value, base.seller_confidence_value, base.seller_needs_review_value
                 order by count(*) desc, base.seller_category_value, base.seller_name_value
                 limit @facet_seller_detail_limit)

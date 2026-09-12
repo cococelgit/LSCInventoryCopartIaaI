@@ -142,6 +142,8 @@ public sealed class InventoryFacetsV2Tests
         Assert.Contains("matches_sellertypes", sql);
         Assert.Contains("as make_value", sql);
         Assert.Contains("as seller_type_value", sql);
+        Assert.Contains("coalesce(nullif(btrim(latest.seller_type), ''), 'unknown')", sql);
+        Assert.DoesNotContain("base.seller_name_value is not null", FacetBranch(sql, InventoryFacetsV2Groups.SellerTypes));
         Assert.DoesNotContain("as model_value", sql);
         Assert.DoesNotContain("as facility_value", sql);
         Assert.DoesNotContain("as secondary_damage_value", sql);
