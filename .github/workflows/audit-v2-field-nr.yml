@@ -63,7 +63,7 @@ jobs:
               total_rows:length,
               by_platform: (group_by(.platform) | map({platform: .[0].platform, total:length, odometer:summary(.;"odometer"), odometer_km:summary(.;"odometerKm"), odometer_status:summary(.;"odometerStatus"), has_key:summary(.;"hasKey"), run_condition:summary(.;"runCondition"), damage:summary(.;"damage"), state:summary(.;"state"), seller_name:summary(.;"sellerName"), seller_type:summary(.;"sellerType"), auction_at:summary(.;"auctionAt"), vin:summary(.;"vin")})),
               overall: {odometer:summary(.;"odometer"), odometer_km:summary(.;"odometerKm"), odometer_status:summary(.;"odometerStatus"), has_key:summary(.;"hasKey"), run_condition:summary(.;"runCondition"), damage:summary(.;"damage"), state:summary(.;"state"), seller_name:summary(.;"sellerName"), seller_type:summary(.;"sellerType"), auction_at:summary(.;"auctionAt"), vin:summary(.;"vin")},
-              samples: ($rows | map(select(.odometer != null or .hasKey != null)) | .[0:10] | map({lot,platform,odometer,odometerKm,odometerStatus,hasKey,runCondition,damage,state,sellerName,sellerType}))
+              samples: (map(select(.odometer != null or .hasKey != null)) | .[0:10] | map({lot,platform,odometer,odometerKm,odometerStatus,hasKey,runCondition,damage,state,sellerName,sellerType}))
             }
           ' report/all.ndjson > report/field-coverage.json
           jq . report/field-coverage.json
