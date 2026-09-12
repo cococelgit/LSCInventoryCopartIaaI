@@ -5,6 +5,12 @@ using Microsoft.Extensions.Options;
 
 namespace Lsc.Inventory.Api.Workers;
 
+public sealed record EligibilityReasonBreakdown(
+    string Code,
+    string Name,
+    int Count,
+    IReadOnlyList<string> SampleLots);
+
 public sealed record AuctionsApiV2InitialLoadResult(
     Guid RunId,
     string Platform,
@@ -22,7 +28,9 @@ public sealed record AuctionsApiV2InitialLoadResult(
     int PagesProcessed,
     int RequestsIssued,
     long DurationMs,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures,
+    IReadOnlyList<EligibilityReasonBreakdown> DiscardReasonBreakdown,
+    IReadOnlyList<EligibilityReasonBreakdown> QuarantineReasonBreakdown);
 
 public interface IAuctionsApiV2InitialLoadProcessor
 {
@@ -101,6 +109,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
         }
 
         var failures = new List<string>();
+        var discardReasons = new Dictionary<string, (string Name, int Count, List<string> SampleLots)>(StringComparer.Ordinal);
+        var quarantineReasons = new Dictionary<string, (string Name, int Count, List<string> SampleLots)>(StringComparer.Ordinal);
         var sourceRowsMapped = 0;
         var observed = 0;
         var eligible = 0;
@@ -142,6 +152,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     var eligibility = Eligibility.AuctionEligibilityEvaluator.Evaluate(vehicle, DateTimeOffset.UtcNow);
                     if (!eligibility.LoadToSystem)
                     {
+                        var target = eligibility.Decision == "CUARENTENA" ? quarantineReasons : discardReasons;
+                        CollectReasonBreakdown(target, eligibility.DiscardReasons, vehicle.LotNumber);
                         if (eligibility.Decision == "CUARENTENA") quarantined++;
                         else discarded++;
                         continue;
@@ -200,7 +212,7 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     false),
                 CancellationToken.None);
 
-            return new(runId, normalizedPlatform, persist, maximumLots, sourceRowsMapped, observed, eligible, discarded, quarantined, created, updated, unchanged, mediaRowsWritten, pages, requests, stopwatch.ElapsedMilliseconds, failures);
+            return new(runId, normalizedPlatform, persist, maximumLots, sourceRowsMapped, observed, eligible, discarded, quarantined, created, updated, unchanged, mediaRowsWritten, pages, requests, stopwatch.ElapsedMilliseconds, failures, ToBreakdown(discardReasons), ToBreakdown(quarantineReasons));
         }
         catch (OperationCanceledException)
         {
@@ -250,4 +262,26 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
     }
 
     private static int DomainId(string platform) => platform == "iaai" ? 1 : 3;
+
+    private static void CollectReasonBreakdown(
+        Dictionary<string, (string Name, int Count, List<string> SampleLots)> target,
+        IReadOnlyList<EligibilityReason> reasons,
+        string? lotNumber)
+    {
+        foreach (var reason in reasons)
+        {
+            if (!target.TryGetValue(reason.Code, out var aggregate))
+                aggregate = (reason.Name, 0, new List<string>());
+            aggregate.Count++;
+            if (!string.IsNullOrWhiteSpace(lotNumber) && aggregate.SampleLots.Count < 10 && !aggregate.SampleLots.Contains(lotNumber, StringComparer.Ordinal))
+                aggregate.SampleLots.Add(lotNumber);
+            target[reason.Code] = aggregate;
+        }
+    }
+
+    private static IReadOnlyList<EligibilityReasonBreakdown> ToBreakdown(
+        Dictionary<string, (string Name, int Count, List<string> SampleLots)> source) =>
+        source.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new EligibilityReasonBreakdown(pair.Key, pair.Value.Name, pair.Value.Count, pair.Value.SampleLots))
+            .ToArray();
 }

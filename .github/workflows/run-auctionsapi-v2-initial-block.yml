@@ -148,5 +148,7 @@ jobs:
           grep -q '"RunId"' "$RUNNER_TEMP/v2-initial-block.log"
           grep -q '"Platform"' "$RUNNER_TEMP/v2-initial-block.log"
           grep -q '"RequestedMaximum"' "$RUNNER_TEMP/v2-initial-block.log"
+          grep -q '"DiscardReasonBreakdown"' "$RUNNER_TEMP/v2-initial-block.log"
+          grep -q '"QuarantineReasonBreakdown"' "$RUNNER_TEMP/v2-initial-block.log"
           cleanup
           trap - EXIT

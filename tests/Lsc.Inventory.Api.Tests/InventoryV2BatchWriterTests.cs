@@ -97,6 +97,9 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("Math.Clamp(parsedMaximum, 1, 1_000)", program, StringComparison.Ordinal);
         Assert.Contains("--start-page", program, StringComparison.Ordinal);
         Assert.Contains("--write", program, StringComparison.Ordinal);
+        Assert.Contains("DiscardReasonBreakdown", loader, StringComparison.Ordinal);
+        Assert.Contains("QuarantineReasonBreakdown", loader, StringComparison.Ordinal);
+        Assert.Contains("CollectReasonBreakdown", loader, StringComparison.Ordinal);
     }
 
     [Fact]
