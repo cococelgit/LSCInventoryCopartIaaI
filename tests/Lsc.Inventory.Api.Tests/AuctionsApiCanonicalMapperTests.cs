@@ -40,8 +40,8 @@ public sealed class AuctionsApiCanonicalMapperTests
         Assert.Equal("actual", lot.OdometerStatus!.NormalizedValue);
         var vehicle = Assert.Single(AuctionsApiCanonicalMapper.ToAuctionVehicles(mapped));
         Assert.Equal("intact", vehicle.VehicleSpecs!.Airbags);
-        Assert.Equal("run_and_drives", vehicle.Condition!.RunCondition!.Value);
-        Assert.Equal("run_and_drives", vehicle.Condition.RunCondition.Label);
+        Assert.Equal("RUNS AND DRIVES", vehicle.Condition!.RunCondition!.Value);
+        Assert.Equal("RUNS AND DRIVES", vehicle.Condition.RunCondition.Label);
         Assert.Equal("gardena, california", vehicle.Location!.Display);
         Assert.Equal("gardena", vehicle.Location.City);
         Assert.Equal("california", vehicle.Location.State);
@@ -205,6 +205,34 @@ public sealed class AuctionsApiCanonicalMapperTests
         Assert.Equal("actual", provider!.Lots.Single().OdometerStatus!.NormalizedValue);
         Assert.NotNull(provider.Lots.Single().DamageMain);
         Assert.Equal(legacy.LotNumber, canonical.LotNumber);
+    }
+
+    [Theory]
+    [InlineData("copart", "copart_cars_page1.json")]
+    [InlineData("iaai", "iaai_cars_page1.json")]
+    public void Canonical_preserves_old_mapper_critical_fields(string platform, string fixture)
+    {
+        var payload = ReadFixture(fixture);
+        var row = payload.GetProperty("data")[0];
+        var legacy = AuctionsApiIncrementalSyncProcessor.MapRows(new[] { row }, platform).Single();
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(row, platform);
+        var canonical = AuctionsApiCanonicalMapper.ToAuctionVehicles(provider!).Single();
+
+        Assert.Equal(legacy.FuelType, canonical.FuelType);
+        Assert.Equal(legacy.Transmission, canonical.Transmission);
+        Assert.Equal(legacy.DriveType, canonical.DriveType);
+        Assert.Equal(legacy.Title, canonical.Title);
+        Assert.Equal(legacy.SaleDocument?.Name, canonical.SaleDocument?.Name);
+        Assert.Equal(legacy.Condition?.HasKey, canonical.Condition?.HasKey);
+        Assert.Equal(legacy.VehicleSpecs?.Airbags, canonical.VehicleSpecs?.Airbags);
+        Assert.Equal(legacy.Condition?.RunCondition?.Value, canonical.Condition?.RunCondition?.Value);
+        Assert.Equal(legacy.OdometerInfo?.Miles, canonical.OdometerInfo?.Miles);
+        Assert.Equal(legacy.OdometerInfo?.Status, canonical.OdometerInfo?.Status);
+        Assert.Equal(legacy.Auction?.IsTimed, canonical.Auction?.IsTimed);
+        Assert.Equal(legacy.Pricing?.CurrentBidUsd, canonical.Pricing?.CurrentBidUsd);
+        Assert.Equal(legacy.Pricing?.BuyNowUsd, canonical.Pricing?.BuyNowUsd);
+        Assert.NotNull(canonical.Location?.City);
+        Assert.NotNull(canonical.Location?.State);
     }
 
     private static JsonElement ReadFixture(string name)

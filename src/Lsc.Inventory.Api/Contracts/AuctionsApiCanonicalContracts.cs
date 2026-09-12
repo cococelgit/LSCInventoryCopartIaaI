@@ -62,7 +62,9 @@ public sealed record AuctionsApiProviderLot(
     JsonElement Raw,
     decimal? OdometerMiles = null,
     decimal? OdometerKilometers = null,
-    bool? HasKey = null);
+    bool? HasKey = null,
+    bool? IsTimed = null,
+    string? RestraintSystem = null);
 
 public sealed record AuctionsApiProviderVehicle(
     string Platform,
@@ -80,7 +82,8 @@ public sealed record AuctionsApiProviderVehicle(
     AuctionsApiEnumValue? Transmission,
     AuctionsApiEnumValue? DriveWheel,
     IReadOnlyList<AuctionsApiProviderLot> Lots,
-    JsonElement Raw);
+    JsonElement Raw,
+    string? Color = null);
 
 public sealed record AuctionsApiArchivedOutcome(
     string Platform,

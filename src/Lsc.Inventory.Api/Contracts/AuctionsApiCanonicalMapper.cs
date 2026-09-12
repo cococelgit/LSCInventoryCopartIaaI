@@ -41,7 +41,8 @@ public static class AuctionsApiCanonicalMapper
             EnumValue(row, "transmission"),
             EnumValue(row, "drive_wheel"),
             lots,
-            row.Clone());
+            row.Clone(),
+            FirstValue(row, "color.name", "color"));
     }
 
     public static AuctionsApiArchivedOutcome? MapArchived(JsonElement row, string platform)
@@ -100,7 +101,9 @@ public static class AuctionsApiCanonicalMapper
             lot.Clone(),
             DecimalValue(lot, "odometer.miles", "odometer.mi", "odometer"),
             DecimalValue(lot, "odometer.km", "odometer.kilometers"),
-            BoolValue(lot, "keys_available", "key_available", "keys"));
+            BoolValue(lot, "keys_available", "key_available", "keys"),
+            BoolValue(lot, "is_timed_auction", "is_timed"),
+            FirstValue(lot, "vehicle_specs.restraint_system", "restraint_system", "restraint"));
     }
 
     private static AuctionLocation? LocationValue(JsonElement value, string path)
@@ -265,6 +268,16 @@ public static class AuctionsApiCanonicalMapper
             Make = provider.Manufacturer?.Name,
             Model = provider.Model?.Name,
             VehicleType = provider.VehicleType?.Name,
+            Color = provider.Color,
+            FuelType = provider.Fuel?.Name,
+            Transmission = provider.Transmission?.Name,
+            DriveType = provider.DriveWheel?.Name,
+            Title = lot.Title?.Name ?? lot.DetailedTitle?.Name,
+            SaleDocument = new SaleDocument
+            {
+                Name = lot.Title?.Name ?? lot.DetailedTitle?.Name,
+                IsPending = false,
+            },
             VehicleSpecs = new VehicleSpecs
             {
                 BodyStyle = provider.BodyType?.Name,
@@ -272,6 +285,7 @@ public static class AuctionsApiCanonicalMapper
                 Transmission = provider.Transmission?.Name,
                 DriveType = provider.DriveWheel?.Name,
                 Airbags = lot.Airbags?.Name,
+                RestraintSystem = lot.RestraintSystem,
                 Engine = provider.Engine is null ? null : new VehicleEngine { Raw = provider.Engine.Name },
             },
             Condition = new VehicleCondition
@@ -283,8 +297,8 @@ public static class AuctionsApiCanonicalMapper
                     ? null
                     : new RunConditionInfo
                     {
-                        Value = lot.Condition.NormalizedValue,
-                        Label = lot.Condition.Name,
+                        Value = RunConditionDisplay(lot.Condition),
+                        Label = RunConditionDisplay(lot.Condition),
                     },
             },
             Seller = new AuctionSeller
@@ -317,6 +331,7 @@ public static class AuctionsApiCanonicalMapper
                 LotStatus = lot.Status?.Name,
                 AuctionAt = lot.SaleDate?.Value,
                 IsBuyNow = lot.BuyNow?.Value is not null,
+                IsTimed = lot.IsTimed,
             },
             Pricing = new PricingInfo
             {
@@ -327,6 +342,17 @@ public static class AuctionsApiCanonicalMapper
             Media = MapMedia(lot.Raw, provider.Raw),
             RawSource = provider.Raw,
         }).ToArray();
+    }
+
+    private static string? RunConditionDisplay(AuctionsApiEnumValue condition)
+    {
+        return condition.NormalizedValue switch
+        {
+            "run_and_drives" or "runs_and_drives" => "RUNS AND DRIVES",
+            "starts" => "STARTS",
+            "stationary" => "STATIONARY",
+            _ => condition.Name ?? condition.NormalizedValue,
+        };
     }
 
     private static string? LocationDisplay(AuctionLocation location)
