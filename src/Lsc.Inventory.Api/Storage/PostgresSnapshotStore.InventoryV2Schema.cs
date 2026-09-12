@@ -341,7 +341,7 @@ public sealed partial class PostgresSnapshotStore
             await using var verify = connection.CreateCommand();
             verify.Transaction = transaction;
             verify.CommandTimeout = _persistence.CommandTimeoutSeconds;
-            verify.CommandText = "select to_regclass(@qualified);";
+            verify.CommandText = "select to_regclass(@qualified)::text;";
             AddParameter(verify, "qualified", $"public.{table}");
             if (await verify.ExecuteScalarAsync(cancellationToken) is not null and not DBNull) remaining.Add(table);
         }
