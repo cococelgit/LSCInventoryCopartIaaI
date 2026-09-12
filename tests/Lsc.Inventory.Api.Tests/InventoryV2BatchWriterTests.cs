@@ -83,6 +83,23 @@ public sealed class InventoryV2BatchWriterTests
     }
 
     [Fact]
+    public void Initial_loader_is_bounded_resumable_and_v2_only()
+    {
+        var loader = File.ReadAllText(FindRepositoryFile("Workers/AuctionsApiV2InitialLoadProcessor.cs"));
+        var program = File.ReadAllText(FindRepositoryFile("Program.cs"));
+
+        Assert.Contains("maximumLots is < 1 or > 1000", loader, StringComparison.Ordinal);
+        Assert.Contains("startPage", loader, StringComparison.Ordinal);
+        Assert.Contains("TryAcquireLeaseAsync", loader, StringComparison.Ordinal);
+        Assert.Contains("WriteShadowBatchAsync", loader, StringComparison.Ordinal);
+        Assert.DoesNotContain("PersistAsync(", loader, StringComparison.Ordinal);
+        Assert.Contains("--auctionsapi-v2-initial-block", program, StringComparison.Ordinal);
+        Assert.Contains("Math.Clamp(parsedMaximum, 1, 1_000)", program, StringComparison.Ordinal);
+        Assert.Contains("--start-page", program, StringComparison.Ordinal);
+        Assert.Contains("--write", program, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Source_uses_copy_merge_and_non_blocking_shadow_contract()
     {
         var store = File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Batch.cs"));

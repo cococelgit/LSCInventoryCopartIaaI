@@ -126,7 +126,9 @@ builder.Services.AddScoped<ICanonicalInventoryIngestionPipeline, CanonicalInvent
 builder.Services.AddScoped<IAuctionsApiIncrementalSyncProcessor, AuctionsApiIncrementalSyncProcessor>();
 builder.Services.AddScoped<IAuctionsApiIaaIConditionBackfillProcessor, AuctionsApiIaaIConditionBackfillProcessor>();
 builder.Services.AddScoped<IAuctionsApiCopartCatchUpProcessor, AuctionsApiCopartCatchUpProcessor>();
-builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
+    builder.Services.AddScoped<IAuctionsApiInitialImportProcessor, AuctionsApiInitialImportProcessor>();
+    builder.Services.AddScoped<IAuctionsApiV2InitialLoadProcessor, AuctionsApiV2InitialLoadProcessor>();
+
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddSingleton<IAuctionsApiImportJobStore>(sp =>
@@ -1143,6 +1145,29 @@ if (args.Contains("--inventory-v2-reset-shadow", StringComparer.OrdinalIgnoreCas
         ?? throw new InvalidOperationException("Inventory V2 shadow reset requires Persistence:Provider=Postgres.");
     var result = await store.ResetInventoryV2ShadowAsync(platform, CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    return;
+}
+
+if (args.Contains("--auctionsapi-v2-initial-block", StringComparer.OrdinalIgnoreCase))
+{
+    var platformIndex = Array.FindIndex(args, argument => string.Equals(argument, "--platform", StringComparison.OrdinalIgnoreCase));
+    var platform = platformIndex >= 0 && platformIndex + 1 < args.Length ? args[platformIndex + 1].Trim().ToLowerInvariant() : string.Empty;
+    if (platform is not ("copart" or "iaai"))
+        throw new ArgumentException("--auctionsapi-v2-initial-block requires --platform copart|iaai.");
+    var maximumIndex = Array.FindIndex(args, argument => string.Equals(argument, "--maximum", StringComparison.OrdinalIgnoreCase));
+    var maximum = maximumIndex >= 0 && maximumIndex + 1 < args.Length && int.TryParse(args[maximumIndex + 1], out var parsedMaximum)
+        ? Math.Clamp(parsedMaximum, 1, 1_000)
+        : 1_000;
+    var startPageIndex = Array.FindIndex(args, argument => string.Equals(argument, "--start-page", StringComparison.OrdinalIgnoreCase));
+    var startPage = startPageIndex >= 0 && startPageIndex + 1 < args.Length && int.TryParse(args[startPageIndex + 1], out var parsedStartPage)
+        ? Math.Max(1, parsedStartPage)
+        : 1;
+    var persist = args.Contains("--write", StringComparer.OrdinalIgnoreCase);
+    await using var scope = app.Services.CreateAsyncScope();
+    var processor = scope.ServiceProvider.GetRequiredService<IAuctionsApiV2InitialLoadProcessor>();
+    var result = await processor.RunAsync(platform, maximum, persist, CancellationToken.None, startPage);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result));
+    if (result.Failures.Count > 0) Environment.ExitCode = 1;
     return;
 }
 
