@@ -208,8 +208,20 @@ public sealed partial class PostgresSnapshotStore
         {
             if (!await reader.ReadAsync(cancellationToken))
                 throw new InvalidOperationException("Inventory V2 schema state is missing.");
-            if (reader.GetBoolean(0) || reader.GetBoolean(1))
-                throw new InvalidOperationException("Inventory data reset requires writer_enabled=false and reader_enabled=false.");
+        }
+
+        await using (var disable = connection.CreateCommand())
+        {
+            disable.Transaction = transaction;
+            disable.CommandTimeout = _persistence.CommandTimeoutSeconds;
+            disable.CommandText = """
+                update inventory_v2_schema_state
+                set writer_enabled = false,
+                    reader_enabled = false,
+                    updated_at = now()
+                where schema_name = 'inventory-current-v2';
+                """;
+            await disable.ExecuteNonQueryAsync(cancellationToken);
         }
 
         var tables = new[]
