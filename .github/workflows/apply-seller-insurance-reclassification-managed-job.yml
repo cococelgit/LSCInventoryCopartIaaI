@@ -7,6 +7,12 @@ on:
         description: "Type APPLY_SELLER_INSURANCE_RECLASSIFICATION_MANAGED_JOB_20260912"
         required: true
         type: string
+      operation:
+        description: "Use PREFLIGHT for read-only diagnosis or APPLY after exact preflight review"
+        required: true
+        default: PREFLIGHT
+        type: choice
+        options: [PREFLIGHT, APPLY]
 
 permissions:
   contents: read
@@ -74,7 +80,11 @@ jobs:
           trap cleanup EXIT
           cleanup
           source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
-          args_json='["Lsc.Inventory.Api.dll","--apply-verified-seller-insurance-reclassification"]'
+          if [[ "${{ inputs.operation }}" == "PREFLIGHT" ]]; then
+            args_json='["Lsc.Inventory.Api.dll","--seller-insurance-reclassification-preflight"]'
+          else
+            args_json='["Lsc.Inventory.Api.dll","--apply-verified-seller-insurance-reclassification"]'
+          fi
           body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$MAINTENANCE_IMAGE" --argjson args "$args_json" '
             .location as $location
             | .properties.environmentId as $environmentId
@@ -113,7 +123,11 @@ jobs:
           container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
           az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 200 --format text | tee "$RUNNER_TEMP/seller-reclass.log"
           test "$status" = Succeeded
-          grep -q '"Candidates":648' "$RUNNER_TEMP/seller-reclass.log"
-          grep -q '"Updated":648' "$RUNNER_TEMP/seller-reclass.log"
+          if [[ "${{ inputs.operation }}" == "PREFLIGHT" ]]; then
+            grep -q 'state farm insurance' "$RUNNER_TEMP/seller-reclass.log" || true
+          else
+            grep -q '"Candidates":648' "$RUNNER_TEMP/seller-reclass.log"
+            grep -q '"Updated":648' "$RUNNER_TEMP/seller-reclass.log"
+          fi
           cleanup
           trap - EXIT

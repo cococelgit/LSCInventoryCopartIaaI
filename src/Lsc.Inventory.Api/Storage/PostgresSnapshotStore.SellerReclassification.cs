@@ -4,23 +4,54 @@ namespace Lsc.Inventory.Api.Storage;
 
 public sealed partial class PostgresSnapshotStore
 {
+    private static readonly IReadOnlyDictionary<string, decimal> VerifiedSellerInsuranceNames = new Dictionary<string, decimal>(StringComparer.Ordinal)
+    {
+        ["state farm insurance"] = 0.95000m,
+        ["usaa"] = 0.95000m,
+        ["geico"] = 0.95000m,
+        ["progressive"] = 0.95000m,
+        ["bristol west insurance"] = 0.95000m,
+        ["farmers insurance"] = 0.95000m,
+        ["farmers insurance company of flemington"] = 0.95000m,
+        ["csaa"] = 0.90000m,
+        ["aig insurance"] = 0.95000m
+    };
+
     private const string VerifiedSellerInsuranceTaxonomyVersion = "seller_taxonomy_ai_verified_v1_20260912";
+
+    public async Task<IReadOnlyList<SellerReclassificationPreflightRow>> GetVerifiedSellerInsurancePreflightAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select lower(btrim(v.seller_name)) as seller_name,
+                   lower(btrim(v.platform)) as platform,
+                   v.seller_type,
+                   v.seller_class,
+                   count(*)::int as row_count
+            from public.inventory_current_v2 v
+            where v.is_active
+              and lower(btrim(v.seller_name)) = any(@seller_names)
+            group by lower(btrim(v.seller_name)), lower(btrim(v.platform)), v.seller_type, v.seller_class
+            order by seller_name, platform, v.seller_type nulls first, v.seller_class nulls first;
+            """;
+        command.Parameters.AddWithValue("seller_names", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text, VerifiedSellerInsuranceNames.Keys.ToArray());
+        var rows = new List<SellerReclassificationPreflightRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            rows.Add(new SellerReclassificationPreflightRow(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetInt32(4)));
+        }
+        return rows;
+    }
 
     public async Task<SellerReclassificationResult> ApplyVerifiedSellerInsuranceReclassificationAsync(CancellationToken cancellationToken)
     {
-        var verifiedNames = new Dictionary<string, decimal>(StringComparer.Ordinal)
-        {
-            ["state farm insurance"] = 0.95000m,
-            ["usaa"] = 0.95000m,
-            ["geico"] = 0.95000m,
-            ["progressive"] = 0.95000m,
-            ["bristol west insurance"] = 0.95000m,
-            ["farmers insurance"] = 0.95000m,
-            ["farmers insurance company of flemington"] = 0.95000m,
-            ["csaa"] = 0.90000m,
-            ["aig insurance"] = 0.95000m
-        };
-
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
@@ -29,7 +60,7 @@ public sealed partial class PostgresSnapshotStore
             {
                 seedCommand.Transaction = transaction;
                 seedCommand.CommandText = "create temporary table seller_reclassification_targets (seller_name_key text primary key, confidence numeric(6,5) not null) on commit drop;";
-                foreach (var (name, confidence) in verifiedNames)
+                foreach (var (name, confidence) in VerifiedSellerInsuranceNames)
                 {
                     var nameParameter = seedCommand.Parameters.Add($"name_{seedCommand.Parameters.Count}", NpgsqlTypes.NpgsqlDbType.Text);
                     nameParameter.Value = name;
@@ -49,7 +80,7 @@ public sealed partial class PostgresSnapshotStore
                     from public.inventory_current_v2 v
                     join seller_reclassification_targets t on lower(btrim(v.seller_name)) = t.seller_name_key
                     where v.is_active and lower(btrim(v.platform)) = 'copart'
-                      and lower(coalesce(v.seller_type, '')) = 'unknown';
+                      and lower(coalesce(v.seller_type, '')) in ('unknown', 'unclassified', 'other');
                     """;
                 candidateCount = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken));
             }
@@ -78,7 +109,7 @@ public sealed partial class PostgresSnapshotStore
                     from seller_reclassification_targets t
                     where v.is_active and lower(btrim(v.platform)) = 'copart'
                       and lower(btrim(v.seller_name)) = t.seller_name_key
-                      and lower(coalesce(v.seller_type, '')) = 'unknown';
+                      and lower(coalesce(v.seller_type, '')) in ('unknown', 'unclassified', 'other');
                     """;
                 updated = await updateCommand.ExecuteNonQueryAsync(cancellationToken);
             }
@@ -89,7 +120,7 @@ public sealed partial class PostgresSnapshotStore
             return new SellerReclassificationResult(
                 candidateCount,
                 updated,
-                verifiedNames.Keys.ToArray(),
+                VerifiedSellerInsuranceNames.Keys.ToArray(),
                 VerifiedSellerInsuranceTaxonomyVersion,
                 DateTimeOffset.UtcNow);
         }
