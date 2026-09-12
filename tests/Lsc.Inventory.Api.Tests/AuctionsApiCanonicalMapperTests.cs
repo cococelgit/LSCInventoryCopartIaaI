@@ -235,6 +235,30 @@ public sealed class AuctionsApiCanonicalMapperTests
         Assert.NotNull(canonical.Location?.State);
     }
 
+    [Fact]
+    public void Maps_engine_size_horsepower_and_cylinders_from_provider_payload()
+    {
+        using var document = JsonDocument.Parse("""
+        {
+          "year": 2010,
+          "manufacturer": { "name": "Infiniti" },
+          "model": { "name": "QX56" },
+          "engine": { "name": "V8", "size_l": 5.6, "hp": 400 },
+          "cylinders": 8,
+          "fuel": { "name": "gasoline" },
+          "lots": [{ "lot": "65360076", "vin": "5N3ZA0NE5AN906029", "sale_date": "2026-09-18T14:30:00Z" }]
+        }
+        """);
+
+        var provider = AuctionsApiCanonicalMapper.MapVehicle(document.RootElement, "copart");
+        var vehicle = Assert.Single(AuctionsApiCanonicalMapper.ToAuctionVehicles(provider!));
+
+        Assert.Equal("V8", vehicle.VehicleSpecs!.Engine!.Layout);
+        Assert.Equal("5.6", vehicle.VehicleSpecs.Engine.SizeLiters);
+        Assert.Equal(400m, vehicle.VehicleSpecs.Engine.Horsepower);
+        Assert.Equal("8", vehicle.Details!.VehicleDescription!.Cylinders);
+    }
+
     private static JsonElement ReadFixture(string name)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", name);

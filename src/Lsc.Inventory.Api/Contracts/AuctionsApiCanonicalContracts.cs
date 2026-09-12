@@ -83,7 +83,9 @@ public sealed record AuctionsApiProviderVehicle(
     AuctionsApiEnumValue? DriveWheel,
     IReadOnlyList<AuctionsApiProviderLot> Lots,
     JsonElement Raw,
-    string? Color = null);
+    string? Color = null,
+    decimal? EngineSizeLiters = null,
+    decimal? Horsepower = null);
 
 public sealed record AuctionsApiArchivedOutcome(
     string Platform,

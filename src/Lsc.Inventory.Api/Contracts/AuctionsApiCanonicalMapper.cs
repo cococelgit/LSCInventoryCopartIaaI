@@ -42,7 +42,9 @@ public static class AuctionsApiCanonicalMapper
             EnumValue(row, "drive_wheel"),
             lots,
             row.Clone(),
-            FirstValue(row, "color.name", "color"));
+            FirstValue(row, "color.name", "color"),
+            DecimalValue(row, "engine.size_l", "engine.size_liters", "engine.liters", "engine_size_l", "engine_size_liters"),
+            DecimalValue(row, "engine.hp", "engine.horsepower", "horsepower", "hp"));
     }
 
     public static AuctionsApiArchivedOutcome? MapArchived(JsonElement row, string platform)
@@ -286,7 +288,22 @@ public static class AuctionsApiCanonicalMapper
                 DriveType = provider.DriveWheel?.Name,
                 Airbags = lot.Airbags?.Name,
                 RestraintSystem = lot.RestraintSystem,
-                Engine = provider.Engine is null ? null : new VehicleEngine { Raw = provider.Engine.Name },
+                Engine = provider.Engine is null && !provider.EngineSizeLiters.HasValue && !provider.Horsepower.HasValue
+                    ? null
+                    : new VehicleEngine
+                    {
+                        SizeLiters = provider.EngineSizeLiters?.ToString(CultureInfo.InvariantCulture),
+                        Horsepower = provider.Horsepower,
+                        Layout = provider.Engine?.Name,
+                        Raw = provider.Engine?.Name,
+                    },
+            },
+            Details = new VehicleDetails
+            {
+                VehicleDescription = new VehicleDescriptionDetails
+                {
+                    Cylinders = provider.Cylinders?.ToString(CultureInfo.InvariantCulture),
+                },
             },
             Condition = new VehicleCondition
             {
