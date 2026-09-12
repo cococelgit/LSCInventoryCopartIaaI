@@ -46,8 +46,8 @@ jobs:
               -o "/tmp/page-${page}.json"
             current_total="$(jq -r '.total' "/tmp/page-${page}.json")"
             [ "$total" -eq 0 ] && total="$current_total"
-            jq -c '.items[]' "/tmp/page-${page}.json" >> report/all.ndjson
-            count="$(jq '.items | length' "/tmp/page-${page}.json")"
+            jq -c '.vehicles[]' "/tmp/page-${page}.json" >> report/all.ndjson
+            count="$(jq '.vehicles | length' "/tmp/page-${page}.json")"
             echo "PAGE=$page COUNT=$count TOTAL=$current_total"
             [ "$count" -eq 0 ] && break
             [ "$((page * 100))" -ge "$current_total" ] && break
