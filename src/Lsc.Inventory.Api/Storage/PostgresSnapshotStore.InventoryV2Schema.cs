@@ -228,9 +228,9 @@ public sealed partial class PostgresSnapshotStore
         {
             "inventory_media_current_v2", "inventory_sale_attempts_v2", "inventory_tombstones_v2",
             "inventory_sync_checkpoints_v2", "inventory_current_v2",
-            "inventory_search_facet_counts", "inventory_search_projection_state", "inventory_search_current",
+            "inventory_search_facet_counts", "inventory_search_projection_state",
             "inventory_vehicle_scoring_queue", "inventory_vehicle_score_results", "inventory_vehicle_score_current", "inventory_vehicle_scoring_runs",
-            "inventory_lot_lifecycle", "auction_lot_versions", "auction_lots", "eligibility_decisions",
+            "inventory_lot_lifecycle", "eligibility_decisions",
             "inventory_sync_run_events", "inventory_execution_run_metrics", "inventory_sync_runs", "inventory_sync_leases",
             "provider_usage_snapshots", "copart_snapshot_manifests", "auctions_api_import_jobs", "iaai_national_cycle_observations"
         };

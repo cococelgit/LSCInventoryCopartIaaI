@@ -257,30 +257,6 @@ public sealed class IaaINationalSyncProcessorTests
         Assert.All(events.Items, item => Assert.StartsWith("*************4352", item.VinMasked));
     }
 
-    [Fact]
-    public async Task Rebuilds_the_search_projection_idempotently_and_reports_its_row_count()
-    {
-        var store = new InMemorySnapshotStore();
-        var observedAt = DateTimeOffset.UtcNow;
-        await store.PersistAsync(new AuctionVehicle
-        {
-            Platform = "iaai",
-            LotNumber = "projection-1",
-            Year = 2024,
-            Make = "Ford",
-            Model = "F-150",
-        }, observedAt, CancellationToken.None);
-
-        var first = await store.RebuildSearchProjectionAsync(CancellationToken.None);
-        var second = await store.RebuildSearchProjectionAsync(CancellationToken.None);
-
-        Assert.True(first.Ready);
-        Assert.Equal(1, first.Rows);
-        Assert.True(second.Ready);
-        Assert.Equal(first.Rows, second.Rows);
-        Assert.NotNull(second.FacetsRefreshedAt);
-    }
-
     private static IaaINationalSyncProcessor CreateProcessor(IApibaraClient client, InMemorySnapshotStore store, IOptions<IaaINationalOptions> options) => new(
         client,
         store,

@@ -140,13 +140,9 @@ else
 }
 builder.Services.AddHostedService<AuctionsApiImportBackgroundWorker>();
 builder.Services.AddScoped<IInventoryScoringProcessor, InventoryScoringProcessor>();
-builder.Services.AddSingleton<IInventorySearchProjectionRebuildRunner, InventorySearchProjectionRebuildRunner>();
-builder.Services.AddSingleton<ISearchProjectionRebuildCoordinator, SearchProjectionRebuildCoordinator>();
+// Legacy V1 search-projection services removed; V2 readers are authoritative.
 builder.Services.AddHostedService<InventorySyncWorker>();
-if (builder.Configuration.GetValue<bool>("SearchProjection:WarmupOnStartup"))
-{
-    builder.Services.AddHostedService<SearchProjectionWarmupWorker>();
-}
+// V1 search-projection warmup removed; Inventory V2 is authoritative.
 
 var app = builder.Build();
 var inventoryReadToken = builder.Configuration["InventoryApi:Token"] ?? Environment.GetEnvironmentVariable("INVENTORY_API_TOKEN");
@@ -869,29 +865,7 @@ app.MapGet("/internal/executions/{runId:guid}/events", async (HttpContext contex
     return Results.Ok(await store.GetExecutionEventsAsync(runId, page ?? 1, pageSize ?? 50, cancellationToken));
 });
 
-app.MapPost("/internal/search-projection/rebuild", (HttpContext context, ISearchProjectionRebuildCoordinator coordinator) =>
-{
-    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
-    var request = coordinator.RequestRebuild();
-    return request.Accepted
-        ? Results.Accepted("/internal/search-projection/status", request)
-        : Results.Conflict(request);
-});
-
-app.MapGet("/internal/search-projection/status", async (HttpContext context, IInventorySnapshotStore store, ISearchProjectionRebuildCoordinator coordinator, CancellationToken cancellationToken) =>
-{
-    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
-    var projection = await store.GetSearchProjectionStatusAsync(cancellationToken);
-    return Results.Ok(new
-    {
-        projection.Ready,
-        projection.Rows,
-        projection.GeneratedAt,
-        projection.FacetsRefreshedAt,
-        projection.Duration,
-        rebuild = coordinator.GetStatus()
-    });
-});
+// Legacy V1 search-projection endpoints removed.
 
 app.MapGet("/internal/scoring/status", async (HttpContext context, IInventorySnapshotStore store, CancellationToken cancellationToken) =>
 {

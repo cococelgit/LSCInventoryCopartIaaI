@@ -56,7 +56,7 @@ public sealed partial class PostgresSnapshotStore
                        row_number() over (
                            partition by current.platform
                            order by current.observed_at asc, current.lot_key asc) as platform_position
-                from inventory_search_current current
+                from inventory_current_v2 current
                 left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
                 left join inventory_vehicle_scoring_queue queue on queue.lot_key = current.lot_key
                 where current.is_active
@@ -281,7 +281,7 @@ public sealed partial class PostgresSnapshotStore
         command.CommandText = """
             with active_inventory as (
                 select lot_key, lower(coalesce(platform, 'unknown')) as platform, observed_at
-                from inventory_search_current
+                from inventory_current_v2
                 where is_active
             )
             select active.platform,
@@ -336,7 +336,7 @@ public sealed partial class PostgresSnapshotStore
               on result.lot_key = current.lot_key
              and result.policy_version = current.policy_version
              and result.input_hash = current.input_hash
-            join inventory_search_current inventory on inventory.lot_key = current.lot_key
+            join inventory_current_v2 inventory on inventory.lot_key = current.lot_key
             where inventory.lot_number = @lot_number and inventory.is_active
             order by current.scored_at desc
             limit 1;
@@ -432,20 +432,7 @@ public sealed partial class PostgresSnapshotStore
 
     private async Task<StoredVehicleSnapshot?> GetScoringSnapshotAsync(string lotKey, CancellationToken cancellationToken)
     {
-        await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
-            select lot_key, observed_at, payload::text
-            from inventory_search_current
-            where lot_key = @lot_key and is_active;
-            """;
-        AddParameter(command, "lot_key", lotKey);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken)) return null;
-        var rawJson = reader.GetString(2);
-        var vehicle = DeserializeStoredVehicle(rawJson, reader.GetString(0), CreateStoredVehicleJsonOptions());
-        return vehicle is null ? null : new StoredVehicleSnapshot(reader.GetString(0), reader.GetFieldValue<DateTimeOffset>(1), vehicle, rawJson);
+        return await GetByLotKeyInventoryV2Async(lotKey, cancellationToken);
     }
 
     private async Task PersistScoringResultAsync(LscVehicleScoringResult outcome, DateTimeOffset sourceObservedAt, CancellationToken cancellationToken)

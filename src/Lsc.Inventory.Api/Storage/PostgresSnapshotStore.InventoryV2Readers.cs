@@ -92,6 +92,50 @@ public sealed partial class PostgresSnapshotStore
         return rows.Select(ToStoredInventoryV2Snapshot).ToArray();
     }
 
+    private async Task<StoredVehicleSnapshot?> GetByLotKeyInventoryV2Async(string lotKey, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
+                   score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
+                   score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
+                   score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
+            from inventory_current_v2 latest
+            left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
+            where latest.lot_key = @lot_key and latest.is_active
+            limit 1;
+            """;
+        AddParameter(command, "lot_key", lotKey);
+        var rows = await ReadInventoryV2RowsAsync(command, cancellationToken);
+        if (rows.Count == 0) return null;
+        await AttachInventoryV2MediaAsync(connection, rows, cancellationToken);
+        return ToStoredInventoryV2Snapshot(rows[0]);
+    }
+
+    private async Task<StoredVehicleSnapshot?> GetByLotInventoryV2Async(string lotNumber, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
+                   score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
+                   score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
+                   score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
+            from inventory_current_v2 latest
+            left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
+            where latest.lot_number = @lot_number and latest.is_active
+            limit 1;
+            """;
+        AddParameter(command, "lot_number", lotNumber.Trim());
+        var rows = await ReadInventoryV2RowsAsync(command, cancellationToken);
+        if (rows.Count == 0) return null;
+        await AttachInventoryV2MediaAsync(connection, rows, cancellationToken);
+        return ToStoredInventoryV2Snapshot(rows[0]);
+    }
+
     private async Task<StoredVehicleSnapshot?> GetByPlatformAndLotInventoryV2Async(string platform, string lotNumber, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);

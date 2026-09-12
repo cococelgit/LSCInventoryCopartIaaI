@@ -23,7 +23,8 @@ public sealed class InventoryV2TypedReaderContractTests
         var store = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.cs"));
         var facets = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.FacetsV2.cs"));
 
-        Assert.Contains("if (_inventoryV2.ReaderEnabled)", store, StringComparison.Ordinal);
+        Assert.DoesNotContain("if (_inventoryV2.ReaderEnabled)", store, StringComparison.Ordinal);
+        Assert.Contains("EnsureInventoryV2SchemaAsync", store, StringComparison.Ordinal);
         Assert.Contains("IsInventoryV2ReaderEnabledAsync", store, StringComparison.Ordinal);
         Assert.Contains("return await SearchInventoryV2Async", store, StringComparison.Ordinal);
         Assert.Contains("return await GetByPlatformAndLotInventoryV2Async", store, StringComparison.Ordinal);

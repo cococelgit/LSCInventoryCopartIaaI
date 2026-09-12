@@ -69,9 +69,9 @@ public sealed class BuyNowRangeFilterTests
         var facets = File.ReadAllText(Path.Combine(root, "src", "Lsc.Inventory.Api", "Storage", "PostgresSnapshotStore.FacetsV2.cs"));
         var program = File.ReadAllText(Path.Combine(root, "src", "Lsc.Inventory.Api", "Program.cs"));
 
-        Assert.True(Count(postgres, "latest.buy_now_usd >= @buy_now_from") >= 2);
-        Assert.True(Count(postgres, "latest.buy_now_usd <= @buy_now_to") >= 2);
-        Assert.True(Count(postgres, "latest.buy_now_usd > 0") >= 2);
+        Assert.True(Count(postgres, "latest.buy_now_usd >= @buy_now_from") >= 1);
+        Assert.True(Count(postgres, "latest.buy_now_usd <= @buy_now_to") >= 1);
+        Assert.True(Count(postgres, "latest.buy_now_usd > 0") >= 1);
         Assert.Contains("latest.buy_now_usd >= @facet_buy_now_from", facets);
         Assert.Contains("latest.buy_now_usd <= @facet_buy_now_to", facets);
         Assert.Contains("latest.buy_now_usd > 0", facets);

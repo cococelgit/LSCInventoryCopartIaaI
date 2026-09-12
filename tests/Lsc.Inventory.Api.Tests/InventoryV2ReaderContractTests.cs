@@ -10,11 +10,8 @@ public sealed class InventoryV2ReaderContractTests
     {
         var defaults = new InventoryV2Options();
         Assert.False(defaults.ReaderEnabled);
-        Assert.True(defaults.LegacyReadFallbackEnabled);
-
-        var strict = new InventoryV2Options { ReaderEnabled = true, LegacyReadFallbackEnabled = false };
+        var strict = new InventoryV2Options { ReaderEnabled = true };
         Assert.True(strict.ReaderEnabled);
-        Assert.False(strict.LegacyReadFallbackEnabled);
 
         var schema = File.ReadAllText(FindRepositoryRootFile("infra/sql/20260911_inventory_v2_schema.sql"));
         var requiredColumns = new[]
@@ -40,17 +37,16 @@ public sealed class InventoryV2ReaderContractTests
     }
 
     [Fact]
-    public void Legacy_fallback_is_explicit_in_operational_paths()
+    public void V2_only_operational_paths_do_not_reference_legacy_fallback()
     {
         var store = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.cs"));
         var facets = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.FacetsV2.cs"));
-        var warmup = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Workers/SearchProjectionWarmupWorker.cs"));
+        var program = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Program.cs"));
 
-        Assert.Contains("LegacyReadFallbackEnabled", store, StringComparison.Ordinal);
-        Assert.Contains("LegacyReadFallbackEnabled", facets, StringComparison.Ordinal);
-        Assert.Contains("LegacyReadFallbackEnabled", warmup, StringComparison.Ordinal);
-        Assert.Contains("Inventory V2 reader is required", store, StringComparison.Ordinal);
-        Assert.Contains("warmup skipped", warmup, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("LegacyReadFallbackEnabled", store, StringComparison.Ordinal);
+        Assert.DoesNotContain("LegacyReadFallbackEnabled", facets, StringComparison.Ordinal);
+        Assert.DoesNotContain("SearchProjectionWarmupWorker", program, StringComparison.Ordinal);
+        Assert.DoesNotContain("SearchProjectionRebuildCoordinator", program, StringComparison.Ordinal);
     }
 
     [Fact]

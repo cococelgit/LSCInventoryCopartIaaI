@@ -15,15 +15,11 @@ public sealed class TitleTaxonomyGateContractTests
     }
 
     [Fact]
-    public void Serializes_shared_facet_rebuilds_and_handles_concurrent_keys()
+    public void Legacy_facet_rebuild_implementation_is_removed()
     {
         var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));
-        var refreshStart = source.IndexOf("private async Task RefreshSearchFacetsAsync", StringComparison.Ordinal);
-        var refreshEnd = source.IndexOf("private async Task RefreshSearchProjectionStatisticsIfReadyAsync", refreshStart, StringComparison.Ordinal);
-        var refresh = source[refreshStart..refreshEnd];
-
-        Assert.Contains("pg_advisory_xact_lock", refresh, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("on conflict (facet_key, facet_value) do update", refresh, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("RefreshSearchFacetsAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("inventory_search_current", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -31,10 +27,10 @@ public sealed class TitleTaxonomyGateContractTests
     {
         var source = File.ReadAllText(FindRepositoryFile("PostgresSnapshotStore.cs"));
         var coverageStart = source.IndexOf("GetCopartTitleTaxonomyCoverageAsync", StringComparison.Ordinal);
-        var coverageEnd = source.IndexOf("private async Task RefreshSearchFacetsAsync", coverageStart, StringComparison.Ordinal);
+        var coverageEnd = source.IndexOf("private async Task EnsureEligibilitySchemaAsync", coverageStart, StringComparison.Ordinal);
         var coverage = source[coverageStart..coverageEnd];
 
-        Assert.Contains("from inventory_search_current", coverage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("from inventory_current_v2", coverage, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("where is_active", coverage, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("auction_lot_versions", coverage, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("distinct on", coverage, StringComparison.OrdinalIgnoreCase);

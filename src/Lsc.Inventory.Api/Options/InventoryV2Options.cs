@@ -18,12 +18,6 @@ public sealed class InventoryV2Options
     /// </summary>
     public bool ReaderEnabled { get; init; }
 
-    /// <summary>
-    /// Keeps the legacy V1 read path available only as an explicit emergency rollback.
-    /// Set false after the V2 reader has passed its production observation window.
-    /// </summary>
-    public bool LegacyReadFallbackEnabled { get; init; } = true;
-
     [Range(100, 2000)]
     public int BatchSize { get; init; } = 1000;
 }

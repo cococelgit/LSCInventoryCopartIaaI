@@ -33,7 +33,6 @@ public interface IInventorySnapshotStore
     Task<InventorySearchProjectionStatus> GetSearchProjectionStatusAsync(CancellationToken cancellationToken);
     Task<CopartTitleTaxonomyCoverage> GetCopartTitleTaxonomyCoverageAsync(CancellationToken cancellationToken);
     Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken);
-    Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken);
     Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
@@ -1143,13 +1142,6 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             active.LongCount(row => !string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Name) && string.IsNullOrWhiteSpace(row.Vehicle.Seller?.Type)),
             platforms,
             DateTimeOffset.UtcNow));
-    }
-
-    public Task<InventorySearchProjectionStatus> RebuildSearchProjectionAsync(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var generatedAt = _snapshots.Count == 0 ? (DateTimeOffset?)null : _snapshots.Values.Max(snapshot => snapshot.ObservedAt);
-        return Task.FromResult(new InventorySearchProjectionStatus(true, _snapshots.Count, generatedAt, DateTimeOffset.UtcNow, TimeSpan.Zero));
     }
 
     public Task<InventorySearchProjectionStatus> GetSearchProjectionStatusAsync(CancellationToken cancellationToken)

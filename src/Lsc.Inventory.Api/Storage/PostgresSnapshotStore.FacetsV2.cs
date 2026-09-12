@@ -53,6 +53,10 @@ public sealed partial class PostgresSnapshotStore
         new(InventoryFacetsV2Groups.ScoringStatuses, "scoring_status_value", "nullif(btrim(score.status), '')", "facet_scoring_statuses")
     ];
 
+    private static string SqlSellerTypeTaxonomy(string expression) => $"nullif(btrim({expression}), '')";
+
+    private static string PublicRunConditionSql(string alias) => $"nullif(btrim({alias}.run_condition_value), '')";
+
     private static readonly IReadOnlyList<FacetsV2RangeSpec> FacetsV2RangeSpecs =
     [
         new(InventoryFacetsV2Groups.Year, "year_value", "year_value", "latest.year::numeric", "latest.year::numeric"),
@@ -68,20 +72,9 @@ public sealed partial class PostgresSnapshotStore
     public async Task<InventoryFacetsV2Response> GetInventoryFacetsV2Async(InventoryFacetsV2Request request, CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
-        if (!_inventoryV2.ReaderEnabled && !_inventoryV2.LegacyReadFallbackEnabled)
-            throw new InvalidOperationException("Inventory V2 reader is required; legacy V1 facets fallback is disabled.");
-        if (_inventoryV2.ReaderEnabled)
-        {
-            await EnsureInventoryV2SchemaAsync(cancellationToken);
-            if (!await IsInventoryV2ReaderEnabledAsync(cancellationToken))
-                throw new InvalidOperationException("Inventory V2 facets require both writer and reader state to be enabled.");
-        }
-        else
-        {
-            await EnsureSearchProjectionSchemaAsync(cancellationToken);
-            if (!await IsSearchProjectionReadyAsync(cancellationToken))
-                throw new InvalidOperationException("Facets V2 requires the inventory_search_current projection to be ready.");
-        }
+        await EnsureInventoryV2SchemaAsync(cancellationToken);
+        if (!await IsInventoryV2ReaderEnabledAsync(cancellationToken))
+            throw new InvalidOperationException("Inventory V2 facets require both writer and reader state to be enabled.");
 
         var requested = InventoryFacetsV2Groups.NormalizeRequested(request.RequestedFacets);
         var filters = request.Filters with
@@ -324,21 +317,16 @@ public sealed partial class PostgresSnapshotStore
     {
         await using var command = connection.CreateCommand();
         command.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
-        command.CommandText = _inventoryV2.ReaderEnabled ? """
+        command.CommandText = """
             select reader_enabled and writer_enabled, updated_at,
                    concat(schema_name, ':v2:', extract(epoch from updated_at)::numeric(20, 6)::text)
             from inventory_v2_schema_state
             where schema_name = 'inventory-current-v2' and schema_version >= @schema_version;
-            """ : """
-            select is_ready, coalesce(generated_at, updated_at),
-                   concat(projection_name, ':', row_count::text, ':', extract(epoch from coalesce(generated_at, updated_at))::numeric(20, 6)::text)
-            from inventory_search_projection_state
-            where projection_name = 'inventory-current-v1';
             """;
-        if (_inventoryV2.ReaderEnabled) AddParameter(command, "schema_version", InventoryV2SchemaVersion);
+        AddParameter(command, "schema_version", InventoryV2SchemaVersion);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
-            return new FacetsV2ProjectionVersion(false, DateTimeOffset.UtcNow, "inventory-current-v1:missing");
+            return new FacetsV2ProjectionVersion(false, DateTimeOffset.UtcNow, "inventory-current-v2:missing");
         return new FacetsV2ProjectionVersion(reader.GetBoolean(0), reader.GetFieldValue<DateTimeOffset>(1), reader.GetString(2));
     }
 
@@ -468,7 +456,7 @@ public sealed partial class PostgresSnapshotStore
         if (valueExpressions.Count == 0 && matchExpressions.Count == 0)
             valueExpressions.Add("1 as facet_row");
 
-        var latestSource = _inventoryV2.ReaderEnabled ? """
+        const string latestSource = """
             (select current.*,
                     current.engine as engine_layout,
                     current.cylinders::text as cylinders,
@@ -482,8 +470,6 @@ public sealed partial class PostgresSnapshotStore
                     (current.title_type = 'SPECIAL') as is_special_title
              from inventory_current_v2 current
              where current.is_active) latest
-            """ : """
-            inventory_search_current latest
             """;
         command.CommandText = $"""
             with base as materialized (
