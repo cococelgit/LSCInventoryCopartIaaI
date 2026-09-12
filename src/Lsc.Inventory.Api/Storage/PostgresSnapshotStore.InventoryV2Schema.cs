@@ -234,7 +234,7 @@ public sealed partial class PostgresSnapshotStore
             "inventory_sync_run_events", "inventory_execution_run_metrics", "inventory_sync_runs", "inventory_sync_leases",
             "provider_usage_snapshots", "copart_snapshot_manifests", "auctions_api_import_jobs", "iaai_national_cycle_observations"
         };
-        var deleted = new Dictionary<string, long>(StringComparer.Ordinal);
+        var existingTables = new List<string>();
         foreach (var table in tables)
         {
             await using var exists = connection.CreateCommand();
@@ -242,17 +242,21 @@ public sealed partial class PostgresSnapshotStore
             exists.CommandTimeout = _persistence.CommandTimeoutSeconds;
             exists.CommandText = "select to_regclass(@qualified) is not null;";
             AddParameter(exists, "qualified", $"public.{table}");
-            if (!Convert.ToBoolean(await exists.ExecuteScalarAsync(cancellationToken))) continue;
+            if (Convert.ToBoolean(await exists.ExecuteScalarAsync(cancellationToken)))
+                existingTables.Add(table);
+        }
 
-            await using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 1800);
-            command.CommandText = $"delete from public.{table};";
-            deleted[table] = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (existingTables.Count > 0)
+        {
+            await using var truncate = connection.CreateCommand();
+            truncate.Transaction = transaction;
+            truncate.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 1800);
+            truncate.CommandText = $"truncate table {string.Join(", ", existingTables.Select(table => $"public.{table}"))} restart identity;";
+            await truncate.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return new InventoryDataResetResult(deleted);
+        return new InventoryDataResetResult(existingTables.ToDictionary(table => table, _ => -1L, StringComparer.Ordinal));
     }
 
     private static string ReadInventoryV2SchemaSql()
