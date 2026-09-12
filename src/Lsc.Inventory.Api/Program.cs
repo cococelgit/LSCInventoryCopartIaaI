@@ -1134,6 +1134,16 @@ if (args.Contains("--inventory-v2-parity", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+if (args.Contains("--postgres-lock-diagnostic", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var store = scope.ServiceProvider.GetRequiredService<IInventorySnapshotStore>() as PostgresSnapshotStore
+        ?? throw new InvalidOperationException("PostgreSQL lock diagnostic requires Persistence:Provider=Postgres.");
+    var result = await store.GetPostgresLockDiagnosticAsync(CancellationToken.None);
+    Console.WriteLine(result.ToJsonString());
+    return;
+}
+
 if (args.Contains("--inventory-data-reset", StringComparer.OrdinalIgnoreCase))
 {
     if (!args.Contains("--confirm-inventory-data-reset", StringComparer.OrdinalIgnoreCase))
