@@ -119,6 +119,28 @@ jobs:
             sleep 5
           done
           test "$state" = Succeeded
+
+          run_control() {
+            local args_json="$1"
+            body="$(az rest --method get --uri "$uri" -o json | jq --argjson args "$args_json" '
+              .properties.template.containers[0] |= (del(.imageType) | .command=["dotnet"] | .args=$args)
+              | {properties:{template:{containers:[.properties.template.containers[0]]}}}')"
+            az rest --method patch --uri "$uri" --body "$body" --output none
+            local control_execution
+            control_execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+            test -n "$control_execution"
+            local control_status=Unknown
+            for _ in $(seq 1 120); do
+              control_status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$control_execution" -o json | jq -r '.properties.status // "Unknown"')"
+              case "$control_status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+              sleep 5
+            done
+            test "$control_status" = Succeeded
+          }
+
+          run_control '["Lsc.Inventory.Api.dll","--inventory-v2-reader-state","--enabled","false"]'
+          run_control '["Lsc.Inventory.Api.dll","--inventory-v2-writer-state","--enabled","false"]'
+
           execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
           test -n "$execution"
           status=Unknown
