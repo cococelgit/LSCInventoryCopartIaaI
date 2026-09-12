@@ -154,7 +154,7 @@ jobs:
               az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 300 --format text | tee "$RUNNER_TEMP/v2-schema-$ordinal.log" || true
             fi
             test "$status" = Succeeded
-            grep -q '"SchemaVersion":1' "$RUNNER_TEMP/v2-schema-$ordinal.log"
+            grep -q '"SchemaVersion":2' "$RUNNER_TEMP/v2-schema-$ordinal.log"
             grep -q '"WriterEnabled":false' "$RUNNER_TEMP/v2-schema-$ordinal.log"
             grep -q '"ReaderEnabled":false' "$RUNNER_TEMP/v2-schema-$ordinal.log"
           }
