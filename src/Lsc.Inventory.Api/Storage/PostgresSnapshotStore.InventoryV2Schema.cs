@@ -132,14 +132,13 @@ public sealed partial class PostgresSnapshotStore
                 updated_at = now()
             where schema_name = 'inventory-current-v2'
               and schema_version >= @schemaVersion
-              and (not @enabled or writer_enabled)
             returning schema_version, writer_enabled, reader_enabled, updated_at;
             """;
         AddParameter(command, "enabled", enabled);
         AddParameter(command, "schemaVersion", InventoryV2SchemaVersion);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
-            throw new InvalidOperationException("Inventory V2 reader cannot be enabled until the schema exists and writer_enabled=true.");
+            throw new InvalidOperationException("Inventory V2 reader cannot be changed until the schema exists and is current.");
         return new InventoryV2ReaderStateResult(
             reader.GetInt32(0),
             reader.GetBoolean(1),

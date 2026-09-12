@@ -22,7 +22,7 @@ public sealed partial class PostgresSnapshotStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = Math.Min(_persistence.CommandTimeoutSeconds, 5);
-        command.CommandText = "select reader_enabled and writer_enabled from inventory_v2_schema_state where schema_name = 'inventory-current-v2' and schema_version >= @schema_version;";
+        command.CommandText = "select reader_enabled from inventory_v2_schema_state where schema_name = 'inventory-current-v2' and schema_version >= @schema_version;";
         AddParameter(command, "schema_version", InventoryV2SchemaVersion);
         return await command.ExecuteScalarAsync(cancellationToken) is true;
     }
