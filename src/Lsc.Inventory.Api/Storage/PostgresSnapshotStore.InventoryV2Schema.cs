@@ -103,6 +103,7 @@ public sealed partial class PostgresSnapshotStore
         command.CommandText = """
             update inventory_v2_schema_state
             set writer_enabled = @enabled,
+                reader_enabled = case when @enabled = false then false else reader_enabled end,
                 updated_at = now()
             where schema_name = 'inventory-current-v2'
               and (schema_version >= @schemaVersion or @enabled = false)
