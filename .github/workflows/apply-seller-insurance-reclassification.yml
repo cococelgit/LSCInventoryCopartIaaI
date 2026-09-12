@@ -1,0 +1,80 @@
+name: Apply Seller Insurance Reclassification
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type APPLY_SELLER_INSURANCE_RECLASSIFICATION_20260912"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: apply-seller-insurance-reclassification
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  IAAI_JOB: job-lsc-iaai-pilot-prod
+  COPART_JOB: job-lsc-copart-auto-prod
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify confirmation and paused jobs
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = APPLY_SELLER_INSURANCE_RECLASSIFICATION_20260912
+          for job in "$IAAI_JOB" "$COPART_JOB"; do
+            trigger="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query 'properties.configuration.triggerType' -o tsv)"
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$trigger" = Manual
+            test "$active" = 0
+            echo "RECLASSIFICATION_PRECHECK job=$job trigger=$trigger active_executions=$active"
+          done
+
+      - name: Apply transaction and verify exact counts
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          conn="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require"
+          psql "$conn" -v ON_ERROR_STOP=1 -f infra/sql/20260912_apply_seller_insurance_reclassification.sql
+          psql "$conn" -v ON_ERROR_STOP=1 -At -F '|' -c "
+            select seller_type,
+                   count(*)
+            from public.inventory_current_v2
+            where is_active
+            group by seller_type
+            order by seller_type;
+          " | tee "$RUNNER_TEMP/seller-type-counts.txt"
+          insurance="$(awk -F'|' '$1 == "insurance" {print $2}' "$RUNNER_TEMP/seller-type-counts.txt")"
+          test "$insurance" = 1115
+          echo "RECLASSIFICATION_APPLIED=true"
+          echo "INSURANCE_COUNT_AFTER=$insurance"
+          unset PGPASSWORD
