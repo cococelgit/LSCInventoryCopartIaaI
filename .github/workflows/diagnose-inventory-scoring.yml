@@ -1,0 +1,46 @@
+name: Diagnose Inventory Scoring
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  API_APP: ca-lsc-inventory-api-prod
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Read scoring status and recent runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query 'properties.configuration.ingress.fqdn' -o tsv)"
+          token_secret_ref="$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "$API_APP" --query "properties.template.containers[0].env[?name=='InventoryApi__Token'].secretRef | [0]" -o tsv)"
+          inventory_token="$(az containerapp secret list --resource-group "$RESOURCE_GROUP" --name "$API_APP" --show-values --query "[?name=='$token_secret_ref'].value | [0]" -o tsv)"
+          test -n "$api_fqdn"
+          test -n "$inventory_token"
+          base="https://${api_fqdn}"
+          for endpoint in /internal/scoring/status '/internal/scoring/runs?take=20'; do
+            safe_name="$(printf '%s' "$endpoint" | tr '/?' '__' | tr -cd '[:alnum:]_.-')"
+            code="$(curl --silent --show-error --max-time 90 --output "/tmp/${safe_name}.json" --write-out '%{http_code}' --header "Authorization: Bearer $inventory_token" "$base$endpoint")"
+            echo "ENDPOINT=$endpoint HTTP_CODE=$code"
+            cat "/tmp/${safe_name}.json"
+            printf '\n'
+            test "$code" = 200
+          done
+          unset inventory_token
