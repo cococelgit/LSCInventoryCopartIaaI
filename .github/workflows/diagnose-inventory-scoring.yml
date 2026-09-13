@@ -45,7 +45,7 @@ jobs:
           test -n "$inventory_token"
           base="https://${api_fqdn}"
           failed=0
-          for endpoint in /internal/scoring/status '/internal/scoring/runs?take=20'; do
+          for endpoint in /internal/scoring/status '/internal/scoring/runs?take=20' '/internal/scoring/integrity?policyVersion=lsc_pre_grade_v1&sampleLimit=20'; do
             safe_name="$(printf '%s' "$endpoint" | tr '/?' '__' | tr -cd '[:alnum:]_.-')"
             code="$(curl --silent --show-error --max-time 90 --output "/tmp/${safe_name}.json" --write-out '%{http_code}' --header "Authorization: Bearer $inventory_token" "$base$endpoint")"
             echo "ENDPOINT=$endpoint HTTP_CODE=$code"
