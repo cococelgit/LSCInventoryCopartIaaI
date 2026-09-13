@@ -28,7 +28,7 @@ env:
   RESOURCE_GROUP: rg-lsc-inventory-prod
   API_APP: ca-lsc-inventory-api-prod
   SCORING_JOB: job-lsc-inventory-scoring-prod
-  SCORING_IMAGE: acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:api-ca9872c7e9250395c8f9ce89c58b1a2747a9fc45
+  SCORING_IMAGE: acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-v2-backfill-1997b1fedf1488fb517a5412a864f03622e0c786
 
 jobs:
   backfill:
