@@ -115,8 +115,14 @@ jobs:
           pending=1
           expected_total=0
           for round in $(seq 1 "$max"); do
-            active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
-            test "$active" = 0
+            active=1
+            for settle_attempt in $(seq 1 24); do
+              active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+              if [ "$active" -eq 0 ]; then break; fi
+              echo "SCORING_WAITING_FOR_PREVIOUS_EXECUTION round=$round attempt=$settle_attempt active=$active"
+              sleep 5
+            done
+            test "$active" -eq 0
             execution="$(az containerapp job start --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json 2>/tmp/scoring-start.err || true)"
             execution_name="$(echo "$execution" | jq -r '.name // .properties.name // .properties.executionName // empty' 2>/dev/null || true)"
             if [ -z "$execution_name" ]; then
