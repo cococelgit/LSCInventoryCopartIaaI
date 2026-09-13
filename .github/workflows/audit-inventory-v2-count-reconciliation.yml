@@ -1,0 +1,74 @@
+name: Audit Inventory V2 Count Reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type AUDIT_INVENTORY_V2_COUNT_RECONCILIATION"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Guard read-only authorization
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = AUDIT_INVENTORY_V2_COUNT_RECONCILIATION
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Query count reconciliation read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          connection="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require"
+          psql "$connection" --tuples-only --no-align --field-separator='|' <<'SQL'
+          select 'TOTAL_ACTIVE' as section, count(*)::bigint, null::text, null::text, null::text, null::text
+          from public.inventory_current_v2
+          where is_active;
+
+          select 'ACTIVE_BY_PLATFORM' as section, count(*)::bigint, lower(coalesce(platform, 'unknown')), null::text, null::text, null::text
+          from public.inventory_current_v2
+          where is_active
+          group by lower(coalesce(platform, 'unknown'))
+          order by 3;
+
+          select 'ACTIVE_BY_FIRST_SEEN_MINUTE' as section, count(*)::bigint,
+                 lower(coalesce(platform, 'unknown')), date_trunc('minute', first_seen_at)::text,
+                 min(first_seen_at)::text, max(first_seen_at)::text
+          from public.inventory_current_v2
+          where is_active
+          group by lower(coalesce(platform, 'unknown')), date_trunc('minute', first_seen_at)
+          order by date_trunc('minute', first_seen_at) desc, 3;
+
+          select 'ACTIVE_NEWEST_FIRST_SEEN' as section, 1::bigint,
+                 lower(coalesce(platform, 'unknown')), lot_key,
+                 first_seen_at::text, last_seen_at::text
+          from public.inventory_current_v2
+          where is_active
+          order by first_seen_at desc, lot_key
+          limit 100;
+          SQL
+          unset PGPASSWORD
