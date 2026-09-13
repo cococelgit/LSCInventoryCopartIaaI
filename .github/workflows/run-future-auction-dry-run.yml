@@ -1,0 +1,195 @@
+name: Run Future Auction Dry Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to inspect"
+        required: true
+        type: choice
+        options: [copart, iaai]
+      maximum:
+        description: "Maximum source lots to inspect"
+        required: true
+        default: "1000"
+        type: string
+      sale_date_from:
+        description: "Inclusive UTC auction timestamp"
+        required: true
+        default: "2026-09-14T04:00:00Z"
+        type: string
+      confirmation:
+        description: "Type RUN_FUTURE_AUCTION_DRY_RUN"
+        required: true
+        type: string
+      source_ref:
+        description: "Reviewed commit"
+        required: true
+        default: "main"
+        type: string
+      expected_sha:
+        description: "Exact full SHA approved for this run"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: future-auction-dry-run
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  TEMP_JOB: job-lsc-future-dry-run-prod
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Verify authorization, commit and inputs
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          MAXIMUM: ${{ inputs.maximum }}
+          SALE_DATE_FROM: ${{ inputs.sale_date_from }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = RUN_FUTURE_AUCTION_DRY_RUN
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]]
+          test "$MAXIMUM" -le 1000
+          date -u -d "$SALE_DATE_FROM" >/dev/null
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Verify production jobs are paused and idle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            echo "PRODUCTION_JOB=$job TRIGGER=$trigger ACTIVE=$active"
+            test "$trigger" = Manual
+            test "$active" = 0
+          done
+
+      - name: Build immutable dry-run image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="future-auction-dry-run-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "DRY_RUN_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+
+      - name: Run isolated dry run and delete temporary job
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          MAXIMUM: ${{ inputs.maximum }}
+          SALE_DATE_FROM: ${{ inputs.sale_date_from }}
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          case "$PLATFORM" in copart|iaai) ;; *) exit 2 ;; esac
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+          cleanup() { az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true; }
+          trap cleanup EXIT
+          az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
+          if [ "$PLATFORM" = copart ]; then source_job=job-lsc-copart-auto-prod; else source_job=job-lsc-iaai-pilot-prod; fi
+          source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$source_job?api-version=2024-03-01" -o json)"
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$DRY_RUN_IMAGE" --arg key "$AUCTIONS_API_KEY" --arg platform "$PLATFORM" '
+            .location as $location
+            | .properties.environmentId as $environmentId
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | .properties.configuration as $sourceConfiguration
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
+                | del(.imageType)
+                | .name=$name
+                | .image=$image
+                | .command=["dotnet"]
+                | .args=["Lsc.Inventory.Api.dll","--auctionsapi-v2-initial-block","--platform",$platform,"--maximum",env.MAXIMUM,"--sale-date-from",env.SALE_DATE_FROM]
+                | .env=((.env // [])
+                    | map(select((.secretRef // "") == ""
+                        and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not)
+                        and (.name | IN("AuctionsApi__ApiKey","AuctionsApi__Enabled","AuctionsApi__AllowWrites","InventoryV2__ShadowWriteEnabled","InventoryV2__CanonicalMapperEnabled") | not)))
+                    + [
+                        {name:"AuctionsApi__ApiKey",value:$key},
+                        {name:"AuctionsApi__Enabled",value:"true"},
+                        {name:"AuctionsApi__AllowWrites",value:"false"},
+                        {name:"InventoryV2__ShadowWriteEnabled",value:"false"},
+                        {name:"InventoryV2__CanonicalMapperEnabled",value:"true"}
+                      ])) as $container
+            | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
+                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=3600)), template:($sourceTemplate | .containers=[$container])}}')"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            echo "DRY_RUN_JOB_PROVISIONING=$state"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+          execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+          test -n "$execution"
+          echo "DRY_RUN_EXECUTION=$execution"
+          status=Unknown
+          for _ in $(seq 1 720); do
+            status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+            echo "DRY_RUN_STATUS=$status"
+            case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+            sleep 5
+          done
+          test "$status" = Succeeded
+          replicas="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json || true)"
+          replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+          container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+          test -n "$replica" && test -n "$container"
+          az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 400 --format text | tee "$RUNNER_TEMP/future-auction-dry-run.log"
+          grep -q '"Persisted":false' "$RUNNER_TEMP/future-auction-dry-run.log"
+          grep -q '"Created":0' "$RUNNER_TEMP/future-auction-dry-run.log"
+          grep -q '"Updated":0' "$RUNNER_TEMP/future-auction-dry-run.log"
+          grep -q '"MediaRowsWritten":0' "$RUNNER_TEMP/future-auction-dry-run.log"
+          grep -q '"Failures":\[\]' "$RUNNER_TEMP/future-auction-dry-run.log"
+
+      - name: Verify production jobs remain paused and idle
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            test "$active" = 0
+          done
