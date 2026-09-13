@@ -1,0 +1,44 @@
+name: Quick seller classification count
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Python PostgreSQL driver
+        run: python3 -m pip install --user --quiet psycopg2-binary
+      - name: Run read-only Python count
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_ip="$(curl -fsS https://api.ipify.org)"
+          firewall_rule="allow-seller-python-${GITHUB_RUN_ID}"
+          cleanup() { az postgres flexible-server firewall-rule delete --resource-group "$RESOURCE_GROUP" --server-name psql-lsc-inventory-cu --name "$firewall_rule" --yes --only-show-errors >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          az postgres flexible-server firewall-rule create --resource-group "$RESOURCE_GROUP" --server-name psql-lsc-inventory-cu --name "$firewall_rule" --start-ip-address "$runner_ip" --end-ip-address "$runner_ip" --only-show-errors >/dev/null
+          export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          python3 scripts/quick_seller_count.py
+          unset PGPASSWORD
