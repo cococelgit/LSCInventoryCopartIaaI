@@ -487,8 +487,7 @@ public sealed partial class PostgresSnapshotStore
                     coverage_percent = excluded.coverage_percent, confidence_percent = excluded.confidence_percent,
                     category = excluded.category, policy_version = excluded.policy_version,
                     input_hash = excluded.input_hash, source_observed_at = excluded.source_observed_at,
-                    scored_at = excluded.scored_at, updated_at = now()
-                where inventory_vehicle_score_current.source_observed_at <= excluded.source_observed_at;
+                    scored_at = excluded.scored_at, updated_at = now();
                 """;
             AddScoringParameters(current, outcome, sourceObservedAt);
             await current.ExecuteNonQueryAsync(cancellationToken);
