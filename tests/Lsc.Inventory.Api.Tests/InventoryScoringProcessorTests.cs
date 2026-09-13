@@ -1,5 +1,7 @@
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
+using Lsc.Inventory.Api.Scoring;
 using Lsc.Inventory.Api.Storage;
 using Lsc.Inventory.Api.Workers;
 using Microsoft.Extensions.Options;
@@ -58,6 +60,16 @@ public sealed class InventoryScoringProcessorTests
         Assert.NotNull(first);
         Assert.NotNull(second);
         Assert.NotEqual(first!.InputHash, second!.InputHash);
+    }
+
+    [Fact]
+    public void Scoring_result_uses_the_canonical_inventory_v2_lot_key()
+    {
+        var vehicle = ValidVehicle();
+        var eligibility = AuctionEligibilityEvaluator.Evaluate(vehicle);
+        var result = LscVehicleScoringEngine.Evaluate(vehicle, eligibility, DateTimeOffset.Parse("2026-08-27T12:00:00Z"));
+
+        Assert.Equal("iaai:12345678", result.LotKey);
     }
 
     private static AuctionVehicle ValidVehicle() => new()
