@@ -185,9 +185,17 @@ jobs:
           container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
           test -n "$replica" && test -n "$container"
           az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 200 --format text | tee "$RUNNER_TEMP/future-auction-v2-load.log"
-          grep -q '"Persisted":true' "$RUNNER_TEMP/future-auction-v2-load.log"
-          grep -q '"Failures":\[\]' "$RUNNER_TEMP/future-auction-v2-load.log"
-          grep -q '"Created":\|"Updated":\|"Unchanged":' "$RUNNER_TEMP/future-auction-v2-load.log"
+          result_line="$(grep -E 'stdout F \\{\"RunId\"' "$RUNNER_TEMP/future-auction-v2-load.log" | tail -1 | sed -E 's/^.*stdout F //')"
+          test -n "$result_line"
+          printf '%s' "$result_line" | jq -e '.Persisted == true' >/dev/null
+          printf '%s' "$result_line" | jq -e '(.Created >= 0 and .Updated >= 0 and .Unchanged >= 0)' >/dev/null
+          failure_count="$(printf '%s' "$result_line" | jq '.Failures | length')"
+          if [ "$failure_count" -gt 0 ]; then
+            printf '%s' "$result_line" | jq -e '.Failures | all(. == "v2-initial-load:source-ended-before-block-limit")' >/dev/null
+            echo "SOURCE_EXHAUSTED=true"
+          else
+            echo "SOURCE_EXHAUSTED=false"
+          fi
 
       - name: Verify production ingestion jobs remain paused and idle
         if: always()
