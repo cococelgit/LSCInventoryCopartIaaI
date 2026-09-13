@@ -1,0 +1,142 @@
+name: Run Seller Classification Bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type RUN_SELLER_CLASSIFICATION_BOOTSTRAP"
+        required: true
+        type: string
+      source_ref:
+        description: "Reviewed branch or commit"
+        required: true
+        default: "main"
+        type: string
+      expected_sha:
+        description: "Exact SHA approved for the bootstrap"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: seller-classification-bootstrap
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+  SOURCE_JOB: job-lsc-copart-auto-prod
+  TEMP_JOB: job-lsc-seller-classification-bootstrap-prod
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Verify confirmation and exact commit
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = RUN_SELLER_CLASSIFICATION_BOOTSTRAP
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "APPROVED_SHA=$EXPECTED_SHA"
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Verify ingestion jobs are paused and idle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-copart-auto-prod job-lsc-iaai-pilot-prod; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            echo "JOB=$job TRIGGER=$trigger ACTIVE=$active"
+            test "$trigger" = Manual
+            test "$active" = 0
+          done
+
+      - name: Build immutable bootstrap image
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="seller-classification-bootstrap-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "BOOTSTRAP_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+
+      - name: Create isolated bootstrap job
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() {
+            az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
+          }
+          trap cleanup EXIT
+          cleanup
+          source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$BOOTSTRAP_IMAGE" '
+            .location as $location
+            | .properties.environmentId as $environmentId
+            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | .properties.configuration as $sourceConfiguration
+            | .properties.template as $sourceTemplate
+            | ($sourceTemplate.containers[0]
+                | del(.imageType)
+                | .name=$name
+                | .image=$image
+                | .command=["dotnet"]
+                | .args=["Lsc.Inventory.Api.dll","--bootstrap-db"]
+                | .env=((.env // []) | map(select((.secretRef // "") == "" and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not))))) as $container
+            | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
+                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+                | .replicaRetryLimit=0
+                | .replicaTimeout=900)), template:($sourceTemplate | .containers=[$container])}}')"
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+          az rest --method put --uri "$uri" --body "$body" --output none
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            echo "TEMP_JOB_PROVISIONING=$state"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+          execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+          test -n "$execution"
+          echo "BOOTSTRAP_EXECUTION=$execution"
+          status="Unknown"
+          for _ in $(seq 1 180); do
+            status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+            echo "BOOTSTRAP_STATUS=$status"
+            case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+            sleep 5
+          done
+          test "$status" = Succeeded
+          echo "SELLER_CLASSIFICATION_BOOTSTRAP_SUCCEEDED=true"
+          cleanup
+          trap - EXIT
