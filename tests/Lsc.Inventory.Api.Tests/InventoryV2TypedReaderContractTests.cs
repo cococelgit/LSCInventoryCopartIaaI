@@ -18,6 +18,15 @@ public sealed class InventoryV2TypedReaderContractTests
     }
 
     [Fact]
+    public void Typed_reader_preserves_database_timestamp_precision()
+    {
+        var reader = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.InventoryV2Readers.cs"));
+
+        Assert.Contains("DateTime.SpecifyKind(date, DateTimeKind.Utc)", reader, StringComparison.Ordinal);
+        Assert.Contains("DateTimeOffset date => date", reader, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Search_and_detail_have_the_same_reversible_double_guard()
     {
         var store = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.cs"));

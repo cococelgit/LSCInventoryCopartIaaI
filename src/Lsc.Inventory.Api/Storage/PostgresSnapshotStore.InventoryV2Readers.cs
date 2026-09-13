@@ -353,5 +353,14 @@ public sealed partial class PostgresSnapshotStore
     private static decimal? ReadV2Decimal(IReadOnlyDictionary<string, object?> reader, string name) => reader.TryGetValue(name, out var value) && value is not null ? Convert.ToDecimal(value, CultureInfo.InvariantCulture) : null;
     private static int? ReadV2Int(IReadOnlyDictionary<string, object?> reader, string name) => reader.TryGetValue(name, out var value) && value is not null ? Convert.ToInt32(value, CultureInfo.InvariantCulture) : null;
     private static bool? ReadV2Bool(IReadOnlyDictionary<string, object?> reader, string name) => reader.TryGetValue(name, out var value) && value is not null ? Convert.ToBoolean(value, CultureInfo.InvariantCulture) : null;
-    private static DateTimeOffset? ReadV2Date(IReadOnlyDictionary<string, object?> reader, string name) => reader.TryGetValue(name, out var value) && value is not null ? value is DateTimeOffset date ? date : DateTimeOffset.Parse(Convert.ToString(value, CultureInfo.InvariantCulture)!, CultureInfo.InvariantCulture) : null;
+    private static DateTimeOffset? ReadV2Date(IReadOnlyDictionary<string, object?> reader, string name)
+    {
+        if (!reader.TryGetValue(name, out var value) || value is null) return null;
+        return value switch
+        {
+            DateTimeOffset date => date,
+            DateTime date => new DateTimeOffset(DateTime.SpecifyKind(date, DateTimeKind.Utc)),
+            _ => DateTimeOffset.Parse(Convert.ToString(value, CultureInfo.InvariantCulture)!, CultureInfo.InvariantCulture)
+        };
+    }
 }
