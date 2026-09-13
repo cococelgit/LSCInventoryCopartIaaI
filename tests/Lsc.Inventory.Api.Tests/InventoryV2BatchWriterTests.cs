@@ -133,7 +133,7 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Contains("WriteShadowBatchAsync", loader, StringComparison.Ordinal);
         Assert.DoesNotContain("PersistAsync(", loader, StringComparison.Ordinal);
         Assert.Contains("--auctionsapi-v2-initial-block", program, StringComparison.Ordinal);
-        Assert.Contains("Math.Clamp(parsedMaximum, 1, 1_000)", program, StringComparison.Ordinal);
+        Assert.Contains("Math.Clamp(parsedMaximum, 1, 2_000)", program, StringComparison.Ordinal);
         Assert.Contains("--start-page", program, StringComparison.Ordinal);
         Assert.Contains("--write", program, StringComparison.Ordinal);
         Assert.Contains("DiscardReasonBreakdown", loader, StringComparison.Ordinal);

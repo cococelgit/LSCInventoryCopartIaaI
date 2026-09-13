@@ -1197,7 +1197,7 @@ if (args.Contains("--auctionsapi-v2-initial-block", StringComparer.OrdinalIgnore
         throw new ArgumentException("--auctionsapi-v2-initial-block requires --platform copart|iaai.");
     var maximumIndex = Array.FindIndex(args, argument => string.Equals(argument, "--maximum", StringComparison.OrdinalIgnoreCase));
     var maximum = maximumIndex >= 0 && maximumIndex + 1 < args.Length && int.TryParse(args[maximumIndex + 1], out var parsedMaximum)
-        ? Math.Clamp(parsedMaximum, 1, 1_000)
+        ? Math.Clamp(parsedMaximum, 1, 2_000)
         : 1_000;
     var startPageIndex = Array.FindIndex(args, argument => string.Equals(argument, "--start-page", StringComparison.OrdinalIgnoreCase));
     var startPage = startPageIndex >= 0 && startPageIndex + 1 < args.Length && int.TryParse(args[startPageIndex + 1], out var parsedStartPage)
