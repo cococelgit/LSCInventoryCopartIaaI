@@ -1,4 +1,5 @@
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Classification;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
@@ -60,6 +61,11 @@ builder.Services
     .ValidateDataAnnotations();
 
 builder.Services
+    .AddOptions<SellerClassifierOptions>()
+    .Bind(builder.Configuration.GetSection(SellerClassifierOptions.SectionName))
+    .ValidateDataAnnotations();
+
+builder.Services
     .AddOptions<FacetsRedisOptions>()
     .Bind(builder.Configuration.GetSection(FacetsRedisOptions.SectionName))
     .ValidateDataAnnotations();
@@ -105,19 +111,34 @@ builder.Services.AddHttpClient("copart-media-proxy", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
 }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<OpenAiSellerClassifier>((serviceProvider, client) =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<SellerClassifierOptions>>().Value;
+    var baseUrl = string.IsNullOrWhiteSpace(options.ApiBase)
+        ? Environment.GetEnvironmentVariable("OPENAI_API_BASE") ?? "https://api.openai.com/v1"
+        : options.ApiBase;
+    client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/", UriKind.Absolute);
+    client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
+}).AddResilienceHandler("seller-classifier", pipeline =>
+{
+    pipeline.AddTimeout(TimeSpan.FromSeconds(30));
+});
 
 var persistenceProvider = builder.Configuration.GetValue<string>($"{PersistenceOptions.SectionName}:Provider") ?? "InMemory";
 if (string.Equals(persistenceProvider, "Postgres", StringComparison.OrdinalIgnoreCase))
 {
+    builder.Services.AddSingleton<ISellerClassificationStore, PostgresSellerClassificationStore>();
     builder.Services.AddSingleton<PostgresSnapshotStore>();
     builder.Services.AddSingleton<IInventorySnapshotStore>(serviceProvider => serviceProvider.GetRequiredService<PostgresSnapshotStore>());
     builder.Services.AddSingleton<IInventoryV2BatchWriter>(serviceProvider => serviceProvider.GetRequiredService<PostgresSnapshotStore>());
 }
 else
 {
+    builder.Services.AddSingleton<ISellerClassificationStore, DisabledSellerClassificationStore>();
     builder.Services.AddSingleton<IInventorySnapshotStore, InMemorySnapshotStore>();
     builder.Services.AddSingleton<IInventoryV2BatchWriter>(_ => DisabledInventoryV2BatchWriter.Instance);
 }
+builder.Services.AddScoped<ISellerClassifier, OpenAiSellerClassifier>();
 builder.Services.AddScoped<IInventorySyncProcessor, InventorySyncProcessor>();
 builder.Services.AddScoped<IIaaIPilotProcessor, IaaIPilotProcessor>();
 builder.Services.AddScoped<IaaINationalSyncProcessor>();

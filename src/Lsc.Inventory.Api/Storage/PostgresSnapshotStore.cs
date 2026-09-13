@@ -121,7 +121,42 @@ public sealed partial class PostgresSnapshotStore(
             grant usage, select on all sequences in schema public to {quotedRole};
             """;
         await grant.ExecuteNonQueryAsync(cancellationToken);
+        await EnsureSellerClassificationSchemaAsync(databaseConnection, cancellationToken);
         logger.LogInformation("Bootstrapped the database and least-privilege runtime principal.");
+    }
+
+    private async Task EnsureSellerClassificationSchemaAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            create table if not exists public.seller_classifications (
+                id bigserial primary key,
+                platform text not null default 'unknown',
+                seller_name_normalized text not null,
+                seller_name_raw_last_seen text,
+                category text not null default 'unknown',
+                confidence numeric(5,4) not null default 0,
+                needs_review boolean not null default true,
+                reason text,
+                evidence_type text not null default 'insufficient_evidence',
+                model text,
+                prompt_version text not null default 'seller_classifier_v1',
+                first_seen_at timestamptz not null default now(),
+                last_seen_at timestamptz not null default now(),
+                classified_at timestamptz,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                constraint seller_classifications_category_ck check (category in ('insurance','dealer','finance','rental_fleet','government','repossession_bank','other','unknown','unclassified')),
+                constraint seller_classifications_confidence_ck check (confidence >= 0 and confidence <= 1),
+                constraint seller_classifications_evidence_ck check (evidence_type in ('deterministic_rule','provider_field','name_only','insufficient_evidence')),
+                constraint seller_classifications_platform_name_uq unique (platform, seller_name_normalized)
+            );
+            create index if not exists seller_classifications_category_idx on public.seller_classifications (category);
+            create index if not exists seller_classifications_review_idx on public.seller_classifications (needs_review, updated_at);
+            create index if not exists seller_classifications_name_idx on public.seller_classifications (seller_name_normalized);
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public Task<InventoryLotPersistenceResult> PersistAsync(

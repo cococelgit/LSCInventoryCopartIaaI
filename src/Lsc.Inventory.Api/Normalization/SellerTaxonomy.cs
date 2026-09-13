@@ -4,7 +4,11 @@ public sealed record SellerClassification(
     string Category,
     decimal Confidence,
     bool NeedsReview,
-    string Evidence);
+    string Evidence,
+    string Reason = "",
+    string EvidenceType = "insufficient_evidence",
+    string? Model = null,
+    string PromptVersion = SellerTaxonomy.Version);
 
 /// <summary>
 /// Categoría operativa común para filtros y scoring. La clasificación derivada
@@ -24,6 +28,10 @@ public static class SellerTaxonomy
     public const string Unknown = "unknown";
     public const string Unclassified = "unclassified";
 
+    public static string NormalizeName(string? sellerName) => NormalizeText(sellerName);
+
+    public static bool IsAllowedCategory(string? category) => category is Insurance or Dealer or Finance or RentalFleet or Government or RepossessionBank or Other or Unknown or Unclassified;
+
     public static string Normalize(string? sourceType)
     {
         if (string.IsNullOrWhiteSpace(sourceType)) return Unclassified;
@@ -41,18 +49,18 @@ public static class SellerTaxonomy
         {
             var category = ClassifyValue(evidence.Value);
             if (category is not null && category != Unknown && category != Unclassified)
-                return new SellerClassification(category, 1.00m, false, evidence.Source);
+                return new SellerClassification(category, 1.00m, false, evidence.Source, $"Provider classification matched {evidence.Source}.", "provider_field");
         }
 
         var name = NormalizeText(sellerName);
         if (string.IsNullOrWhiteSpace(name))
-            return new SellerClassification(Unknown, 0m, true, "missing_name");
+            return new SellerClassification(Unknown, 0m, true, "missing_name", "Seller name is missing.", "insufficient_evidence");
 
         var nameClassification = ClassifyName(name);
-        if (nameClassification is not null) return nameClassification;
+        if (nameClassification is not null) return nameClassification with { Reason = "Seller name matched a deterministic taxonomy rule.", EvidenceType = "deterministic_rule" };
 
         var hadUnknownEvidence = new[] { rawType, rawClass, rawTextClass }.Any(value => ClassifyValue(value) == Unknown);
-        return new SellerClassification(hadUnknownEvidence ? Unknown : Other, hadUnknownEvidence ? 0.25m : 0.35m, true, "name_unmatched");
+        return new SellerClassification(hadUnknownEvidence ? Unknown : Other, hadUnknownEvidence ? 0.25m : 0.35m, true, "name_unmatched", "No deterministic seller classification was found.", "insufficient_evidence");
     }
 
     private static string? ClassifyValue(string? value)
@@ -77,8 +85,10 @@ public static class SellerTaxonomy
 
     private static SellerClassification? ClassifyName(string normalized)
     {
+        if (ContainsAny(normalized, "UNKNOWN", "UNAVAILABLE", "NO INFORMATION", "NO INFO", "NOT REPORTED", "N/A", "NA"))
+            return new SellerClassification(Unknown, 0m, true, "seller_name_unknown_marker", "Seller name contains an explicit unknown marker.", "insufficient_evidence");
         var category = ClassifyKnown(normalized);
-        return category is null ? null : new SellerClassification(category, 0.75m, true, "seller_name_pattern");
+        return category is null ? null : new SellerClassification(category, 0.75m, true, "seller_name_pattern", "Seller name matched a deterministic taxonomy rule.", "deterministic_rule");
     }
 
     private static bool ContainsAny(string value, params string[] terms) => terms.Any(value.Contains);
