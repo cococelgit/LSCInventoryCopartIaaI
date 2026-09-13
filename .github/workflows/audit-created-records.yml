@@ -65,8 +65,17 @@ jobs:
               group by upper(btrim(vin)) having count(*) > 1
             ) d;
           " > report/reconciliation-summary.txt
+          psql "$conn" -v ON_ERROR_STOP=1 -At -F '|' -c "
+            select 'SELLER_CLASSIFICATIONS_TOTAL|' || count(*) from public.seller_classifications;
+            select 'SELLER_CLASSIFICATIONS_BY_PLATFORM|' || platform || '|' || count(*) from public.seller_classifications group by platform order by platform;
+            select 'SELLER_CLASSIFICATION_ROW|' || platform || '|' || seller_name_normalized || '|' || category || '|' || confidence || '|' || needs_review || '|' || evidence_type || '|' || prompt_version || '|' || updated_at
+            from public.seller_classifications
+            where updated_at >= timestamptz '2026-09-13 00:00:00+00'
+            order by updated_at, platform, seller_name_normalized;
+          " > report/seller-classifications.txt
           cat report/reconciliation-summary.txt
           cat report/created-records.txt
+          cat report/seller-classifications.txt
           unset PGPASSWORD
       - name: Upload read-only evidence
         uses: actions/upload-artifact@v4
