@@ -325,6 +325,92 @@ public sealed partial class PostgresSnapshotStore
         return statuses;
     }
 
+    public async Task<InventoryScoringIntegrityReport> GetScoringIntegrityReportAsync(string policyVersion, int sampleLimit, CancellationToken cancellationToken)
+    {
+        var expectedPolicy = string.IsNullOrWhiteSpace(policyVersion) ? LscScoringPolicy.Version : policyVersion.Trim();
+        var limit = Math.Clamp(sampleLimit, 1, 50);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        var platforms = new List<InventoryScoringIntegrityPlatformReport>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 60);
+            command.CommandText = """
+                with active as (
+                    select lot_key, lower(coalesce(platform, 'unknown')) as platform, last_seen_at
+                    from inventory_current_v2
+                    where is_active
+                )
+                select active.platform,
+                       count(*)::bigint as active_count,
+                       count(score.lot_key)::bigint as score_join_count,
+                       count(*) filter (where score.lot_key is null)::bigint as missing_score_count,
+                       count(*) filter (where score.lot_key is not null and score.policy_version = @policy_version)::bigint as policy_match_count,
+                       count(*) filter (where score.lot_key is not null and score.policy_version is distinct from @policy_version)::bigint as policy_mismatch_count,
+                       count(*) filter (where score.lot_key is not null and score.source_observed_at = active.last_seen_at)::bigint as timestamp_match_count,
+                       count(*) filter (where score.lot_key is not null and score.source_observed_at is distinct from active.last_seen_at)::bigint as timestamp_mismatch_count,
+                       count(*) filter (where score.lot_key is not null and score.source_observed_at < active.last_seen_at)::bigint as score_older_count,
+                       count(*) filter (where score.lot_key is not null and score.source_observed_at > active.last_seen_at)::bigint as score_newer_count
+                from active
+                left join inventory_vehicle_score_current score on score.lot_key = active.lot_key
+                group by active.platform
+                order by active.platform;
+                """;
+            AddParameter(command, "policy_version", expectedPolicy);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                platforms.Add(new InventoryScoringIntegrityPlatformReport(
+                    reader.GetString(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3),
+                    reader.GetInt64(4), reader.GetInt64(5), reader.GetInt64(6), reader.GetInt64(7),
+                    reader.GetInt64(8), reader.GetInt64(9)));
+            }
+        }
+
+        var samples = new List<InventoryScoringIntegritySample>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 60);
+            command.CommandText = """
+                select lower(coalesce(active.platform, 'unknown')) as platform,
+                       active.lot_key, active.last_seen_at,
+                       score.source_observed_at, score.policy_version, score.scored_at
+                from inventory_current_v2 active
+                left join inventory_vehicle_score_current score on score.lot_key = active.lot_key
+                where active.is_active
+                  and score.lot_key is not null
+                  and (score.policy_version is distinct from @policy_version
+                       or score.source_observed_at is distinct from active.last_seen_at)
+                order by platform, active.lot_key
+                limit @limit;
+                """;
+            AddParameter(command, "policy_version", expectedPolicy);
+            AddParameter(command, "limit", limit);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                samples.Add(new InventoryScoringIntegritySample(
+                    reader.GetString(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2),
+                    reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5)));
+            }
+        }
+
+        return new InventoryScoringIntegrityReport(
+            expectedPolicy,
+            DateTimeOffset.UtcNow,
+            platforms.Sum(item => item.Active),
+            platforms.Sum(item => item.ScoreJoined),
+            platforms.Sum(item => item.MissingScore),
+            platforms.Sum(item => item.PolicyMismatch),
+            platforms.Sum(item => item.TimestampMatch),
+            platforms.Sum(item => item.TimestampMismatch),
+            platforms.Sum(item => item.ScoreOlder),
+            platforms.Sum(item => item.ScoreNewer),
+            platforms,
+            samples);
+    }
+
     public async Task<LscVehicleScoringResult?> GetScoreByLotAsync(string lotNumber, CancellationToken cancellationToken)
     {
         await EnsureScoringSchemaAsync(cancellationToken);

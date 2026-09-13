@@ -38,6 +38,7 @@ public interface IInventorySnapshotStore
     Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
+    Task<InventoryScoringIntegrityReport> GetScoringIntegrityReportAsync(string policyVersion, int sampleLimit, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<Guid> StartScoringRunAsync(string trigger, CancellationToken cancellationToken);
     Task CompleteScoringRunAsync(Guid runId, InventoryScoringRunCompletion completion, CancellationToken cancellationToken);
     Task<IReadOnlyList<InventoryScoringRunSummary>> GetRecentScoringRunsAsync(int maximum, CancellationToken cancellationToken);
@@ -491,6 +492,40 @@ public sealed record InventoryScoringOperationalStatus(
     IReadOnlyList<InventoryScoringPlatformStatus>? Platforms = null,
     DateTimeOffset? OldestQueuedAt = null,
     IReadOnlyList<InventoryScoringRunSummary>? RecentRuns = null);
+
+public sealed record InventoryScoringIntegrityPlatformReport(
+    string Platform,
+    long Active,
+    long ScoreJoined,
+    long MissingScore,
+    long PolicyMatch,
+    long PolicyMismatch,
+    long TimestampMatch,
+    long TimestampMismatch,
+    long ScoreOlder,
+    long ScoreNewer);
+
+public sealed record InventoryScoringIntegritySample(
+    string Platform,
+    string LotKey,
+    DateTimeOffset InventoryLastSeenAt,
+    DateTimeOffset? ScoreSourceObservedAt,
+    string? PolicyVersion,
+    DateTimeOffset? ScoredAt);
+
+public sealed record InventoryScoringIntegrityReport(
+    string PolicyVersion,
+    DateTimeOffset CapturedAt,
+    long ActiveTotal,
+    long ScoreJoinTotal,
+    long MissingScoreTotal,
+    long PolicyMismatchTotal,
+    long TimestampMatchTotal,
+    long TimestampMismatchTotal,
+    long ScoreOlderTotal,
+    long ScoreNewerTotal,
+    IReadOnlyList<InventoryScoringIntegrityPlatformReport> Platforms,
+    IReadOnlyList<InventoryScoringIntegritySample> Samples);
 
 public sealed class InMemorySnapshotStore : IInventorySnapshotStore
 {

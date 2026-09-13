@@ -900,6 +900,12 @@ app.MapGet("/internal/scoring/runs", async (HttpContext context, IInventorySnaps
     return Results.Ok(await store.GetRecentScoringRunsAsync(take ?? 20, cancellationToken));
 });
 
+app.MapGet("/internal/scoring/integrity", async (HttpContext context, IInventorySnapshotStore store, string? policyVersion, int? sampleLimit, CancellationToken cancellationToken) =>
+{
+    if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
+    return Results.Ok(await store.GetScoringIntegrityReportAsync(policyVersion ?? LscScoringPolicy.Version, sampleLimit ?? 20, cancellationToken));
+});
+
 app.MapPost("/internal/scoring/backfill", async (HttpContext context, IInventoryScoringProcessor processor, int? maximum, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
