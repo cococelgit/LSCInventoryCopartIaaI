@@ -92,7 +92,7 @@ public sealed partial class PostgresSnapshotStore
         return rows.Select(ToStoredInventoryV2Snapshot).ToArray();
     }
 
-    public async Task<InventoryV2CountReconciliationReport> GetInventoryV2CountReconciliationAsync(int sampleLimit, CancellationToken cancellationToken)
+    public async Task<InventoryV2CountReconciliationReport> GetInventoryV2CountReconciliationAsync(int sampleLimit, DateTimeOffset? firstSeenAfter, CancellationToken cancellationToken)
     {
         var limit = Math.Clamp(sampleLimit, 1, 200);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -112,6 +112,23 @@ public sealed partial class PostgresSnapshotStore
                 activeByPlatform[reader.GetString(0)] = reader.GetInt64(1);
         }
 
+        var firstSeenAfterByPlatform = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 60);
+            command.CommandText = """
+                select lower(coalesce(platform, 'unknown')) as platform, count(*)::bigint
+                from inventory_current_v2
+                where is_active and (@first_seen_after is null or first_seen_at > @first_seen_after)
+                group by lower(coalesce(platform, 'unknown'))
+                order by 1;
+                """;
+            AddParameter(command, "first_seen_after", firstSeenAfter);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                firstSeenAfterByPlatform[reader.GetString(0)] = reader.GetInt64(1);
+        }
+
         var newestByFirstSeen = new List<InventoryV2CountReconciliationRow>();
         await using (var command = connection.CreateCommand())
         {
@@ -120,10 +137,11 @@ public sealed partial class PostgresSnapshotStore
                 select lower(coalesce(platform, 'unknown')) as platform,
                        lot_key, first_seen_at, last_seen_at
                 from inventory_current_v2
-                where is_active
+                where is_active and (@first_seen_after is null or first_seen_at > @first_seen_after)
                 order by first_seen_at desc, lot_key asc
                 limit @limit;
                 """;
+            AddParameter(command, "first_seen_after", firstSeenAfter);
             AddParameter(command, "limit", limit);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
@@ -139,6 +157,8 @@ public sealed partial class PostgresSnapshotStore
             DateTimeOffset.UtcNow,
             activeByPlatform.Values.Sum(),
             activeByPlatform,
+            firstSeenAfterByPlatform.Values.Sum(),
+            firstSeenAfterByPlatform,
             newestByFirstSeen);
     }
 

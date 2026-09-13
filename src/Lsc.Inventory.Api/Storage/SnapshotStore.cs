@@ -39,7 +39,7 @@ public interface IInventorySnapshotStore
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
     Task<InventoryScoringIntegrityReport> GetScoringIntegrityReportAsync(string policyVersion, int sampleLimit, CancellationToken cancellationToken) => throw new NotSupportedException();
-    Task<InventoryV2CountReconciliationReport> GetInventoryV2CountReconciliationAsync(int sampleLimit, CancellationToken cancellationToken) => throw new NotSupportedException();
+    Task<InventoryV2CountReconciliationReport> GetInventoryV2CountReconciliationAsync(int sampleLimit, DateTimeOffset? firstSeenAfter, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<Guid> StartScoringRunAsync(string trigger, CancellationToken cancellationToken);
     Task CompleteScoringRunAsync(Guid runId, InventoryScoringRunCompletion completion, CancellationToken cancellationToken);
     Task<IReadOnlyList<InventoryScoringRunSummary>> GetRecentScoringRunsAsync(int maximum, CancellationToken cancellationToken);
@@ -538,6 +538,8 @@ public sealed record InventoryV2CountReconciliationReport(
     DateTimeOffset CapturedAt,
     long ActiveTotal,
     IReadOnlyDictionary<string, long> ActiveByPlatform,
+    long FirstSeenAfterTotal,
+    IReadOnlyDictionary<string, long> FirstSeenAfterByPlatform,
     IReadOnlyList<InventoryV2CountReconciliationRow> NewestByFirstSeen);
 
 public sealed class InMemorySnapshotStore : IInventorySnapshotStore

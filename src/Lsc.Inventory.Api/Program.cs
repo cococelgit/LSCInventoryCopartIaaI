@@ -906,10 +906,10 @@ app.MapGet("/internal/scoring/integrity", async (HttpContext context, IInventory
     return Results.Ok(await store.GetScoringIntegrityReportAsync(policyVersion ?? LscScoringPolicy.Version, sampleLimit ?? 20, cancellationToken));
 });
 
-app.MapGet("/internal/inventory-v2/count-reconciliation", async (HttpContext context, IInventorySnapshotStore store, int? sampleLimit, CancellationToken cancellationToken) =>
+app.MapGet("/internal/inventory-v2/count-reconciliation", async (HttpContext context, IInventorySnapshotStore store, int? sampleLimit, DateTimeOffset? firstSeenAfter, CancellationToken cancellationToken) =>
 {
     if (!HasValidReadToken(context, inventoryReadToken)) return Results.Unauthorized();
-    return Results.Ok(await store.GetInventoryV2CountReconciliationAsync(sampleLimit ?? 100, cancellationToken));
+    return Results.Ok(await store.GetInventoryV2CountReconciliationAsync(sampleLimit ?? 100, firstSeenAfter, cancellationToken));
 });
 
 app.MapPost("/internal/scoring/backfill", async (HttpContext context, IInventoryScoringProcessor processor, int? maximum, CancellationToken cancellationToken) =>
