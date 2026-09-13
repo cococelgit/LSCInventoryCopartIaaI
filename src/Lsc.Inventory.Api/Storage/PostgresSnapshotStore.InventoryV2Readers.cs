@@ -92,6 +92,56 @@ public sealed partial class PostgresSnapshotStore
         return rows.Select(ToStoredInventoryV2Snapshot).ToArray();
     }
 
+    public async Task<InventoryV2CountReconciliationReport> GetInventoryV2CountReconciliationAsync(int sampleLimit, CancellationToken cancellationToken)
+    {
+        var limit = Math.Clamp(sampleLimit, 1, 200);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        var activeByPlatform = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 60);
+            command.CommandText = """
+                select lower(coalesce(platform, 'unknown')) as platform, count(*)::bigint
+                from inventory_current_v2
+                where is_active
+                group by lower(coalesce(platform, 'unknown'))
+                order by 1;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                activeByPlatform[reader.GetString(0)] = reader.GetInt64(1);
+        }
+
+        var newestByFirstSeen = new List<InventoryV2CountReconciliationRow>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 60);
+            command.CommandText = """
+                select lower(coalesce(platform, 'unknown')) as platform,
+                       lot_key, first_seen_at, last_seen_at
+                from inventory_current_v2
+                where is_active
+                order by first_seen_at desc, lot_key asc
+                limit @limit;
+                """;
+            AddParameter(command, "limit", limit);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                newestByFirstSeen.Add(new InventoryV2CountReconciliationRow(
+                    reader.GetString(0), reader.GetString(1),
+                    reader.GetFieldValue<DateTimeOffset>(2),
+                    reader.GetFieldValue<DateTimeOffset>(3)));
+            }
+        }
+
+        return new InventoryV2CountReconciliationReport(
+            DateTimeOffset.UtcNow,
+            activeByPlatform.Values.Sum(),
+            activeByPlatform,
+            newestByFirstSeen);
+    }
+
     private async Task<StoredVehicleSnapshot?> GetByLotKeyInventoryV2Async(string lotKey, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
