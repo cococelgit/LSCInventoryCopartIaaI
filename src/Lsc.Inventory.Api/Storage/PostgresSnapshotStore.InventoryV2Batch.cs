@@ -523,6 +523,7 @@ public sealed partial class PostgresSnapshotStore
                     updated_at = now()
                 where inventory_vehicle_scoring_queue.input_hash is distinct from excluded.input_hash
                    or inventory_vehicle_scoring_queue.policy_version is distinct from excluded.policy_version
+                   or inventory_vehicle_scoring_queue.source_run_id is distinct from excluded.source_run_id
                    or inventory_vehicle_scoring_queue.status in ('completed', 'skipped')
                 returning lot_key
             )
