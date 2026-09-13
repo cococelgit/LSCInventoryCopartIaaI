@@ -116,8 +116,14 @@ jobs:
           for round in $(seq 1 "$max"); do
             active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
             test "$active" = 0
-            execution="$(az containerapp job start --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json)"
-            execution_name="$(echo "$execution" | jq -r '.name // .properties.name // empty')"
+            execution="$(az containerapp job start --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json 2>/tmp/scoring-start.err || true)"
+            execution_name="$(echo "$execution" | jq -r '.name // .properties.name // .properties.executionName // empty' 2>/dev/null || true)"
+            if [ -z "$execution_name" ]; then
+              echo "SCORING_START_FALLBACK=true"
+              cat /tmp/scoring-start.err >&2 || true
+              sleep 5
+              execution_name="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --query 'sort_by(@, &properties.startTime)[-1].name' -o tsv)"
+            fi
             test -n "$execution_name"
             echo "SCORING_EXECUTION_START round=$round name=$execution_name"
             status=Unknown
