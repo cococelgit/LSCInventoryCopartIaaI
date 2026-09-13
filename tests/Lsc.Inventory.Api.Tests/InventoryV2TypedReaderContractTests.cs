@@ -53,6 +53,21 @@ public sealed class InventoryV2TypedReaderContractTests
         Assert.Contains("latest.auction_at", reader, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Search_facets_and_detail_share_the_current_score_publication_gate()
+    {
+        var reader = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.InventoryV2Readers.cs"));
+        var facets = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.FacetsV2.cs"));
+
+        Assert.Contains("RequireCurrentForPublication", reader, StringComparison.Ordinal);
+        Assert.Contains("{scoreAlias}.policy_version = @v2_current_score_policy", reader, StringComparison.Ordinal);
+        Assert.Contains("{scoreAlias}.input_hash = {inventoryAlias}.score_input_hash", reader, StringComparison.Ordinal);
+        Assert.Contains("if (requirePublishedScore) AddCurrentScorePublicationGate", reader, StringComparison.Ordinal);
+        Assert.Contains("requirePublishedScore: false", File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.Scoring.cs")), StringComparison.Ordinal);
+        Assert.Contains("_scoring.RequireCurrentForPublication", facets, StringComparison.Ordinal);
+        Assert.Contains("AddCurrentScorePublicationGate(command, fixedWhere)", facets, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRootFile(string relativePath)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

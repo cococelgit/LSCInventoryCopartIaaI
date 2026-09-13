@@ -13,4 +13,11 @@ public sealed class ScoringOptions
 
     [Range(1, 500)]
     public int BatchSize { get; init; } = 100;
+
+    [Range(1, 10_000)]
+    public int ImmediateMaximumLots { get; init; } = 5000;
+
+    public bool ProcessIngestionRunImmediately { get; init; }
+
+    public bool RequireCurrentForPublication { get; init; }
 }

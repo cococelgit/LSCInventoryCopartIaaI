@@ -22,7 +22,8 @@ public sealed partial class PostgresSnapshotStore(
     IOptions<PersistenceOptions> persistenceOptions,
     ILogger<PostgresSnapshotStore> logger,
     IFacetsV2SharedCache? facetsV2SharedCache = null,
-    IOptions<InventoryV2Options>? inventoryV2Options = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore, IInventoryV2BatchWriter
+    IOptions<InventoryV2Options>? inventoryV2Options = null,
+    IOptions<ScoringOptions>? scoringOptions = null) : IInventorySnapshotStore, IAuctionsApiImportJobStore, IInventoryV2BatchWriter
 {
     private static readonly SemaphoreSlim SchemaLock = new(1, 1);
     private static readonly SemaphoreSlim AuditSchemaLock = new(1, 1);
@@ -39,6 +40,7 @@ public sealed partial class PostgresSnapshotStore(
     private static bool _nationalSyncSchemaInitialized;
     private readonly PersistenceOptions _persistence = persistenceOptions.Value;
     private readonly InventoryV2Options _inventoryV2 = inventoryV2Options?.Value ?? new InventoryV2Options();
+    private readonly ScoringOptions _scoring = scoringOptions?.Value ?? new ScoringOptions();
     private readonly IFacetsV2SharedCache _facetsV2SharedCache = facetsV2SharedCache ?? DisabledFacetsV2SharedCache.Instance;
     private readonly SemaphoreSlim _databaseTokenLock = new(1, 1);
     private AccessToken _cachedDatabaseAccessToken;

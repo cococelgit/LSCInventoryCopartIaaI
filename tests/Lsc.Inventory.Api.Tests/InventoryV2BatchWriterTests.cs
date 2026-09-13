@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Options;
+using Lsc.Inventory.Api.Scoring;
 using Lsc.Inventory.Api.Storage;
 using Xunit;
 
@@ -22,7 +24,9 @@ public sealed class InventoryV2BatchWriterTests
     public void Mapping_is_deterministic_and_contains_no_payload_column()
     {
         var observedAt = DateTimeOffset.Parse("2026-09-11T12:00:00Z");
-        var item = new InventoryV2BatchItem(Vehicle(), observedAt);
+        var sourceRunId = Guid.Parse("6d159344-990c-482a-8629-8de533ce32d1");
+        var vehicle = Vehicle();
+        var item = new InventoryV2BatchItem(vehicle, observedAt, sourceRunId);
 
         var first = PostgresSnapshotStore.PrepareInventoryV2Lot(item);
         var second = PostgresSnapshotStore.PrepareInventoryV2Lot(item);
@@ -36,6 +40,10 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Equal("2", first.Values["media_photos_count"]);
         Assert.Equal("OTHER", first.Values["title_type"]);
         Assert.Equal("true", first.Values["is_buy_now"]);
+        Assert.Equal(sourceRunId.ToString("D"), first.Values["source_run_id"]);
+        Assert.Equal(
+            LscVehicleScoringEngine.CreateInputHash(vehicle, AuctionEligibilityEvaluator.Evaluate(vehicle, observedAt)),
+            first.Values["score_input_hash"]);
         Assert.DoesNotContain(first.Values.Keys, key => key.Contains("payload", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(first.Values.Keys, key => key.Contains("json", StringComparison.OrdinalIgnoreCase));
     }
@@ -57,6 +65,37 @@ public sealed class InventoryV2BatchWriterTests
         Assert.Equal(original.Values["score_input_hash"], changed.Values["score_input_hash"]);
         Assert.NotEqual(original.Values["auction_hash"], changed.Values["auction_hash"]);
         Assert.NotEqual(original.Values["search_hash"], changed.Values["search_hash"]);
+    }
+
+    [Fact]
+    public void Seller_classification_change_invalidates_the_scoring_input_hash()
+    {
+        var observedAt = DateTimeOffset.Parse("2026-09-11T12:00:00Z");
+        var original = PostgresSnapshotStore.PrepareInventoryV2Lot(new InventoryV2BatchItem(Vehicle(), observedAt))!;
+        var changedVehicle = Vehicle() with
+        {
+            Seller = Vehicle().Seller! with { Type = "dealer_auto_group", Class = "dealer" }
+        };
+        var changed = PostgresSnapshotStore.PrepareInventoryV2Lot(new InventoryV2BatchItem(changedVehicle, observedAt.AddMinutes(1)))!;
+
+        Assert.NotEqual(original.Values["score_input_hash"], changed.Values["score_input_hash"]);
+    }
+
+    [Fact]
+    public void Writer_enqueues_scoring_in_the_same_transaction_as_inventory_v2()
+    {
+        var store = File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.InventoryV2Batch.cs"));
+        var scoring = File.ReadAllText(FindRepositoryFile("Storage/PostgresSnapshotStore.Scoring.cs"));
+
+        var merge = store.IndexOf("MergeInventoryV2Async", StringComparison.Ordinal);
+        var enqueue = store.IndexOf("EnqueueInventoryV2ScoringActionsAsync", merge, StringComparison.Ordinal);
+        var commit = store.IndexOf("CommitAsync", enqueue, StringComparison.Ordinal);
+        Assert.True(merge >= 0 && enqueue > merge && commit > enqueue);
+        Assert.Contains("source_run_id", store, StringComparison.Ordinal);
+        Assert.Contains("score.input_hash is distinct from current.score_input_hash", store, StringComparison.Ordinal);
+        Assert.Contains("input_hash text", scoring, StringComparison.Ordinal);
+        Assert.Contains("policy_version text", scoring, StringComparison.Ordinal);
+        Assert.Contains("source_run_id uuid", scoring, StringComparison.Ordinal);
     }
 
     [Fact]

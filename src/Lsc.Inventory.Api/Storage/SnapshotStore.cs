@@ -37,6 +37,7 @@ public interface IInventorySnapshotStore
     Task<SellerTaxonomyAudit> GetSellerTaxonomyAuditAsync(CancellationToken cancellationToken);
     Task<InventoryScoringBackfillResult> EnqueueScoringBackfillAsync(int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken);
+    Task<InventoryScoringBatchResult> ProcessScoringBatchForRunAsync(Guid sourceRunId, int maximum, CancellationToken cancellationToken);
     Task<InventoryScoringOperationalStatus> GetScoringOperationalStatusAsync(CancellationToken cancellationToken);
     Task<InventoryScoringIntegrityReport> GetScoringIntegrityReportAsync(string policyVersion, int sampleLimit, CancellationToken cancellationToken) => throw new NotSupportedException();
     Task<InventoryV2CountReconciliationReport> GetInventoryV2CountReconciliationAsync(int sampleLimit, DateTimeOffset? firstSeenAfter, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -554,7 +555,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, byte>> _nationalObservations = new();
     private readonly ConcurrentDictionary<Guid, (InventorySyncRunStart Start, InventorySyncRunCompletion? Completion)> _syncRuns = new();
     private readonly ConcurrentQueue<InventorySyncRunEvent> _syncRunEvents = new();
-    private readonly ConcurrentDictionary<string, (AuctionVehicle Vehicle, DateTimeOffset ObservedAt, int Attempts, int Priority)> _scoringQueue = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (AuctionVehicle Vehicle, DateTimeOffset ObservedAt, Guid? SourceRunId, int Attempts, int Priority)> _scoringQueue = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, LscVehicleScoringResult> _scores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<Guid, (string Trigger, DateTimeOffset StartedAt, InventoryScoringRunCompletion? Completion)> _scoringRuns = new();
 
@@ -732,7 +733,7 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
         _snapshots[identity] = snapshot;
         _lifecycle[identity] = (vehicle.Platform?.Trim().ToLowerInvariant() ?? "unknown", true, 0);
         if (!string.Equals(action, "unchanged", StringComparison.Ordinal))
-            _scoringQueue[identity] = (vehicle, observedAt, 0, 100);
+            _scoringQueue[identity] = (vehicle, observedAt, runId, 0, 100);
         var changed = action == "unchanged" ? Array.Empty<string>() : new[] { action == "created" ? "initial" : "snapshot" };
         if (runId is not null)
         {
@@ -767,19 +768,26 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
             }
             _scoringQueue.AddOrUpdate(
                 snapshot.Identity,
-                _ => (snapshot.Vehicle, snapshot.ObservedAt, 0, 10),
+                _ => (snapshot.Vehicle, snapshot.ObservedAt, null, 0, 10),
                 (_, existing) => existing.Priority >= 100
                     ? existing
-                    : (snapshot.Vehicle, snapshot.ObservedAt, existing.Attempts, 10));
+                    : (snapshot.Vehicle, snapshot.ObservedAt, null, existing.Attempts, 10));
             enqueued++;
         }
         return Task.FromResult(new InventoryScoringBackfillResult(candidates.Length, enqueued, current));
     }
 
-    public Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken)
+    public Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken) =>
+        ProcessScoringBatchCoreAsync(maximum, null, cancellationToken);
+
+    public Task<InventoryScoringBatchResult> ProcessScoringBatchForRunAsync(Guid sourceRunId, int maximum, CancellationToken cancellationToken) =>
+        ProcessScoringBatchCoreAsync(maximum, sourceRunId, cancellationToken);
+
+    private Task<InventoryScoringBatchResult> ProcessScoringBatchCoreAsync(int maximum, Guid? sourceRunId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var candidates = _scoringQueue
+            .Where(item => sourceRunId is null || item.Value.SourceRunId == sourceRunId)
             .OrderByDescending(item => item.Value.Priority)
             .ThenBy(item => item.Value.ObservedAt)
             .Take(Math.Clamp(maximum, 1, 500))

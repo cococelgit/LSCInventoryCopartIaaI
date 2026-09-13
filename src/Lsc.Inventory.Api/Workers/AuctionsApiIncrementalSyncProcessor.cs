@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Lsc.Inventory.Api.Classification;
 using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Normalization;
 using Lsc.Inventory.Api.Options;
@@ -38,11 +39,15 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
     IInventorySnapshotStore snapshotStore,
     ICanonicalInventoryIngestionPipeline canonicalPipeline,
     IInventoryV2BatchWriter inventoryV2BatchWriter,
+    IInventoryScoringProcessor scoringProcessor,
+    ISellerClassifier sellerClassifier,
     IOptions<AuctionsApiOptions> options,
+    IOptions<ScoringOptions> scoringOptions,
     ILogger<AuctionsApiIncrementalSyncProcessor> logger) : IAuctionsApiIncrementalSyncProcessor
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AuctionsApiOptions _options = options.Value;
+    private readonly ScoringOptions _scoring = scoringOptions.Value;
 
     public async Task<AuctionsApiIncrementalSyncResult> RunAsync(string platform, bool persist, CancellationToken cancellationToken, int? maximumLots = null)
     {
@@ -127,7 +132,8 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
                         await snapshotStore.RecordSyncRunEventAsync(new InventorySyncRunEvent(runId, normalizedPlatform, saved.LotKey, ingested.Vehicle.LotNumber, MaskVin(ingested.Vehicle.Vin), saved.Action, saved.ChangedFields, [], observedAt), cancellationToken);
                         if (inventoryV2BatchWriter.ShadowWriteConfigured)
                         {
-                            inventoryV2Batch.Add(new InventoryV2BatchItem(ingested.Vehicle, observedAt));
+                            var classifiedVehicle = await ClassifySellerAsync(normalizedPlatform, ingested.Vehicle, cancellationToken);
+                            inventoryV2Batch.Add(new InventoryV2BatchItem(classifiedVehicle, observedAt, runId));
                             if (inventoryV2Batch.Count >= inventoryV2BatchWriter.PreferredBatchSize)
                                 await FlushInventoryV2ShadowAsync(inventoryV2Batch, cancellationToken);
                         }
@@ -145,6 +151,27 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             }
 
             await FlushInventoryV2ShadowAsync(inventoryV2Batch, cancellationToken);
+
+            if (persist && _scoring.ProcessIngestionRunImmediately)
+            {
+                try
+                {
+                    var scoring = await scoringProcessor.ProcessRunAsync(
+                        runId,
+                        requestedMaximum ?? _scoring.ImmediateMaximumLots,
+                        cancellationToken,
+                        "incremental-post-ingestion");
+                    logger.LogInformation(
+                        "Immediate scoring completed for incremental run {RunId}: claimed={Claimed} completed={Completed} failed={Failed} skipped={Skipped} remaining={Remaining}.",
+                        runId, scoring.Claimed, scoring.Completed, scoring.Failed, scoring.Skipped, scoring.Remaining);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    logger.LogError(exception,
+                        "Immediate scoring failed for incremental run {RunId}; queued items remain available for the recovery scoring job.",
+                        runId);
+                }
+            }
 
             if (requestedMaximum is null)
             {
@@ -223,6 +250,29 @@ public sealed class AuctionsApiIncrementalSyncProcessor(
             // V2 remains shadow-only. Its failure must never make the V1 inventory write fail.
             logger.LogError(exception, "Inventory V2 shadow batch failed after V1 persisted {Count} lots.", snapshot.Length);
         }
+    }
+
+    private async Task<AuctionVehicle> ClassifySellerAsync(string platform, AuctionVehicle vehicle, CancellationToken cancellationToken)
+    {
+        if (vehicle.Seller is null) return vehicle;
+        var classification = await sellerClassifier.ClassifyAsync(
+            platform,
+            vehicle.Seller.Name,
+            vehicle.Seller.RawType,
+            vehicle.Seller.Class,
+            vehicle.Seller.TextClass,
+            cancellationToken);
+        return vehicle with
+        {
+            Seller = vehicle.Seller with
+            {
+                Type = classification.Category,
+                ClassificationConfidence = classification.Confidence,
+                NeedsReview = classification.NeedsReview,
+                ClassificationEvidence = classification.Evidence,
+                TaxonomyVersion = classification.PromptVersion
+            }
+        };
     }
 
     private async IAsyncEnumerable<WindowPage> ReadWindowPagesAsync(

@@ -12,9 +12,23 @@ public sealed partial class PostgresSnapshotStore
     private const int BackfillPriorityScoring = 10;
     private const int MaximumScoringAttempts = 3;
 
-    private sealed record ScoringQueueItem(string LotKey, string Platform, DateTimeOffset SourceObservedAt, int Attempts, int Priority);
+    private sealed record ScoringQueueItem(
+        string LotKey,
+        string Platform,
+        DateTimeOffset SourceObservedAt,
+        string InputHash,
+        string PolicyVersion,
+        Guid? SourceRunId,
+        int Attempts,
+        int Priority);
 
-    private async Task EnqueueScoringCandidateAsync(string lotKey, string? platform, DateTimeOffset observedAt, CancellationToken cancellationToken)
+    private async Task EnqueueScoringCandidateAsync(
+        string lotKey,
+        string? platform,
+        DateTimeOffset observedAt,
+        string inputHash,
+        Guid? sourceRunId,
+        CancellationToken cancellationToken)
     {
         await EnsureScoringSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -22,11 +36,17 @@ public sealed partial class PostgresSnapshotStore
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
         command.CommandText = """
             insert into inventory_vehicle_scoring_queue (
-                lot_key, platform, source_observed_at, status, attempts, priority, requested_at, updated_at)
-            values (@lot_key, @platform, @source_observed_at, 'queued', 0, @priority, now(), now())
+                lot_key, platform, source_observed_at, input_hash, policy_version, source_run_id,
+                status, attempts, priority, requested_at, updated_at)
+            values (
+                @lot_key, @platform, @source_observed_at, @input_hash, @policy_version, @source_run_id,
+                'queued', 0, @priority, now(), now())
             on conflict (lot_key) do update set
                 platform = excluded.platform,
                 source_observed_at = excluded.source_observed_at,
+                input_hash = excluded.input_hash,
+                policy_version = excluded.policy_version,
+                source_run_id = excluded.source_run_id,
                 status = 'queued',
                 attempts = 0,
                 priority = excluded.priority,
@@ -39,6 +59,9 @@ public sealed partial class PostgresSnapshotStore
         AddParameter(command, "lot_key", lotKey);
         AddParameter(command, "platform", platform?.Trim().ToLowerInvariant() ?? "unknown");
         AddParameter(command, "source_observed_at", observedAt);
+        AddParameter(command, "input_hash", inputHash);
+        AddParameter(command, "policy_version", LscScoringPolicy.Version);
+        AddParameter(command, "source_run_id", sourceRunId);
         AddParameter(command, "priority", HighPriorityScoring);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -52,7 +75,7 @@ public sealed partial class PostgresSnapshotStore
         command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 120);
         command.CommandText = """
             with eligible as (
-                select current.lot_key, current.platform, current.last_seen_at,
+                select current.lot_key, current.platform, current.last_seen_at, current.score_input_hash,
                        row_number() over (
                            partition by current.platform
                            order by current.last_seen_at asc, current.lot_key asc) as platform_position
@@ -63,24 +86,40 @@ public sealed partial class PostgresSnapshotStore
                   and (
                     score.lot_key is null
                     or score.policy_version <> @policy_version
-                    or score.source_observed_at <> current.last_seen_at
+                    or score.input_hash is distinct from current.score_input_hash
                     or (queue.status = 'failed' and queue.attempts < @maximum_attempts)
                   )
+                  and current.score_input_hash is not null
+                  and not (
+                    queue.status = 'failed'
+                    and queue.attempts >= @maximum_attempts
+                    and queue.input_hash = current.score_input_hash
+                    and queue.policy_version = @policy_version
+                  )
             ), candidates as (
-                select lot_key, platform, last_seen_at
+                select lot_key, platform, last_seen_at, score_input_hash
                 from eligible
                 order by platform_position asc, platform asc, lot_key asc
                 limit @limit
             ), upserted as (
                 insert into inventory_vehicle_scoring_queue (
-                    lot_key, platform, source_observed_at, status, attempts, priority, requested_at, updated_at)
-                select lot_key, platform, last_seen_at, 'queued', 0, @priority, now(), now()
+                    lot_key, platform, source_observed_at, input_hash, policy_version, source_run_id,
+                    status, attempts, priority, requested_at, updated_at)
+                select lot_key, platform, last_seen_at, score_input_hash, @policy_version, null,
+                       'queued', 0, @priority, now(), now()
                 from candidates
                 on conflict (lot_key) do update set
                     platform = excluded.platform,
                     source_observed_at = excluded.source_observed_at,
+                    input_hash = excluded.input_hash,
+                    policy_version = excluded.policy_version,
+                    source_run_id = null,
                     status = 'queued',
-                    attempts = inventory_vehicle_scoring_queue.attempts,
+                    attempts = case
+                        when inventory_vehicle_scoring_queue.input_hash is distinct from excluded.input_hash
+                          or inventory_vehicle_scoring_queue.policy_version is distinct from excluded.policy_version then 0
+                        else inventory_vehicle_scoring_queue.attempts
+                    end,
                     priority = greatest(inventory_vehicle_scoring_queue.priority, excluded.priority),
                     last_error = null,
                     requested_at = now(),
@@ -102,9 +141,15 @@ public sealed partial class PostgresSnapshotStore
         return new InventoryScoringBackfillResult(requested, enqueued, Math.Max(0, requested - enqueued));
     }
 
-    public async Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken)
+    public Task<InventoryScoringBatchResult> ProcessScoringBatchAsync(int maximum, CancellationToken cancellationToken) =>
+        ProcessScoringBatchCoreAsync(maximum, null, cancellationToken);
+
+    public Task<InventoryScoringBatchResult> ProcessScoringBatchForRunAsync(Guid sourceRunId, int maximum, CancellationToken cancellationToken) =>
+        ProcessScoringBatchCoreAsync(maximum, sourceRunId, cancellationToken);
+
+    private async Task<InventoryScoringBatchResult> ProcessScoringBatchCoreAsync(int maximum, Guid? sourceRunId, CancellationToken cancellationToken)
     {
-        var claimed = await ClaimScoringBatchAsync(maximum, cancellationToken);
+        var claimed = await ClaimScoringBatchAsync(maximum, sourceRunId, cancellationToken);
         var completed = 0;
         var failed = 0;
         var skipped = 0;
@@ -124,12 +169,19 @@ public sealed partial class PostgresSnapshotStore
                 // The queue timestamp is a scheduling hint and may be stale by the time the
                 // worker reads the current V2 row. Score the snapshot that was actually read;
                 // persist its timestamp so coverage is measured against the same row version.
-                var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle);
+                var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle, snapshot.ObservedAt);
                 var outcome = LscVehicleScoringEngine.Evaluate(snapshot.Vehicle, eligibility) with
                 {
                     LotKey = item.LotKey,
                     Platform = item.Platform
                 };
+                if (!string.Equals(outcome.PolicyVersion, item.PolicyVersion, StringComparison.Ordinal)
+                    || !string.Equals(outcome.InputHash, item.InputHash, StringComparison.Ordinal))
+                {
+                    await CompleteScoringQueueItemAsync(item, "skipped", "input-superseded", cancellationToken);
+                    skipped++;
+                    continue;
+                }
                 await PersistScoringResultAsync(outcome, snapshot.ObservedAt, cancellationToken);
                 await CompleteScoringQueueItemAsync(item, "completed", null, cancellationToken);
                 completed++;
@@ -293,7 +345,7 @@ public sealed partial class PostgresSnapshotStore
                    count(*)::bigint as active_count,
                    count(*) filter (where score.lot_key is not null
                        and score.policy_version = @policy_version
-                       and score.source_observed_at = active.last_seen_at)::bigint as current_count,
+                       and score.input_hash = active.score_input_hash)::bigint as current_count,
                    count(*) filter (where queue.status = 'queued')::bigint as queued_count,
                    count(*) filter (where queue.status = 'processing')::bigint as processing_count,
                    count(*) filter (where queue.status = 'failed')::bigint as failed_count,
@@ -301,7 +353,7 @@ public sealed partial class PostgresSnapshotStore
                    min(queue.requested_at) filter (where queue.status = 'queued'),
                    max(score.scored_at) filter (where score.lot_key is not null
                        and score.policy_version = @policy_version
-                       and score.source_observed_at = active.last_seen_at)
+                       and score.input_hash = active.score_input_hash)
             from active_inventory active
             left join inventory_vehicle_score_current score on score.lot_key = active.lot_key
             left join inventory_vehicle_scoring_queue queue on queue.lot_key = active.lot_key
@@ -428,11 +480,15 @@ public sealed partial class PostgresSnapshotStore
              and result.policy_version = current.policy_version
              and result.input_hash = current.input_hash
             join inventory_current_v2 inventory on inventory.lot_key = current.lot_key
-            where inventory.lot_number = @lot_number and inventory.is_active
+            where inventory.lot_number = @lot_number
+              and inventory.is_active
+              and current.policy_version = @policy_version
+              and current.input_hash = inventory.score_input_hash
             order by current.scored_at desc
             limit 1;
             """;
         AddParameter(command, "lot_number", lotNumber.Trim());
+        AddParameter(command, "policy_version", LscScoringPolicy.Version);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken)) return null;
         try
@@ -448,7 +504,7 @@ public sealed partial class PostgresSnapshotStore
         }
     }
 
-    private async Task<IReadOnlyList<ScoringQueueItem>> ClaimScoringBatchAsync(int maximum, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<ScoringQueueItem>> ClaimScoringBatchAsync(int maximum, Guid? sourceRunId, CancellationToken cancellationToken)
     {
         await EnsureScoringSchemaAsync(cancellationToken);
         var limit = Math.Clamp(maximum, 1, 500);
@@ -472,7 +528,9 @@ public sealed partial class PostgresSnapshotStore
             with high_priority as (
                 select lot_key, platform, priority, requested_at
                 from inventory_vehicle_scoring_queue
-                where status = 'queued' and priority >= @high_priority
+                where status = 'queued'
+                  and priority >= @high_priority
+                  and (@source_run_id is null or source_run_id = @source_run_id)
                 order by priority desc, requested_at asc, lot_key asc
                 limit @limit
             ), remaining as (
@@ -484,7 +542,9 @@ public sealed partial class PostgresSnapshotStore
                            partition by platform
                            order by requested_at asc, lot_key asc) as platform_position
                 from inventory_vehicle_scoring_queue
-                where status = 'queued' and priority < @high_priority
+                where status = 'queued'
+                  and priority < @high_priority
+                  and (@source_run_id is null or source_run_id = @source_run_id)
             ), low_priority as (
                 select low.lot_key, low.platform, low.priority, low.requested_at
                 from low_ranked low
@@ -507,15 +567,25 @@ public sealed partial class PostgresSnapshotStore
             set status = 'processing', attempts = queue.attempts + 1, claimed_at = now(), updated_at = now()
             from locked
             where queue.lot_key = locked.lot_key
-            returning queue.lot_key, queue.platform, queue.source_observed_at, queue.attempts, queue.priority;
+            returning queue.lot_key, queue.platform, queue.source_observed_at, queue.input_hash,
+                      queue.policy_version, queue.source_run_id, queue.attempts, queue.priority;
             """;
         AddParameter(command, "limit", limit);
         AddParameter(command, "high_priority", HighPriorityScoring);
+        AddParameter(command, "source_run_id", sourceRunId);
         var items = new List<ScoringQueueItem>();
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
-                items.Add(new ScoringQueueItem(reader.GetString(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2), reader.GetInt32(3), reader.GetInt32(4)));
+                items.Add(new ScoringQueueItem(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetFieldValue<DateTimeOffset>(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetGuid(5),
+                    reader.GetInt32(6),
+                    reader.GetInt32(7)));
         }
         await transaction.CommitAsync(cancellationToken);
         return items;
@@ -523,7 +593,7 @@ public sealed partial class PostgresSnapshotStore
 
     private async Task<StoredVehicleSnapshot?> GetScoringSnapshotAsync(string lotKey, CancellationToken cancellationToken)
     {
-        return await GetByLotKeyInventoryV2Async(lotKey, cancellationToken);
+        return await GetByLotKeyInventoryV2Async(lotKey, cancellationToken, requirePublishedScore: false);
     }
 
     private async Task PersistScoringResultAsync(LscVehicleScoringResult outcome, DateTimeOffset sourceObservedAt, CancellationToken cancellationToken)
@@ -563,10 +633,13 @@ public sealed partial class PostgresSnapshotStore
                     lot_key, platform, status, pre_grade, buy_score, max_points_evaluable,
                     coverage_percent, confidence_percent, category, policy_version, input_hash,
                     source_observed_at, scored_at, updated_at)
-                values (
+                select
                     @lot_key, @platform, @status, @pre_grade, @buy_score, @max_points_evaluable,
                     @coverage_percent, @confidence_percent, @category, @policy_version, @input_hash,
-                    @source_observed_at, @scored_at, now())
+                    @source_observed_at, @scored_at, now()
+                from inventory_current_v2 inventory
+                where inventory.lot_key = @lot_key
+                  and inventory.score_input_hash = @input_hash
                 on conflict (lot_key) do update set
                     platform = excluded.platform, status = excluded.status, pre_grade = excluded.pre_grade,
                     buy_score = excluded.buy_score, max_points_evaluable = excluded.max_points_evaluable,
@@ -616,14 +689,18 @@ public sealed partial class PostgresSnapshotStore
                 last_error = @last_error,
                 completed_at = case when @status in ('completed', 'skipped', 'failed') then now() else null end,
                 updated_at = now()
-            where lot_key = @lot_key and source_observed_at = @source_observed_at;
+            where lot_key = @lot_key
+              and input_hash = @input_hash
+              and policy_version = @policy_version
+              and status = 'processing';
             """;
         AddParameter(command, "status", status);
         AddParameter(command, "attempts", item.Attempts);
         AddParameter(command, "maximum_attempts", MaximumScoringAttempts);
         AddParameter(command, "last_error", error);
         AddParameter(command, "lot_key", item.LotKey);
-        AddParameter(command, "source_observed_at", item.SourceObservedAt);
+        AddParameter(command, "input_hash", item.InputHash);
+        AddParameter(command, "policy_version", item.PolicyVersion);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -701,6 +778,9 @@ public sealed partial class PostgresSnapshotStore
                     lot_key text primary key,
                     platform text not null,
                     source_observed_at timestamptz not null,
+                    input_hash text,
+                    policy_version text,
+                    source_run_id uuid,
                     status text not null,
                     attempts integer not null default 0,
                     priority smallint not null default 10,
@@ -712,12 +792,34 @@ public sealed partial class PostgresSnapshotStore
                 );
                 alter table inventory_vehicle_scoring_queue
                     add column if not exists priority smallint not null default 10;
+                alter table inventory_vehicle_scoring_queue
+                    add column if not exists input_hash text;
+                alter table inventory_vehicle_scoring_queue
+                    add column if not exists policy_version text;
+                alter table inventory_vehicle_scoring_queue
+                    add column if not exists source_run_id uuid;
+
+                update inventory_vehicle_scoring_queue queue
+                set input_hash = current.score_input_hash,
+                    policy_version = @policy_version
+                from inventory_current_v2 current
+                where current.lot_key = queue.lot_key
+                  and (queue.input_hash is null or queue.policy_version is null);
+
+                alter table inventory_vehicle_scoring_queue
+                    alter column input_hash set not null;
+                alter table inventory_vehicle_scoring_queue
+                    alter column policy_version set not null;
 
                 create index if not exists ix_inventory_vehicle_scoring_queue_status_requested
                     on inventory_vehicle_scoring_queue (status, priority desc, requested_at, lot_key);
 
                 create index if not exists ix_inventory_vehicle_scoring_queue_status_priority_requested
                     on inventory_vehicle_scoring_queue (status, priority desc, requested_at, lot_key);
+
+                create index if not exists ix_inventory_vehicle_scoring_queue_run_status_requested
+                    on inventory_vehicle_scoring_queue (source_run_id, status, priority desc, requested_at, lot_key)
+                    where source_run_id is not null;
 
                 create table if not exists inventory_vehicle_scoring_runs (
                     run_id uuid primary key,
@@ -741,6 +843,7 @@ public sealed partial class PostgresSnapshotStore
                 create index if not exists ix_inventory_vehicle_scoring_runs_started
                     on inventory_vehicle_scoring_runs (started_at desc);
                 """;
+            AddParameter(command, "policy_version", LscScoringPolicy.Version);
             await command.ExecuteNonQueryAsync(cancellationToken);
             _scoringSchemaInitialized = true;
         }

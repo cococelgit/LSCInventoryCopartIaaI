@@ -19,6 +19,7 @@ public sealed record InventoryScoringRunResult(
 public interface IInventoryScoringProcessor
 {
     Task<InventoryScoringRunResult> RunBackfillAsync(int? maximum, CancellationToken cancellationToken, string trigger = "manual-api");
+    Task<InventoryScoringRunResult> ProcessRunAsync(Guid sourceRunId, int? maximum, CancellationToken cancellationToken, string trigger = "post-ingestion");
     Task<InventoryScoringBatchResult> ProcessBatchAsync(int? maximum, CancellationToken cancellationToken);
 }
 
@@ -77,4 +78,57 @@ public sealed class InventoryScoringProcessor(
 
     public Task<InventoryScoringBatchResult> ProcessBatchAsync(int? maximum, CancellationToken cancellationToken) =>
         snapshotStore.ProcessScoringBatchAsync(Math.Clamp(maximum ?? _options.BatchSize, 1, _options.BatchSize), cancellationToken);
+
+    public async Task<InventoryScoringRunResult> ProcessRunAsync(
+        Guid sourceRunId,
+        int? maximum,
+        CancellationToken cancellationToken,
+        string trigger = "post-ingestion")
+    {
+        var scoringRunId = await snapshotStore.StartScoringRunAsync(trigger, cancellationToken);
+        var limit = Math.Clamp(maximum ?? _options.ImmediateMaximumLots, 1, _options.ImmediateMaximumLots);
+        var batches = 0;
+        var claimed = 0;
+        var completed = 0;
+        var failed = 0;
+        var skipped = 0;
+        var remaining = 0;
+        var highPriorityClaimed = 0;
+        var backfillClaimed = 0;
+        try
+        {
+            while (claimed < limit)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var batch = await snapshotStore.ProcessScoringBatchForRunAsync(
+                    sourceRunId,
+                    Math.Min(_options.BatchSize, limit - claimed),
+                    cancellationToken);
+                batches++;
+                claimed += batch.Claimed;
+                completed += batch.Completed;
+                failed += batch.Failed;
+                skipped += batch.Skipped;
+                remaining = batch.Remaining;
+                highPriorityClaimed += batch.HighPriorityClaimed;
+                backfillClaimed += batch.BackfillClaimed;
+                if (batch.Claimed == 0) break;
+            }
+
+            var status = failed > 0 ? "completed_with_errors" : "completed";
+            await snapshotStore.CompleteScoringRunAsync(scoringRunId, new InventoryScoringRunCompletion(
+                status, DateTimeOffset.UtcNow, 0, 0, claimed, completed, failed,
+                skipped, remaining, highPriorityClaimed, backfillClaimed), cancellationToken);
+            return new InventoryScoringRunResult(
+                scoringRunId, new InventoryScoringBackfillResult(0, 0, 0), batches,
+                claimed, completed, failed, skipped, remaining, highPriorityClaimed, backfillClaimed);
+        }
+        catch (Exception exception)
+        {
+            await snapshotStore.CompleteScoringRunAsync(scoringRunId, new InventoryScoringRunCompletion(
+                "failed", DateTimeOffset.UtcNow, 0, 0, claimed, completed, failed,
+                skipped, remaining, highPriorityClaimed, backfillClaimed, exception.Message), CancellationToken.None);
+            throw;
+        }
+    }
 }

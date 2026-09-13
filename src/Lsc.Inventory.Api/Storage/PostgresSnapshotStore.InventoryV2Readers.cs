@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Scoring;
 using Npgsql;
 
 namespace Lsc.Inventory.Api.Storage;
@@ -43,6 +44,7 @@ public sealed partial class PostgresSnapshotStore
         await using var countCommand = connection.CreateCommand();
         countCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
         AddInventoryV2ReaderFilters(countCommand, request, where);
+        AddCurrentScorePublicationGate(countCommand, where);
         countCommand.CommandText = $"select count(*)::int from inventory_current_v2 latest left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key where {string.Join(" and ", where)};";
         var total = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
 
@@ -50,6 +52,7 @@ public sealed partial class PostgresSnapshotStore
         itemsCommand.CommandTimeout = _persistence.CommandTimeoutSeconds;
         var itemWhere = new List<string> { "latest.is_active" };
         AddInventoryV2ReaderFilters(itemsCommand, request, itemWhere);
+        AddCurrentScorePublicationGate(itemsCommand, itemWhere);
         itemsCommand.CommandText = $"""
             select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
                    score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
@@ -75,14 +78,16 @@ public sealed partial class PostgresSnapshotStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
+        var where = new List<string> { "latest.is_active" };
+        AddCurrentScorePublicationGate(command, where);
+        command.CommandText = $"""
             select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
                    score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
                    score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
                    score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
             from inventory_current_v2 latest
             left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
-            where latest.is_active
+            where {string.Join(" and ", where)}
             order by latest.last_seen_at desc nulls last, latest.lot_key asc
             limit @limit;
             """;
@@ -162,19 +167,24 @@ public sealed partial class PostgresSnapshotStore
             newestByFirstSeen);
     }
 
-    private async Task<StoredVehicleSnapshot?> GetByLotKeyInventoryV2Async(string lotKey, CancellationToken cancellationToken)
+    private async Task<StoredVehicleSnapshot?> GetByLotKeyInventoryV2Async(
+        string lotKey,
+        CancellationToken cancellationToken,
+        bool requirePublishedScore = true)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
+        var where = new List<string> { "latest.lot_key = @lot_key", "latest.is_active" };
+        if (requirePublishedScore) AddCurrentScorePublicationGate(command, where);
+        command.CommandText = $"""
             select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
                    score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
                    score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
                    score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
             from inventory_current_v2 latest
             left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
-            where latest.lot_key = @lot_key and latest.is_active
+            where {string.Join(" and ", where)}
             limit 1;
             """;
         AddParameter(command, "lot_key", lotKey);
@@ -189,14 +199,16 @@ public sealed partial class PostgresSnapshotStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
+        var where = new List<string> { "latest.lot_number = @lot_number", "latest.is_active" };
+        AddCurrentScorePublicationGate(command, where);
+        command.CommandText = $"""
             select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
                    score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
                    score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
                    score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
             from inventory_current_v2 latest
             left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
-            where latest.lot_number = @lot_number and latest.is_active
+            where {string.Join(" and ", where)}
             limit 1;
             """;
         AddParameter(command, "lot_number", lotNumber.Trim());
@@ -211,14 +223,16 @@ public sealed partial class PostgresSnapshotStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = _persistence.CommandTimeoutSeconds;
-        command.CommandText = """
+        var where = new List<string> { "latest.platform = @platform", "latest.lot_number = @lot_number", "latest.is_active" };
+        AddCurrentScorePublicationGate(command, where);
+        command.CommandText = $"""
             select latest.*, latest.last_seen_at as observed_at, score.status as score_status, score.pre_grade as score_pre_grade,
                    score.buy_score as score_buy_score, score.max_points_evaluable as score_max_points_evaluable,
                    score.coverage_percent as score_coverage_percent, score.confidence_percent as score_confidence_percent,
                    score.category as score_category, score.policy_version as score_policy_version, score.scored_at as score_scored_at
             from inventory_current_v2 latest
             left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key
-            where latest.platform = @platform and latest.lot_number = @lot_number and latest.is_active
+            where {string.Join(" and ", where)}
             limit 1;
             """;
         AddParameter(command, "platform", platform.Trim().ToLowerInvariant());
@@ -227,6 +241,19 @@ public sealed partial class PostgresSnapshotStore
         if (rows.Count == 0) return null;
         await AttachInventoryV2MediaAsync(connection, rows, cancellationToken);
         return ToStoredInventoryV2Snapshot(rows[0]);
+    }
+
+    private void AddCurrentScorePublicationGate(
+        NpgsqlCommand command,
+        ICollection<string> where,
+        string inventoryAlias = "latest",
+        string scoreAlias = "score")
+    {
+        if (!_scoring.RequireCurrentForPublication) return;
+        where.Add($"{scoreAlias}.lot_key is not null");
+        where.Add($"{scoreAlias}.policy_version = @v2_current_score_policy");
+        where.Add($"{scoreAlias}.input_hash = {inventoryAlias}.score_input_hash");
+        AddParameter(command, "v2_current_score_policy", LscScoringPolicy.Version);
     }
 
     private static void AddInventoryV2ReaderFilters(NpgsqlCommand command, InventorySearchRequest request, List<string> where)

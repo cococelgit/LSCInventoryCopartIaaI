@@ -4,7 +4,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Lsc.Inventory.Api.Contracts;
+using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Normalization;
+using Lsc.Inventory.Api.Scoring;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -36,11 +38,11 @@ public sealed partial class PostgresSnapshotStore
         "facility_office_name", "facility_zip", "send_from", "lane", "aisle", "media_photos_count",
         "media_has_photos", "media_has_360", "media_has_video", "source_created_at", "source_updated_at",
         "identity_hash", "spec_hash", "condition_hash", "auction_hash", "seller_location_hash", "media_hash",
-        "score_input_hash", "search_hash", "observed_at", "media_complete"
+        "score_input_hash", "search_hash", "source_run_id", "observed_at", "media_complete"
     ];
 
     private static readonly string[] InventoryV2TargetColumns =
-        InventoryV2StageColumns.Where(static column => column is not ("observed_at" or "media_complete")).ToArray();
+        InventoryV2StageColumns.Where(static column => column is not ("source_run_id" or "observed_at" or "media_complete")).ToArray();
 
     public int PreferredBatchSize => Math.Clamp(_inventoryV2.BatchSize, 100, 2000);
 
@@ -65,6 +67,7 @@ public sealed partial class PostgresSnapshotStore
             return InventoryV2BatchWriteResult.Skipped(items.Count, "no-valid-lots");
 
         var started = Stopwatch.GetTimestamp();
+        await EnsureScoringSchemaAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         if (!await IsInventoryV2WriterEnabledAsync(connection, cancellationToken))
             return InventoryV2BatchWriteResult.Skipped(items.Count, "schema-writer-disabled");
@@ -77,11 +80,12 @@ public sealed partial class PostgresSnapshotStore
 
         var counts = await ReadInventoryV2ActionCountsAsync(connection, transaction, cancellationToken);
         var mediaRows = await MergeInventoryV2Async(connection, transaction, cancellationToken);
+        var scoringQueued = await EnqueueInventoryV2ScoringActionsAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         var durationMs = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         logger.LogInformation(
-            "Inventory V2 shadow batch completed input={Input} distinct={Distinct} created={Created} updated={Updated} unchanged={Unchanged} stale={Stale} media={Media} durationMs={DurationMs}",
+            "Inventory V2 shadow batch completed input={Input} distinct={Distinct} created={Created} updated={Updated} unchanged={Unchanged} stale={Stale} media={Media} scoringQueued={ScoringQueued} durationMs={DurationMs}",
             items.Count,
             prepared.Length,
             counts.Created,
@@ -89,6 +93,7 @@ public sealed partial class PostgresSnapshotStore
             counts.Unchanged,
             counts.Stale,
             mediaRows,
+            scoringQueued,
             durationMs);
         return new InventoryV2BatchWriteResult(
             true,
@@ -99,6 +104,7 @@ public sealed partial class PostgresSnapshotStore
             counts.Unchanged,
             counts.Stale,
             mediaRows,
+            scoringQueued,
             durationMs);
     }
 
@@ -314,6 +320,7 @@ public sealed partial class PostgresSnapshotStore
                 nullif(source_updated_at, '')::timestamptz as source_updated_at,
                 identity_hash, spec_hash, condition_hash, auction_hash, seller_location_hash, media_hash,
                 score_input_hash, search_hash,
+                nullif(source_run_id, '')::uuid as source_run_id,
                 nullif(observed_at, '')::timestamptz as observed_at,
                 coalesce(nullif(media_complete, '')::boolean, false) as media_complete
             from inventory_v2_stage;
@@ -467,6 +474,65 @@ public sealed partial class PostgresSnapshotStore
         return (int)(await count.ExecuteScalarAsync(cancellationToken) ?? 0);
     }
 
+    private async Task<int> EnqueueInventoryV2ScoringActionsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandTimeout = _persistence.CommandTimeoutSeconds;
+        command.CommandText = """
+            with candidates as (
+                select current.lot_key,
+                       current.platform,
+                       current.last_seen_at,
+                       current.score_input_hash,
+                       source.source_run_id
+                from inventory_v2_actions source
+                join inventory_current_v2 current
+                  on current.platform = source.platform and current.lot_number = source.lot_number
+                left join inventory_vehicle_score_current score on score.lot_key = current.lot_key
+                where current.is_active
+                  and current.score_input_hash is not null
+                  and (
+                    score.lot_key is null
+                    or score.policy_version is distinct from @policy_version
+                    or score.input_hash is distinct from current.score_input_hash
+                  )
+            ), upserted as (
+                insert into inventory_vehicle_scoring_queue (
+                    lot_key, platform, source_observed_at, input_hash, policy_version, source_run_id,
+                    status, attempts, priority, requested_at, updated_at)
+                select lot_key, platform, last_seen_at, score_input_hash, @policy_version, source_run_id,
+                       'queued', 0, @priority, now(), now()
+                from candidates
+                on conflict (lot_key) do update set
+                    platform = excluded.platform,
+                    source_observed_at = excluded.source_observed_at,
+                    input_hash = excluded.input_hash,
+                    policy_version = excluded.policy_version,
+                    source_run_id = excluded.source_run_id,
+                    status = 'queued',
+                    attempts = 0,
+                    priority = greatest(inventory_vehicle_scoring_queue.priority, excluded.priority),
+                    last_error = null,
+                    requested_at = now(),
+                    claimed_at = null,
+                    completed_at = null,
+                    updated_at = now()
+                where inventory_vehicle_scoring_queue.input_hash is distinct from excluded.input_hash
+                   or inventory_vehicle_scoring_queue.policy_version is distinct from excluded.policy_version
+                   or inventory_vehicle_scoring_queue.status in ('completed', 'skipped')
+                returning lot_key
+            )
+            select count(*)::integer from upserted;
+            """;
+        AddParameter(command, "policy_version", LscScoringPolicy.Version);
+        AddParameter(command, "priority", HighPriorityScoring);
+        return (int)(await command.ExecuteScalarAsync(cancellationToken) ?? 0);
+    }
+
     internal static PreparedInventoryV2Lot? PrepareInventoryV2Lot(InventoryV2BatchItem item)
     {
         var vehicle = item.Vehicle;
@@ -603,6 +669,7 @@ public sealed partial class PostgresSnapshotStore
             ["media_has_video"] = Invariant(vehicle.Media?.HasVideo),
             ["source_created_at"] = Invariant(RawDate(rawLot, "created_at") ?? RawDate(rawRoot, "created_at")),
             ["source_updated_at"] = Invariant(sourceUpdatedAt),
+            ["source_run_id"] = item.SourceRunId?.ToString("D"),
             ["observed_at"] = Invariant(item.ObservedAt),
             ["media_complete"] = Invariant(mediaComplete),
         };
@@ -613,7 +680,8 @@ public sealed partial class PostgresSnapshotStore
         values["auction_hash"] = StableHash(values, "auction_state", "lot_status_id", "lot_status", "lot_sub_status", "auction_at", "archived_at", "is_buy_now", "is_timed", "current_bid_usd", "pre_bid_usd", "buy_now_usd", "final_bid_usd", "sale_price_usd", "provider_estimate_from_usd", "provider_estimate_to_usd", "provider_estimate_text", "actual_cash_value_usd", "estimated_repair_cost_usd");
         values["seller_location_hash"] = StableHash(values, "seller_name", "seller_type_id", "seller_type", "seller_class", "seller_text_class", "seller_is_insurance", "seller_is_rental", "seller_is_credit_company", "seller_classification_confidence", "seller_needs_review", "seller_classification_evidence", "seller_taxonomy_version", "location_display", "location_city", "location_state", "facility_id", "facility_office_name", "facility_zip", "send_from", "lane", "aisle");
         values["media_hash"] = StableHash(media.Select(static item => $"{item.MediaType}\u001f{item.Position}\u001f{item.SourceUrl}\u001f{item.ThumbnailUrl}\u001f{item.LargeUrl}"));
-        values["score_input_hash"] = StableHash(values, "year", "make", "model", "vehicle_type", "odometer_miles", "odometer_status", "title_type", "title_group", "primary_damage", "secondary_damage", "loss_type", "run_condition_value", "has_key", "seller_class", "seller_is_insurance", "actual_cash_value_usd", "estimated_repair_cost_usd", "location_state");
+        var eligibility = AuctionEligibilityEvaluator.Evaluate(vehicle, item.ObservedAt);
+        values["score_input_hash"] = LscVehicleScoringEngine.CreateInputHash(vehicle, eligibility);
         values["search_hash"] = StableHash(values, "vin", "year", "make", "model", "vehicle_type", "body_style", "fuel_type", "transmission", "drive_type", "exterior_color", "odometer_miles", "title_type", "title_group", "primary_damage", "secondary_damage", "run_condition_value", "seller_name", "seller_type", "seller_class", "auction_state", "auction_at", "lot_status", "lot_sub_status", "current_bid_usd", "buy_now_usd", "location_display", "location_city", "location_state", "facility_id", "media_has_photos", "media_has_360");
 
         return new PreparedInventoryV2Lot(platform, lotNumber, item.ObservedAt, values, media);

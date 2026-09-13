@@ -64,11 +64,14 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
     IAuctionsApiClient client,
     IInventorySnapshotStore snapshotStore,
     IInventoryV2BatchWriter batchWriter,
+    IInventoryScoringProcessor scoringProcessor,
     ISellerClassifier sellerClassifier,
     IOptions<AuctionsApiOptions> options,
+    IOptions<ScoringOptions> scoringOptions,
     ILogger<AuctionsApiV2InitialLoadProcessor> logger) : IAuctionsApiV2InitialLoadProcessor
 {
     private readonly AuctionsApiOptions _options = options.Value;
+    private readonly ScoringOptions _scoring = scoringOptions.Value;
 
     public async Task<AuctionsApiV2InitialLoadResult> RunAsync(
         string platform,
@@ -179,7 +182,7 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
 
                     eligible++;
                     var classifiedVehicle = await ClassifySellerAsync(normalizedPlatform, vehicle, cancellationToken);
-                    batch.Add(new InventoryV2BatchItem(classifiedVehicle, DateTimeOffset.UtcNow));
+                    batch.Add(new InventoryV2BatchItem(classifiedVehicle, DateTimeOffset.UtcNow, runId));
                 }
 
                 if (persist && batch.Count >= batchWriter.PreferredBatchSize)
@@ -210,6 +213,23 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     unchanged += result.Unchanged;
                     mediaRowsWritten += result.MediaRowsWritten;
                 });
+
+                if (_scoring.ProcessIngestionRunImmediately)
+                {
+                    try
+                    {
+                        var scoring = await scoringProcessor.ProcessRunAsync(runId, maximumLots, cancellationToken, "v2-initial-post-ingestion");
+                        logger.LogInformation(
+                            "Immediate scoring completed for V2 initial run {RunId}: claimed={Claimed} completed={Completed} failed={Failed} skipped={Skipped} remaining={Remaining}.",
+                            runId, scoring.Claimed, scoring.Completed, scoring.Failed, scoring.Skipped, scoring.Remaining);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        logger.LogError(exception,
+                            "Immediate scoring failed for V2 initial run {RunId}; queued items remain available for the recovery scoring job.",
+                            runId);
+                    }
+                }
             }
 
             if (observed < maximumLots && page <= 10000)

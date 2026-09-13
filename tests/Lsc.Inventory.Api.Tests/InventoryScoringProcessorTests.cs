@@ -72,6 +72,37 @@ public sealed class InventoryScoringProcessorTests
         Assert.Equal("iaai:12345678", result.LotKey);
     }
 
+    [Fact]
+    public async Task Immediate_processing_claims_only_the_requested_ingestion_run()
+    {
+        var store = new InMemorySnapshotStore();
+        var firstRunId = Guid.Parse("6d159344-990c-482a-8629-8de533ce32d1");
+        var secondRunId = Guid.Parse("270c4df6-794b-40b8-a940-ea9d58d54e66");
+        await store.PersistAsync(ValidVehicle(), DateTimeOffset.Parse("2026-08-27T12:00:00Z"), CancellationToken.None, firstRunId);
+        await store.PersistAsync(
+            ValidVehicle() with { LotNumber = "87654321", Vin = "1HGCM82633A004353" },
+            DateTimeOffset.Parse("2026-08-27T12:01:00Z"),
+            CancellationToken.None,
+            secondRunId);
+        var processor = new InventoryScoringProcessor(store, Microsoft.Extensions.Options.Options.Create(new ScoringOptions
+        {
+            BatchSize = 10,
+            ImmediateMaximumLots = 10
+        }));
+
+        var first = await processor.ProcessRunAsync(firstRunId, 10, CancellationToken.None);
+        var statusAfterFirst = await store.GetScoringOperationalStatusAsync(CancellationToken.None);
+        var firstScore = await store.GetScoreByLotAsync("12345678", CancellationToken.None);
+        var secondScoreBefore = await store.GetScoreByLotAsync("87654321", CancellationToken.None);
+        var second = await processor.ProcessRunAsync(secondRunId, 10, CancellationToken.None);
+
+        Assert.Equal(1, first.Completed);
+        Assert.Equal(1, statusAfterFirst.Queued);
+        Assert.NotNull(firstScore);
+        Assert.Null(secondScoreBefore);
+        Assert.Equal(1, second.Completed);
+    }
+
     private static AuctionVehicle ValidVehicle() => new()
     {
         Platform = "iaai",

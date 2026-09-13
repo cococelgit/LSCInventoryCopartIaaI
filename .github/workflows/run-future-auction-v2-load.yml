@@ -36,6 +36,11 @@ on:
         description: "Exact full SHA approved for this run"
         required: true
         type: string
+      immediate_scoring:
+        description: "Process scoring tasks created by this ingestion run before exit"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -73,6 +78,7 @@ jobs:
           MAXIMUM: ${{ inputs.maximum }}
           START_PAGE: ${{ inputs.start_page }}
           SALE_DATE_FROM: ${{ inputs.sale_date_from }}
+          IMMEDIATE_SCORING: ${{ inputs.immediate_scoring }}
         run: |
           set -euo pipefail
           test "$CONFIRMATION" = RUN_FUTURE_AUCTION_V2_LOAD
@@ -81,6 +87,7 @@ jobs:
           test "$MAXIMUM" -le 1000
           [[ "$START_PAGE" =~ ^[1-9][0-9]*$ ]]
           date -u -d "$SALE_DATE_FROM" >/dev/null
+          case "$IMMEDIATE_SCORING" in true|false) ;; *) exit 2 ;; esac
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -120,6 +127,7 @@ jobs:
           MAXIMUM: ${{ inputs.maximum }}
           START_PAGE: ${{ inputs.start_page }}
           SALE_DATE_FROM: ${{ inputs.sale_date_from }}
+          IMMEDIATE_SCORING: ${{ inputs.immediate_scoring }}
           AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
         run: |
           set -euo pipefail
@@ -131,7 +139,7 @@ jobs:
           az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
           if [ "$PLATFORM" = copart ]; then source_job=job-lsc-copart-auto-prod; else source_job=job-lsc-iaai-pilot-prod; fi
           source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$source_job?api-version=2024-03-01" -o json)"
-          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$LOAD_IMAGE" --arg key "$AUCTIONS_API_KEY" --arg platform "$PLATFORM" '
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$LOAD_IMAGE" --arg key "$AUCTIONS_API_KEY" --arg platform "$PLATFORM" --arg immediate "$IMMEDIATE_SCORING" '
             .location as $location
             | .properties.environmentId as $environmentId
             | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
@@ -146,14 +154,17 @@ jobs:
                 | .env=((.env // [])
                     | map(select((.secretRef // "") == ""
                         and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not)
-                        and (.name | IN("AuctionsApi__ApiKey","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalMapperEnabled","InventoryV2__ShadowWriteEnabled","InventoryV2__BatchSize") | not)))
+                        and (.name | IN("AuctionsApi__ApiKey","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalMapperEnabled","InventoryV2__ShadowWriteEnabled","InventoryV2__BatchSize","Scoring__ProcessIngestionRunImmediately","Scoring__ImmediateMaximumLots","Scoring__RequireCurrentForPublication") | not)))
                     + [
                         {name:"AuctionsApi__ApiKey",value:$key},
                         {name:"AuctionsApi__Enabled",value:"true"},
                         {name:"AuctionsApi__AllowWrites",value:"true"},
                         {name:"AuctionsApi__CanonicalMapperEnabled",value:"true"},
                         {name:"InventoryV2__ShadowWriteEnabled",value:"true"},
-                        {name:"InventoryV2__BatchSize",value:"1000"}
+                        {name:"InventoryV2__BatchSize",value:"1000"},
+                        {name:"Scoring__ProcessIngestionRunImmediately",value:$immediate},
+                        {name:"Scoring__ImmediateMaximumLots",value:env.MAXIMUM},
+                        {name:"Scoring__RequireCurrentForPublication",value:"false"}
                       ])) as $container
             | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
                 | del(.identitySettings,.secrets,.scheduleTriggerConfig)

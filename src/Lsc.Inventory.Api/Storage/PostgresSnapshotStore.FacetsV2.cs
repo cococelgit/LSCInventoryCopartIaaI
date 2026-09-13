@@ -338,6 +338,7 @@ public sealed partial class PostgresSnapshotStore
         AddParameter(command, "facet_limit", FacetsV2ValueLimit);
         var fixedWhere = new List<string> { "latest.is_active" };
         AddFacetsV2FixedFilters(command, request, fixedWhere);
+        AddCurrentScorePublicationGate(command, fixedWhere);
 
         var requestedValueSpecs = FacetsV2ValueSpecs
             .Where(spec => requested.Contains(spec.Group, StringComparer.OrdinalIgnoreCase))
@@ -352,7 +353,8 @@ public sealed partial class PostgresSnapshotStore
             .Where(spec => IsFacetsV2RangeActive(request, spec.Group))
             .ToArray();
 
-        var needsScore = requestedValueSpecs.Concat(activeValueSpecs).Any(spec => spec.Group == InventoryFacetsV2Groups.ScoringStatuses) ||
+        var needsScore = _scoring.RequireCurrentForPublication ||
+            requestedValueSpecs.Concat(activeValueSpecs).Any(spec => spec.Group == InventoryFacetsV2Groups.ScoringStatuses) ||
             requestedRangeSpecs.Concat(activeRangeSpecs).Any(spec => spec.Group == InventoryFacetsV2Groups.PreGrade);
         var scoreJoin = needsScore ? "left join inventory_vehicle_score_current score on score.lot_key = latest.lot_key" : string.Empty;
         var scoreStatusExpression = needsScore ? "nullif(btrim(score.status), '')" : "null::text";

@@ -11,7 +11,7 @@ public interface IInventoryV2BatchWriter
         CancellationToken cancellationToken);
 }
 
-public sealed record InventoryV2BatchItem(AuctionVehicle Vehicle, DateTimeOffset ObservedAt);
+public sealed record InventoryV2BatchItem(AuctionVehicle Vehicle, DateTimeOffset ObservedAt, Guid? SourceRunId = null);
 
 public sealed record InventoryV2BatchWriteResult(
     bool Attempted,
@@ -22,11 +22,12 @@ public sealed record InventoryV2BatchWriteResult(
     int Unchanged,
     int Stale,
     int MediaRowsWritten,
+    int ScoringQueued,
     long DurationMs,
     string? SkipReason = null)
 {
     public static InventoryV2BatchWriteResult Skipped(int inputRows, string reason) =>
-        new(false, inputRows, 0, 0, 0, 0, 0, 0, 0, reason);
+        new(false, inputRows, 0, 0, 0, 0, 0, 0, 0, 0, reason);
 }
 
 public sealed class DisabledInventoryV2BatchWriter : IInventoryV2BatchWriter
