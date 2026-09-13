@@ -1,5 +1,7 @@
 using Lsc.Inventory.Api.Options;
 using System.Text.Json;
+using Lsc.Inventory.Api.Classification;
+using Lsc.Inventory.Api.Contracts;
 using Lsc.Inventory.Api.Eligibility;
 using Lsc.Inventory.Api.Services;
 using Lsc.Inventory.Api.Storage;
@@ -62,6 +64,7 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
     IAuctionsApiClient client,
     IInventorySnapshotStore snapshotStore,
     IInventoryV2BatchWriter batchWriter,
+    ISellerClassifier sellerClassifier,
     IOptions<AuctionsApiOptions> options,
     ILogger<AuctionsApiV2InitialLoadProcessor> logger) : IAuctionsApiV2InitialLoadProcessor
 {
@@ -175,7 +178,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     }
 
                     eligible++;
-                    batch.Add(new InventoryV2BatchItem(vehicle, DateTimeOffset.UtcNow));
+                    var classifiedVehicle = await ClassifySellerAsync(normalizedPlatform, vehicle, cancellationToken);
+                    batch.Add(new InventoryV2BatchItem(classifiedVehicle, DateTimeOffset.UtcNow));
                 }
 
                 if (persist && batch.Count >= batchWriter.PreferredBatchSize)
@@ -252,6 +256,29 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
         {
             await snapshotStore.ReleaseLeaseAsync(leaseName, runId, DateTimeOffset.UtcNow, CancellationToken.None);
         }
+    }
+
+    private async Task<AuctionVehicle> ClassifySellerAsync(string platform, AuctionVehicle vehicle, CancellationToken cancellationToken)
+    {
+        if (vehicle.Seller is null) return vehicle;
+        var classification = await sellerClassifier.ClassifyAsync(
+            platform,
+            vehicle.Seller.Name,
+            vehicle.Seller.RawType,
+            vehicle.Seller.Class,
+            vehicle.Seller.TextClass,
+            cancellationToken);
+        return vehicle with
+        {
+            Seller = vehicle.Seller with
+            {
+                Type = classification.Category,
+                ClassificationConfidence = classification.Confidence,
+                NeedsReview = classification.NeedsReview,
+                ClassificationEvidence = classification.Evidence,
+                TaxonomyVersion = classification.PromptVersion
+            }
+        };
     }
 
     private async Task FlushAsync(

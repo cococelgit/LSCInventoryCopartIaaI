@@ -125,9 +125,10 @@ jobs:
                 | .image=$image
                 | .command=["dotnet"]
                 | .args=$args
-                | .env=((.env // []) | map(select((.secretRef // "") == "" and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not))))) as $container
+                | .env=((.env // []) | map(select(((.secretRef // "") == "" and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not)) or .name == "OPENAI_API_KEY")) + [{name:"SellerClassifier__Enabled",value:"true"}])) as $container
             | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
-                | del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | del(.identitySettings,.scheduleTriggerConfig)
+                | .secrets=((.secrets // []) | map(select(.name == "OPENAI_API_KEY")))
                 | .triggerType="Manual"
                 | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
                 | .replicaRetryLimit=0
