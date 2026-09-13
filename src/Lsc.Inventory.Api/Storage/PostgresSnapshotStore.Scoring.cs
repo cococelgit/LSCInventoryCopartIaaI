@@ -337,7 +337,7 @@ public sealed partial class PostgresSnapshotStore
         command.CommandTimeout = Math.Max(_persistence.CommandTimeoutSeconds, 60);
         command.CommandText = """
             with active_inventory as (
-                select lot_key, lower(coalesce(platform, 'unknown')) as platform, last_seen_at
+                select lot_key, lower(coalesce(platform, 'unknown')) as platform, last_seen_at, score_input_hash
                 from inventory_current_v2
                 where is_active
             )
