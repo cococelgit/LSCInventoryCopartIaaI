@@ -127,7 +127,7 @@ public sealed class InventoryV2BatchWriterTests
         var loader = File.ReadAllText(FindRepositoryFile("Workers/AuctionsApiV2InitialLoadProcessor.cs"));
         var program = File.ReadAllText(FindRepositoryFile("Program.cs"));
 
-        Assert.Contains("maximumLots is < 1 or > 1000", loader, StringComparison.Ordinal);
+        Assert.Contains("maximumLots is < 1 or > 2000", loader, StringComparison.Ordinal);
         Assert.Contains("startPage", loader, StringComparison.Ordinal);
         Assert.Contains("TryAcquireLeaseAsync", loader, StringComparison.Ordinal);
         Assert.Contains("WriteShadowBatchAsync", loader, StringComparison.Ordinal);

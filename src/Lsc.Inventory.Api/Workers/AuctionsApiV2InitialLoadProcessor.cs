@@ -58,7 +58,8 @@ public interface IAuctionsApiV2InitialLoadProcessor
 /// <summary>
 /// Incremental initial-load runner for a clean V2 rebuild. It never calls the
 /// legacy per-row persistence boundary and never writes V1. Each invocation is
-/// capped at 1,000 lots so operators can inspect a block before continuing.
+/// capped at 2,000 lots; persistence still flushes in configured V2 batches so
+/// operators can accelerate a validated load without growing a single DB write.
 /// </summary>
 public sealed class AuctionsApiV2InitialLoadProcessor(
     IAuctionsApiClient client,
@@ -85,8 +86,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
         var normalizedPlatform = platform.Trim().ToLowerInvariant();
         if (normalizedPlatform is not ("copart" or "iaai"))
             throw new ArgumentOutOfRangeException(nameof(platform));
-        if (maximumLots is < 1 or > 1000)
-            throw new ArgumentOutOfRangeException(nameof(maximumLots), "V2 initial-load blocks must be between 1 and 1000 lots.");
+        if (maximumLots is < 1 or > 2000)
+            throw new ArgumentOutOfRangeException(nameof(maximumLots), "V2 initial-load blocks must be between 1 and 2000 lots.");
         if (startPage < 1)
             throw new ArgumentOutOfRangeException(nameof(startPage));
         if (!_options.IsConfigured)

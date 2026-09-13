@@ -84,7 +84,7 @@ jobs:
           test "$CONFIRMATION" = RUN_FUTURE_AUCTION_V2_LOAD
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           [[ "$MAXIMUM" =~ ^[1-9][0-9]{0,3}$ ]]
-          test "$MAXIMUM" -le 1000
+          test "$MAXIMUM" -le 2000
           [[ "$START_PAGE" =~ ^[1-9][0-9]*$ ]]
           date -u -d "$SALE_DATE_FROM" >/dev/null
           case "$IMMEDIATE_SCORING" in true|false) ;; *) exit 2 ;; esac
