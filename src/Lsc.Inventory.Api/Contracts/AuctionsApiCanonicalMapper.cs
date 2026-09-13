@@ -43,7 +43,7 @@ public static class AuctionsApiCanonicalMapper
             lots,
             row.Clone(),
             FirstValue(row, "color.name", "color"),
-            DecimalValue(row, "engine.size_l", "engine.size_liters", "engine.liters", "engine_size_l", "engine_size_liters"),
+            EngineSizeLitersValue(row),
             DecimalValue(row, "engine.hp", "engine.horsepower", "horsepower", "hp"));
     }
 
@@ -203,6 +203,22 @@ public static class AuctionsApiCanonicalMapper
             ? FirstValue(value, "value", "miles", "mi", "kilometers", "km")
             : Scalar(value);
         return decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var result) ? result : null;
+    }
+
+    private static decimal? EngineSizeLitersValue(JsonElement value)
+    {
+        var explicitValue = DecimalValue(value, "engine.size_l", "engine.size_liters", "engine.liters", "engine_size_l", "engine_size_liters");
+        if (explicitValue.HasValue) return explicitValue;
+
+        var engineText = FirstValue(value, "engine.name", "engine.label", "engine");
+        if (string.IsNullOrWhiteSpace(engineText)) return null;
+        foreach (var token in engineText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!token.EndsWith("L", StringComparison.OrdinalIgnoreCase)) continue;
+            var numeric = token[..^1];
+            if (decimal.TryParse(numeric, NumberStyles.Any, CultureInfo.InvariantCulture, out var liters)) return liters;
+        }
+        return null;
     }
 
     private static decimal? DecimalValue(JsonElement value, params string[] paths)
