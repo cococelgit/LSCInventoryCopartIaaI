@@ -109,7 +109,6 @@ public sealed partial class PostgresSnapshotStore
         var failed = 0;
         var skipped = 0;
         var missingSnapshots = 0;
-        var changedSnapshots = 0;
         foreach (var item in claimed)
         {
             try
@@ -122,21 +121,16 @@ public sealed partial class PostgresSnapshotStore
                     skipped++;
                     continue;
                 }
-                if (snapshot.ObservedAt != item.SourceObservedAt)
-                {
-                    await EnqueueScoringCandidateAsync(item.LotKey, snapshot.Vehicle.Platform, snapshot.ObservedAt, cancellationToken);
-                    changedSnapshots++;
-                    skipped++;
-                    continue;
-                }
-
+                // The queue timestamp is a scheduling hint and may be stale by the time the
+                // worker reads the current V2 row. Score the snapshot that was actually read;
+                // persist its timestamp so coverage is measured against the same row version.
                 var eligibility = AuctionEligibilityEvaluator.Evaluate(snapshot.Vehicle);
                 var outcome = LscVehicleScoringEngine.Evaluate(snapshot.Vehicle, eligibility) with
                 {
                     LotKey = item.LotKey,
                     Platform = item.Platform
                 };
-                await PersistScoringResultAsync(outcome, item.SourceObservedAt, cancellationToken);
+                await PersistScoringResultAsync(outcome, snapshot.ObservedAt, cancellationToken);
                 await CompleteScoringQueueItemAsync(item, "completed", null, cancellationToken);
                 completed++;
             }
@@ -148,8 +142,8 @@ public sealed partial class PostgresSnapshotStore
             }
         }
         logger.LogInformation(
-            "Scoring batch claimed {Claimed}: completed={Completed}, failed={Failed}, skipped={Skipped}, missingSnapshots={MissingSnapshots}, changedSnapshots={ChangedSnapshots}.",
-            claimed.Count, completed, failed, skipped, missingSnapshots, changedSnapshots);
+            "Scoring batch claimed {Claimed}: completed={Completed}, failed={Failed}, skipped={Skipped}, missingSnapshots={MissingSnapshots}.",
+            claimed.Count, completed, failed, skipped, missingSnapshots);
         var status = await GetScoringOperationalStatusAsync(cancellationToken);
         return new InventoryScoringBatchResult(
             claimed.Count,
