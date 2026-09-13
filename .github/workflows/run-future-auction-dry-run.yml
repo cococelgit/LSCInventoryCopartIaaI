@@ -175,7 +175,7 @@ jobs:
           replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
           container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
           test -n "$replica" && test -n "$container"
-          az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 300 --format text | tee "$RUNNER_TEMP/future-auction-dry-run.log"
+          az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 200 --format text | tee "$RUNNER_TEMP/future-auction-dry-run.log"
           grep -q '"Persisted":false' "$RUNNER_TEMP/future-auction-dry-run.log"
           grep -q '"Created":0' "$RUNNER_TEMP/future-auction-dry-run.log"
           grep -q '"Updated":0' "$RUNNER_TEMP/future-auction-dry-run.log"
