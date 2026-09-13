@@ -73,6 +73,16 @@ public sealed class InventoryScoringProcessorTests
     }
 
     [Fact]
+    public void Postgres_worker_uses_the_persisted_inventory_hash_as_the_score_version_token()
+    {
+        var source = File.ReadAllText(FindRepositoryRootFile("src/Lsc.Inventory.Api/Storage/PostgresSnapshotStore.Scoring.cs"));
+
+        Assert.Contains("InputHash = item.InputHash", source, StringComparison.Ordinal);
+        Assert.Contains("inventory.score_input_hash = @input_hash", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("input-superseded", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Immediate_processing_claims_only_the_requested_ingestion_run()
     {
         var store = new InMemorySnapshotStore();
@@ -119,4 +129,16 @@ public sealed class InventoryScoringProcessorTests
         Media = new MediaInfo { Photos = ["https://images.example.test/lot.jpg"] },
         SaleDocument = new SaleDocument { Name = "CLEAR", IsPending = false }
     };
+
+    private static string FindRepositoryRootFile(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(candidate)) return candidate;
+            directory = directory.Parent;
+        }
+        throw new FileNotFoundException(relativePath);
+    }
 }

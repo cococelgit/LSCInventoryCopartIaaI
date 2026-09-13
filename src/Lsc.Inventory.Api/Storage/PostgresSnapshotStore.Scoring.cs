@@ -173,12 +173,12 @@ public sealed partial class PostgresSnapshotStore
                 var outcome = LscVehicleScoringEngine.Evaluate(snapshot.Vehicle, eligibility) with
                 {
                     LotKey = item.LotKey,
-                    Platform = item.Platform
+                    Platform = item.Platform,
+                    InputHash = item.InputHash
                 };
-                if (!string.Equals(outcome.PolicyVersion, item.PolicyVersion, StringComparison.Ordinal)
-                    || !string.Equals(outcome.InputHash, item.InputHash, StringComparison.Ordinal))
+                if (!string.Equals(outcome.PolicyVersion, item.PolicyVersion, StringComparison.Ordinal))
                 {
-                    await CompleteScoringQueueItemAsync(item, "skipped", "input-superseded", cancellationToken);
+                    await CompleteScoringQueueItemAsync(item, "skipped", "policy-superseded", cancellationToken);
                     skipped++;
                     continue;
                 }
