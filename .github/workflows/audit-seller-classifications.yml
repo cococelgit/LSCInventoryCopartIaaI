@@ -1,0 +1,52 @@
+name: Audit seller classifications
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Read seller classifications
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          runner_ip="$(curl -fsS https://api.ipify.org)"
+          firewall_rule="allow-seller-audit-${GITHUB_RUN_ID}"
+          cleanup() { az postgres flexible-server firewall-rule delete --resource-group "$RESOURCE_GROUP" --server-name psql-lsc-inventory-cu --name "$firewall_rule" --yes --only-show-errors >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          az postgres flexible-server firewall-rule create --resource-group "$RESOURCE_GROUP" --server-name psql-lsc-inventory-cu --name "$firewall_rule" --start-ip-address "$runner_ip" --end-ip-address "$runner_ip" --only-show-errors >/dev/null
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          conn="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require connect_timeout=15"
+          psql "$conn" -v ON_ERROR_STOP=1 -P pager=off -c "
+            select 'TABLE_EXISTS' as check_name, to_regclass('public.seller_classifications') is not null as value;
+            select 'TOTAL_ROWS' as check_name, count(*)::text as value from public.seller_classifications;
+            select 'BY_PLATFORM_CATEGORY' as check_name, platform || '|' || category || '|' || count(*)::text as value
+            from public.seller_classifications group by platform, category order by platform, category;
+            select 'RECENT_ROWS' as check_name, platform || '|' || seller_name_normalized || '|' || category || '|' || confidence::text || '|' || needs_review::text || '|' || evidence_type || '|' || prompt_version as value
+            from public.seller_classifications
+            where updated_at >= now() - interval '30 minutes'
+            order by updated_at desc limit 20;
+          "
