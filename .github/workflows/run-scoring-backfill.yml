@@ -112,7 +112,8 @@ jobs:
           base="https://${api_fqdn}"
           max="$(printf '%s' "$MAX_EXECUTIONS" | tr -cd '0-9')"
           test -n "$max"
-          pending=4497
+          pending=1
+          expected_total=0
           for round in $(seq 1 "$max"); do
             active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
             test "$active" = 0
@@ -135,7 +136,17 @@ jobs:
               sleep 15
             done
             test "$status" = Succeeded
+            replicas="$(az containerapp job replica list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --execution "$execution_name" -o json 2>/dev/null || echo '[]')"
+            replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+            container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+            if [ -n "$replica" ] && [ -n "$container" ]; then
+              az containerapp job logs show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --execution "$execution_name" --replica "$replica" --container "$container" --tail 80 --format text || true
+            fi
             response="$(curl --silent --show-error --fail --max-time 90 --header "Authorization: Bearer $inventory_token" "$base/internal/scoring/status")"
+            active_total="$(echo "$response" | jq '[.platforms[]?.active] | add // 0')"
+            if [ "$expected_total" -eq 0 ]; then expected_total="$active_total"; fi
+            test "$active_total" -gt 0
+            test "$active_total" -eq "$expected_total"
             pending="$(echo "$response" | jq '[.platforms[]?.pending] | add // 0')"
             completed="$(echo "$response" | jq '[.platforms[]?.current] | add // 0')"
             failed="$(echo "$response" | jq '.failed // 0')"
@@ -146,7 +157,8 @@ jobs:
           done
           unset inventory_token
           test "$pending" -eq 0
-          echo "SCORING_BACKFILL_COMPLETE current=$completed pending=$pending"
+          test "$completed" -eq "$expected_total"
+          echo "SCORING_BACKFILL_COMPLETE current=$completed pending=$pending expected_total=$expected_total"
 
       - name: Verify final scoring coverage and paused ingestion state
         shell: bash
@@ -157,8 +169,10 @@ jobs:
           inventory_token="$(az containerapp secret list --resource-group "$RESOURCE_GROUP" --name "$API_APP" --show-values --query "[?name=='$token_ref'].value | [0]" -o tsv)"
           response="$(curl --silent --show-error --fail --max-time 90 --header "Authorization: Bearer $inventory_token" "https://${api_fqdn}/internal/scoring/status")"
           echo "$response" | jq '{policyVersion,queued,processing,completed,failed,platforms}'
+          expected_total="$(echo "$response" | jq '[.platforms[]?.active] | add // 0')"
+          test "$expected_total" -gt 0
           test "$(echo "$response" | jq '[.platforms[]?.pending] | add // 0')" -eq 0
-          test "$(echo "$response" | jq '[.platforms[]?.current] | add // 0')" -eq 4497
+          test "$(echo "$response" | jq '[.platforms[]?.current] | add // 0')" -eq "$expected_total"
           names="$(az containerapp job list --resource-group "$RESOURCE_GROUP" -o json)"
           mapfile -t jobs < <(echo "$names" | jq -r '.[].name | select(test("copart|iaai|ingestion|scheduled|bootstrap|catchup"; "i")) | select(. != env.SCORING_JOB)')
           for job in "${jobs[@]}"; do
