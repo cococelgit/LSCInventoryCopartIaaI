@@ -1,0 +1,48 @@
+name: Build Inventory V2 Loader Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact full source SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  ACR_NAME: acrlscinvprodeus2
+  ACR_SERVER: acrlscinvprodeus2.azurecr.io
+  IMAGE_NAME: lsc-inventory-engine
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+
+      - name: Verify source
+        run: test "$(git rev-parse HEAD)" = "${{ inputs.expected_sha }}"
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build immutable image once
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="inventory-v2-backfill-$(git rev-parse HEAD)"
+          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+          echo "IMAGE_URI=$ACR_SERVER/$IMAGE_NAME:$tag"
+          az acr repository show --name "$ACR_NAME" --image "$IMAGE_NAME:$tag" --only-show-errors -o json

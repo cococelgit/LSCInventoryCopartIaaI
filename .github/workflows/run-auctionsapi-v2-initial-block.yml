@@ -31,6 +31,11 @@ on:
         description: "Exact full source SHA"
         required: true
         type: string
+      loader_image:
+        description: "Existing immutable loader image URI; leave empty to build"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -88,13 +93,20 @@ jobs:
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
 
-      - name: Build immutable loader image
+      - name: Build or reuse immutable loader image
         shell: bash
+        env:
+          EXISTING_IMAGE: ${{ inputs.loader_image }}
         run: |
           set -euo pipefail
-          tag="inventory-v2-initial-block-$(git rev-parse HEAD)"
-          az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
-          echo "LOADER_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+          if [[ -n "$EXISTING_IMAGE" ]]; then
+            echo "LOADER_IMAGE=$EXISTING_IMAGE" >> "$GITHUB_ENV"
+            az acr repository show --name "$ACR_NAME" --image "${EXISTING_IMAGE#*/}" --only-show-errors -o json >/dev/null
+          else
+            tag="inventory-v2-initial-block-$(git rev-parse HEAD)"
+            az acr build --registry "$ACR_NAME" --image "$IMAGE_NAME:$tag" --file Dockerfile .
+            echo "LOADER_IMAGE=$ACR_SERVER/$IMAGE_NAME:$tag" >> "$GITHUB_ENV"
+          fi
 
       - name: Create and run isolated V2 block job
         shell: bash
