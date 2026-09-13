@@ -32,6 +32,9 @@ export type AzureVehicle = {
   trim: string | null;
   bodyStyle: string | null;
   engine: string | null;
+  engineSizeLiters: number | null;
+  engineHorsepower: number | null;
+  engineLayout: string | null;
   cylinders: string | null;
   estimatedRetailValueUsd: number | null;
   repairCostUsd: number | null;
