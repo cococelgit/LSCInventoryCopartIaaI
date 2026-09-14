@@ -36,7 +36,7 @@ jobs:
           echo "ACTIVE_EXECUTION=$execution"
           replicas="$(az containerapp job replica list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --execution "$execution" -o json 2>/dev/null || echo '[]')"
           replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
-          container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+          container="lsc-inventory-scoring"
           echo "REPLICA=$replica CONTAINER=$container"
-          test -n "$replica" && test -n "$container"
+          test -n "$replica"
           az containerapp job logs show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --execution "$execution" --replica "$replica" --container "$container" --tail 120 --format text
