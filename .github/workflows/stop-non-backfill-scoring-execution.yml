@@ -13,7 +13,7 @@ env:
   AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
   RESOURCE_GROUP: rg-lsc-inventory-prod
   SCORING_JOB: job-lsc-inventory-scoring-prod
-  EXECUTION_NAME: job-lsc-inventory-scoring-prod-moajz6e
+  EXECUTION_NAME: job-lsc-inventory-scoring-prod-sc1ffnw
 
 jobs:
   stop:
