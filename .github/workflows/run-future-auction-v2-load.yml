@@ -134,15 +134,17 @@ jobs:
           test -n "$AUCTIONS_API_KEY"
           case "$PLATFORM" in copart|iaai) ;; *) exit 2 ;; esac
           uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+          loader_identity_resource_id="/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uai-lsc-inventory-release-afaac3d"
+          loader_identity_object_id="547895b8-3b4e-490a-8135-a3d82d7fdeca"
           cleanup() { az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true; }
           trap cleanup EXIT
           az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
           if [ "$PLATFORM" = copart ]; then source_job=job-lsc-copart-auto-prod; else source_job=job-lsc-iaai-pilot-prod; fi
           source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$source_job?api-version=2024-03-01" -o json)"
-          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$LOAD_IMAGE" --arg key "$AUCTIONS_API_KEY" --arg platform "$PLATFORM" --arg immediate "$IMMEDIATE_SCORING" '
+          body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$LOAD_IMAGE" --arg key "$AUCTIONS_API_KEY" --arg platform "$PLATFORM" --arg immediate "$IMMEDIATE_SCORING" --arg loaderResourceId "$loader_identity_resource_id" --arg loaderObjectId "$loader_identity_object_id" --arg loaderClientId "$AZURE_CLIENT_ID" '
             .location as $location
             | .properties.environmentId as $environmentId
-            | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+            | {type:"UserAssigned", userAssignedIdentities:{($loaderResourceId):{}}} as $identity
             | .properties.configuration as $sourceConfiguration
             | .properties.template as $sourceTemplate
             | ($sourceTemplate.containers[0]
@@ -165,7 +167,10 @@ jobs:
                         {name:"Scoring__ProcessIngestionRunImmediately",value:$immediate},
                         {name:"Scoring__ImmediateMaximumLots",value:env.MAXIMUM},
                         {name:"Scoring__RequireCurrentForPublication",value:"false"},
-                        {name:"Persistence__DatabaseUser",value:"id-lsc-inventory-loader-prod"}
+                        {name:"Persistence__ManagedIdentityClientId",value:$loaderClientId},
+                        {name:"Persistence__DatabaseUser",value:"id-lsc-inventory-loader-prod"},
+                        {name:"Persistence__RuntimePrincipalName",value:"id-lsc-inventory-loader-prod"},
+                        {name:"Persistence__RuntimePrincipalObjectId",value:$loaderObjectId}
                       ])) as $container
             | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
                 | del(.identitySettings,.secrets,.scheduleTriggerConfig)
