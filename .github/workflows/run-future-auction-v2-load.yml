@@ -191,12 +191,18 @@ jobs:
             case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
             sleep 5
           done
-          test "$status" = Succeeded
           replicas="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json || true)"
           replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
           container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
-          test -n "$replica" && test -n "$container"
-          az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 200 --format text | tee "$RUNNER_TEMP/future-auction-v2-load.log"
+          if [ -n "$replica" ] && [ -n "$container" ]; then
+            az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 400 --format text | tee "$RUNNER_TEMP/future-auction-v2-load.log" || true
+          else
+            echo "No replica/container metadata available for failed execution $execution" | tee "$RUNNER_TEMP/future-auction-v2-load.log"
+          fi
+          if [ "$status" != "Succeeded" ]; then
+            echo "LOAD_FAILURE_STATUS=$status"
+            exit 1
+          fi
           result_line="$(grep -E 'stdout F \{"RunId"' "$RUNNER_TEMP/future-auction-v2-load.log" | tail -1 | sed -E 's/^.*stdout F //')"
           test -n "$result_line"
           printf '%s' "$result_line" | jq -e '.Persisted == true' >/dev/null
