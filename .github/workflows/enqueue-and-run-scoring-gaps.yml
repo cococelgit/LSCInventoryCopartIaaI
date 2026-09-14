@@ -1,0 +1,176 @@
+name: Enqueue And Run Scoring Gaps
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type RUN_SCORING_GAPS_20260914"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: inventory-v2-scoring-gap-repair
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  SCORING_JOB: job-lsc-inventory-scoring-prod
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-loader-prod
+  IMAGE: acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-v2-backfill-69a1db6e9b7e378c228e47245c62353b91f05c47
+
+jobs:
+  enqueue-and-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Guard authorization and no active scoring execution
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = RUN_SCORING_GAPS_20260914
+          trigger="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --query 'properties.configuration.triggerType' -o tsv)"
+          test "$trigger" = Manual
+          active="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json | jq '[.[] | select((.properties.status // .status) == "Running" or (.properties.status // .status) == "Pending")] | length')"
+          test "$active" = 0
+          echo "SCORING_PRECHECK trigger=$trigger active=$active"
+
+      - name: Login to Azure and verify scoring job
+        shell: bash
+        run: |
+          set -euo pipefail
+          trigger="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --query 'properties.configuration.triggerType' -o tsv)"
+          test "$trigger" = Manual
+          before_image="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --query 'properties.template.containers[0].image' -o tsv)"
+          echo "SCORING_BEFORE_IMAGE=$before_image"
+          az containerapp job update --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --image "$IMAGE" --only-show-errors >/dev/null
+          for attempt in $(seq 1 36); do
+            state="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --query 'properties.provisioningState' -o tsv)"
+            echo "SCORING_PROVISIONING attempt=$attempt state=$state"
+            [ "$state" = Succeeded ] && break
+            [ "$state" = Failed ] && exit 1
+            sleep 5
+          done
+          after_image="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --query 'properties.template.containers[0].image' -o tsv)"
+          test "$after_image" = "$IMAGE"
+          echo "SCORING_IMAGE=$after_image"
+
+      - name: Enqueue every active vehicle without a current score
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_ip="$(curl -fsS https://api.ipify.org)"
+          firewall_rule="allow-scoring-gap-repair-${GITHUB_RUN_ID}"
+          cleanup() {
+            unset PGPASSWORD || true
+            az postgres flexible-server firewall-rule delete --resource-group "$RESOURCE_GROUP" --server-name psql-lsc-inventory-cu --name "$firewall_rule" --yes --only-show-errors >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          az postgres flexible-server firewall-rule create \
+            --resource-group "$RESOURCE_GROUP" \
+            --server-name psql-lsc-inventory-cu \
+            --name "$firewall_rule" \
+            --start-ip-address "$runner_ip" \
+            --end-ip-address "$runner_ip" \
+            --only-show-errors >/dev/null
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          conn="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require"
+          for attempt in $(seq 1 12); do
+            if psql "$conn" -v ON_ERROR_STOP=1 -c 'select 1' >/dev/null 2>&1; then break; fi
+            sleep 5
+          done
+          psql "$conn" -v ON_ERROR_STOP=1 -P pager=off -c "
+            with eligible as (
+              select current.lot_key, current.platform, current.last_seen_at, current.score_input_hash,
+                     row_number() over (partition by current.platform order by current.last_seen_at asc, current.lot_key asc) as platform_position
+              from public.inventory_current_v2 current
+              left join public.inventory_vehicle_score_current score on score.lot_key = current.lot_key
+              where current.is_active
+                and score.lot_key is null
+                and current.score_input_hash is not null
+            ), candidates as (
+              select lot_key, platform, last_seen_at, score_input_hash
+              from eligible
+              order by platform_position asc, platform asc, lot_key asc
+            ), upserted as (
+              insert into public.inventory_vehicle_scoring_queue (
+                lot_key, platform, source_observed_at, input_hash, policy_version, source_run_id,
+                status, attempts, priority, requested_at, updated_at)
+              select lot_key, platform, last_seen_at, score_input_hash, 'lsc_pre_grade_v1', null,
+                     'queued', 0, 10, now(), now()
+              from candidates
+              on conflict (lot_key) do update set
+                platform = excluded.platform,
+                source_observed_at = excluded.source_observed_at,
+                input_hash = excluded.input_hash,
+                policy_version = excluded.policy_version,
+                source_run_id = null,
+                status = 'queued',
+                attempts = case
+                  when inventory_vehicle_scoring_queue.input_hash is distinct from excluded.input_hash
+                    or inventory_vehicle_scoring_queue.policy_version is distinct from excluded.policy_version then 0
+                  else inventory_vehicle_scoring_queue.attempts
+                end,
+                priority = greatest(inventory_vehicle_scoring_queue.priority, excluded.priority),
+                last_error = null,
+                requested_at = now(),
+                claimed_at = null,
+                completed_at = null,
+                updated_at = now()
+              returning lot_key
+            )
+            select (select count(*) from candidates) as eligible_missing,
+                   (select count(*) from upserted) as enqueued;
+          "
+          echo '--- queue after enqueue ---'
+          psql "$conn" -v ON_ERROR_STOP=1 -P pager=off -c "
+            select status, count(*) as rows
+            from public.inventory_vehicle_scoring_queue
+            group by status
+            order by status;
+          "
+          unset PGPASSWORD
+
+      - name: Start one controlled scoring backfill execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          execution="$(az containerapp job start --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --only-show-errors -o json | jq -r '.name // .properties.name // empty')"
+          if [ -z "$execution" ]; then
+            execution="$(az containerapp job execution list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json | jq -r '[.[] | select((.properties.status // .status) == "Running" or (.properties.status // .status) == "Pending") | .name] | .[0] // empty')"
+          fi
+          test -n "$execution"
+          echo "SCORING_EXECUTION=$execution"
+          for attempt in $(seq 1 360); do
+            status="$(az containerapp job execution show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --job-execution-name "$execution" --query 'properties.status' -o tsv)"
+            echo "SCORING_EXECUTION_STATUS attempt=$attempt status=$status"
+            case "$status" in
+              Succeeded|Failed|Canceled|Cancelled|Stopped) break ;;
+            esac
+            sleep 30
+          done
+          case "$status" in
+            Succeeded) ;;
+            *) echo "Scoring execution ended with status=$status" >&2; exit 1 ;;
+          esac
