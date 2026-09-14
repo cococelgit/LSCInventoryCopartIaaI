@@ -195,7 +195,7 @@ jobs:
           replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
           container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
           if [ -n "$replica" ] && [ -n "$container" ]; then
-            az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 400 --format text | tee "$RUNNER_TEMP/future-auction-v2-load.log" || true
+            az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 300 --format text | tee "$RUNNER_TEMP/future-auction-v2-load.log" || true
           else
             echo "No replica/container metadata available for failed execution $execution" | tee "$RUNNER_TEMP/future-auction-v2-load.log"
           fi
