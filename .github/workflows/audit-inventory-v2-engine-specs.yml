@@ -1,0 +1,96 @@
+name: Audit Inventory V2 engine specs
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type AUDIT_INVENTORY_V2_ENGINE_SPECS"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+  POSTGRES_DATABASE: lsc_inventory
+  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Guard read-only authorization
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = AUDIT_INVENTORY_V2_ENGINE_SPECS
+
+      - name: Login to Azure through federated identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Query engine coverage read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD="$token"
+          connection="host=$POSTGRES_HOST port=5432 dbname=$POSTGRES_DATABASE user=$POSTGRES_USER sslmode=require"
+          psql "$connection" --tuples-only --no-align --field-separator='|' <<'SQL'
+          select 'DATABASE' as section, current_user, current_database(), now();
+          select
+              'SUMMARY' as section,
+              lower(coalesce(platform, 'unknown')) as platform,
+              count(*)::bigint as active_count,
+              count(*) filter (where horsepower is not null)::bigint as horsepower_present,
+              count(*) filter (where horsepower is null)::bigint as horsepower_missing,
+              count(*) filter (where engine_size_liters is not null)::bigint as engine_size_present,
+              count(*) filter (where cylinders is not null)::bigint as cylinders_present,
+              min(horsepower) as horsepower_min,
+              max(horsepower) as horsepower_max
+          from public.inventory_current_v2
+          where is_active
+          group by lower(coalesce(platform, 'unknown'))
+          order by platform;
+          select
+              'SAMPLE_WITH_HORSEPOWER' as section,
+              lower(coalesce(platform, 'unknown')) as platform,
+              lot_key,
+              year,
+              make,
+              model,
+              engine,
+              engine_size_liters,
+              horsepower,
+              cylinders,
+              last_seen_at
+          from public.inventory_current_v2
+          where is_active and horsepower is not null
+          order by last_seen_at desc, lot_key
+          limit 20;
+          select
+              'SAMPLE_WITHOUT_HORSEPOWER' as section,
+              lower(coalesce(platform, 'unknown')) as platform,
+              lot_key,
+              year,
+              make,
+              model,
+              engine,
+              engine_size_liters,
+              horsepower,
+              cylinders,
+              last_seen_at
+          from public.inventory_current_v2
+          where is_active and horsepower is null
+          order by last_seen_at desc, lot_key
+          limit 20;
+          SQL
+          unset PGPASSWORD
