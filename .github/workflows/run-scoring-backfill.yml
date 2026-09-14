@@ -70,6 +70,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          az containerapp job update \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$SCORING_JOB" \
+            --set-env-vars "Persistence__DatabaseUser=id-lsc-inventory-db-runtime-prod" \
+            --only-show-errors >/dev/null
           before="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json)"
           before_image="$(echo "$before" | jq -r '.properties.template.containers[0].image')"
           before_args="$(echo "$before" | jq -c '.properties.template.containers[0].args // []')"
@@ -92,6 +97,7 @@ jobs:
             sleep 5
           done
           after="$(az containerapp job show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" -o json)"
+          test "$(echo "$after" | jq -r '.properties.template.containers[0].env[]? | select(.name=="Persistence__DatabaseUser") | .value // empty')" = "id-lsc-inventory-db-runtime-prod"
           test "$(echo "$after" | jq -r '.properties.template.containers[0].image')" = "$SCORING_IMAGE"
           test "$(echo "$after" | jq -c '.properties.template.containers[0].args // []')" = '["--scoring-backfill"]'
           test "$(echo "$after" | jq -r '.properties.configuration.triggerType')" = Schedule
