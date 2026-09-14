@@ -228,25 +228,43 @@ public sealed partial class PostgresSnapshotStore(
         metrics.CommandTimeout = _persistence.CommandTimeoutSeconds;
         metrics.CommandText = """
             insert into inventory_execution_run_metrics (
-                run_id, loaded_count, marked_count, discarded_count, quarantined_count, error_count, pages_processed,
+                run_id, loaded_count, created_count, updated_count, unchanged_count, stale_count,
+                marked_count, discarded_count, quarantined_count, error_count, pages_processed,
+                archived_observed_count, scoring_queued_count, scoring_completed_count, scoring_failed_count,
                 cycle_completed, reactivated_count, misses_incremented_count, deactivated_count, failures, updated_at)
-            values (@run_id, @loaded_count, @marked_count, @discarded_count, @quarantined_count, @error_count, @pages_processed,
+            values (@run_id, @loaded_count, @created_count, @updated_count, @unchanged_count, @stale_count,
+                @marked_count, @discarded_count, @quarantined_count, @error_count, @pages_processed,
+                @archived_observed_count, @scoring_queued_count, @scoring_completed_count, @scoring_failed_count,
                 @cycle_completed, @reactivated_count, @misses_incremented_count, @deactivated_count, cast(@failures as jsonb), now())
             on conflict (run_id) do update set
-                loaded_count = excluded.loaded_count, marked_count = excluded.marked_count,
+                loaded_count = excluded.loaded_count, created_count = excluded.created_count,
+                updated_count = excluded.updated_count, unchanged_count = excluded.unchanged_count,
+                stale_count = excluded.stale_count, marked_count = excluded.marked_count,
                 discarded_count = excluded.discarded_count, quarantined_count = excluded.quarantined_count,
                 error_count = excluded.error_count, pages_processed = excluded.pages_processed,
+                archived_observed_count = excluded.archived_observed_count,
+                scoring_queued_count = excluded.scoring_queued_count,
+                scoring_completed_count = excluded.scoring_completed_count,
+                scoring_failed_count = excluded.scoring_failed_count,
                 cycle_completed = excluded.cycle_completed, reactivated_count = excluded.reactivated_count,
                 misses_incremented_count = excluded.misses_incremented_count, deactivated_count = excluded.deactivated_count,
                 failures = excluded.failures, updated_at = now();
             """;
         AddParameter(metrics, "run_id", runId);
         AddParameter(metrics, "loaded_count", completion.Loaded);
+        AddParameter(metrics, "created_count", completion.Created);
+        AddParameter(metrics, "updated_count", completion.Updated);
+        AddParameter(metrics, "unchanged_count", completion.Unchanged);
+        AddParameter(metrics, "stale_count", completion.Stale);
         AddParameter(metrics, "marked_count", completion.Marked);
         AddParameter(metrics, "discarded_count", completion.Discarded);
         AddParameter(metrics, "quarantined_count", completion.Quarantined);
         AddParameter(metrics, "error_count", completion.Errors);
         AddParameter(metrics, "pages_processed", completion.PagesProcessed);
+        AddParameter(metrics, "archived_observed_count", completion.ArchivedObserved);
+        AddParameter(metrics, "scoring_queued_count", completion.ScoringQueued);
+        AddParameter(metrics, "scoring_completed_count", completion.ScoringCompleted);
+        AddParameter(metrics, "scoring_failed_count", completion.ScoringFailed);
         AddParameter(metrics, "cycle_completed", completion.CycleCompleted);
         AddParameter(metrics, "reactivated_count", completion.Reconciliation?.Reactivated);
         AddParameter(metrics, "misses_incremented_count", completion.Reconciliation?.MissesIncremented);
@@ -262,22 +280,41 @@ public sealed partial class PostgresSnapshotStore(
         metrics.CommandTimeout = _persistence.CommandTimeoutSeconds;
         metrics.CommandText = """
             insert into inventory_execution_run_metrics (
-                run_id, loaded_count, marked_count, discarded_count, quarantined_count, error_count, pages_processed,
+                run_id, loaded_count, created_count, updated_count, unchanged_count, stale_count,
+                marked_count, discarded_count, quarantined_count, error_count, pages_processed,
+                archived_observed_count, scoring_queued_count, scoring_completed_count, scoring_failed_count,
                 cycle_completed, failures, updated_at)
-            values (@run_id, @loaded_count, @marked_count, @discarded_count, @quarantined_count, @error_count, @pages_processed,
+            values (@run_id, @loaded_count, @created_count, @updated_count, @unchanged_count, @stale_count,
+                @marked_count, @discarded_count, @quarantined_count, @error_count, @pages_processed,
+                @archived_observed_count, @scoring_queued_count, @scoring_completed_count, @scoring_failed_count,
                 false, '[]'::jsonb, now())
             on conflict (run_id) do update set
-                loaded_count = excluded.loaded_count, marked_count = excluded.marked_count,
+                loaded_count = excluded.loaded_count, created_count = excluded.created_count,
+                updated_count = excluded.updated_count, unchanged_count = excluded.unchanged_count,
+                stale_count = excluded.stale_count, marked_count = excluded.marked_count,
                 discarded_count = excluded.discarded_count, quarantined_count = excluded.quarantined_count,
-                error_count = excluded.error_count, pages_processed = excluded.pages_processed, updated_at = now();
+                error_count = excluded.error_count, pages_processed = excluded.pages_processed,
+                archived_observed_count = excluded.archived_observed_count,
+                scoring_queued_count = excluded.scoring_queued_count,
+                scoring_completed_count = excluded.scoring_completed_count,
+                scoring_failed_count = excluded.scoring_failed_count,
+                updated_at = now();
             """;
         AddParameter(metrics, "run_id", runId);
         AddParameter(metrics, "loaded_count", progress.Loaded);
+        AddParameter(metrics, "created_count", progress.Created);
+        AddParameter(metrics, "updated_count", progress.Updated);
+        AddParameter(metrics, "unchanged_count", progress.Unchanged);
+        AddParameter(metrics, "stale_count", progress.Stale);
         AddParameter(metrics, "marked_count", progress.Marked);
         AddParameter(metrics, "discarded_count", progress.Discarded);
         AddParameter(metrics, "quarantined_count", progress.Quarantined);
         AddParameter(metrics, "error_count", progress.Errors);
         AddParameter(metrics, "pages_processed", progress.PagesProcessed);
+        AddParameter(metrics, "archived_observed_count", progress.ArchivedObserved);
+        AddParameter(metrics, "scoring_queued_count", progress.ScoringQueued);
+        AddParameter(metrics, "scoring_completed_count", progress.ScoringCompleted);
+        AddParameter(metrics, "scoring_failed_count", progress.ScoringFailed);
         await metrics.ExecuteNonQueryAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
@@ -334,7 +371,9 @@ public sealed partial class PostgresSnapshotStore(
                        metrics.loaded_count, metrics.marked_count, metrics.discarded_count, metrics.quarantined_count,
                        metrics.error_count, metrics.pages_processed, metrics.cycle_completed, metrics.reactivated_count,
                        metrics.misses_incremented_count, metrics.deactivated_count,
-                       null::integer as created_count, null::integer as updated_count, null::integer as unchanged_count,
+                       metrics.created_count, metrics.updated_count, metrics.unchanged_count,
+                       metrics.stale_count, metrics.archived_observed_count, metrics.scoring_queued_count,
+                       metrics.scoring_completed_count, metrics.scoring_failed_count,
                        coalesce(metrics.failures, base.failures, '[]'::jsonb)::text as failures, 0 as source_rank
                 from inventory_sync_runs base
                 left join inventory_execution_run_metrics metrics on metrics.run_id = base.run_id
@@ -345,6 +384,9 @@ public sealed partial class PostgresSnapshotStore(
                        null::integer as pages_processed, is_complete as cycle_completed, null::integer as reactivated_count,
                        null::integer as misses_incremented_count, null::integer as deactivated_count,
                        created_count, updated_count, unchanged_count,
+                       null::integer as stale_count, null::integer as archived_observed_count,
+                       null::integer as scoring_queued_count, null::integer as scoring_completed_count,
+                       null::integer as scoring_failed_count,
                        failures::text as failures, 1 as source_rank
                 from copart_snapshot_manifests
             )
@@ -362,6 +404,10 @@ public sealed partial class PostgresSnapshotStore(
                    max(deactivated_count) as deactivated_count,
                    max(created_count) as created_count, max(updated_count) as updated_count,
                    max(unchanged_count) as unchanged_count,
+                   max(stale_count) as stale_count, max(archived_observed_count) as archived_observed_count,
+                   max(scoring_queued_count) as scoring_queued_count,
+                   max(scoring_completed_count) as scoring_completed_count,
+                   max(scoring_failed_count) as scoring_failed_count,
                    (array_agg(failures order by length(failures) desc, source_rank desc))[1] as failures
             from raw_history
             group by run_id
@@ -387,6 +433,8 @@ public sealed partial class PostgresSnapshotStore(
                                 and copart_manifest.status = 'succeeded'
                                 and copart_manifest.is_complete = true
                            then copart_manifest.created_count
+                           when history.created_count is not null
+                           then history.created_count
                            when history.provider <> 'copart-excel' and events.event_count > 0
                            then events.created_count
                            else null
@@ -396,6 +444,8 @@ public sealed partial class PostgresSnapshotStore(
                                 and copart_manifest.status = 'succeeded'
                                 and copart_manifest.is_complete = true
                            then copart_manifest.updated_count
+                           when history.updated_count is not null
+                           then history.updated_count
                            when history.provider <> 'copart-excel' and events.event_count > 0
                            then events.updated_count
                            else null
@@ -405,6 +455,8 @@ public sealed partial class PostgresSnapshotStore(
                                 and copart_manifest.status = 'succeeded'
                                 and copart_manifest.is_complete = true
                            then copart_manifest.unchanged_count
+                           when history.unchanged_count is not null
+                           then history.unchanged_count
                            when history.provider <> 'copart-excel' and events.event_count > 0
                            then events.unchanged_count
                            else null
@@ -442,10 +494,12 @@ public sealed partial class PostgresSnapshotStore(
                 results.Add(new InventoryExecutionSummary(
                     reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
                     reader.GetFieldValue<DateTimeOffset>(5), ReadNullableDateTimeOffset(reader, 6), reader.GetInt32(7), reader.GetInt32(8),
-                    ReadNullableInt32(reader, 9), ReadNullableInt32(reader, 23), ReadNullableInt32(reader, 24), ReadNullableInt32(reader, 25),
+                    ReadNullableInt32(reader, 9), ReadNullableInt32(reader, 28), ReadNullableInt32(reader, 29), ReadNullableInt32(reader, 30),
                     ReadNullableInt32(reader, 10), ReadNullableInt32(reader, 11), ReadNullableInt32(reader, 12), ReadNullableInt32(reader, 13),
                     ReadNullableInt32(reader, 16), ReadNullableInt32(reader, 17), ReadNullableInt32(reader, 18), ReadNullableInt32(reader, 14),
-                    reader.IsDBNull(15) ? null : reader.GetBoolean(15), ReadStringArray(reader, 22)));
+                    reader.IsDBNull(15) ? null : reader.GetBoolean(15), ReadStringArray(reader, 27),
+                    ReadNullableInt32(reader, 22), ReadNullableInt32(reader, 23), ReadNullableInt32(reader, 24),
+                    ReadNullableInt32(reader, 25), ReadNullableInt32(reader, 26)));
         }
         return new InventoryExecutionHistoryPage(page, pageSize, total, Math.Max(1, (int)Math.Ceiling(total / (double)pageSize)), results);
     }
@@ -1373,11 +1427,22 @@ public sealed partial class PostgresSnapshotStore(
             command.CommandTimeout = _persistence.CommandTimeoutSeconds;
             command.CommandText = """
                 create table if not exists inventory_execution_run_metrics (
-                    run_id uuid primary key, loaded_count integer, marked_count integer, discarded_count integer,
-                    quarantined_count integer, error_count integer, pages_processed integer, cycle_completed boolean,
+                    run_id uuid primary key, loaded_count integer, created_count integer, updated_count integer,
+                    unchanged_count integer, stale_count integer, marked_count integer, discarded_count integer,
+                    quarantined_count integer, error_count integer, pages_processed integer,
+                    archived_observed_count integer, scoring_queued_count integer,
+                    scoring_completed_count integer, scoring_failed_count integer, cycle_completed boolean,
                     reactivated_count integer, misses_incremented_count integer, deactivated_count integer,
                     failures jsonb not null default '[]'::jsonb, updated_at timestamptz not null default now()
                 );
+                alter table inventory_execution_run_metrics add column if not exists created_count integer;
+                alter table inventory_execution_run_metrics add column if not exists updated_count integer;
+                alter table inventory_execution_run_metrics add column if not exists unchanged_count integer;
+                alter table inventory_execution_run_metrics add column if not exists stale_count integer;
+                alter table inventory_execution_run_metrics add column if not exists archived_observed_count integer;
+                alter table inventory_execution_run_metrics add column if not exists scoring_queued_count integer;
+                alter table inventory_execution_run_metrics add column if not exists scoring_completed_count integer;
+                alter table inventory_execution_run_metrics add column if not exists scoring_failed_count integer;
                 create table if not exists inventory_sync_run_events (
                     id bigserial primary key, run_id uuid not null, platform text not null, lot_key text not null,
                     lot_number text, vin_masked text, action text not null,

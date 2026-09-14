@@ -41,7 +41,11 @@ public sealed record AuctionsApiV2InitialLoadResult(
     IReadOnlyList<string> Failures,
     IReadOnlyList<EligibilityReasonBreakdown> DiscardReasonBreakdown,
     IReadOnlyList<EligibilityReasonBreakdown> QuarantineReasonBreakdown,
-    IReadOnlyList<DateCandidateBreakdown> MissingSaleDateCandidates);
+    IReadOnlyList<DateCandidateBreakdown> MissingSaleDateCandidates,
+    int Stale = 0,
+    int ScoringQueued = 0,
+    int ScoringCompleted = 0,
+    int ScoringFailed = 0);
 
 public interface IAuctionsApiV2InitialLoadProcessor
 {
@@ -138,7 +142,11 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
         var created = 0;
         var updated = 0;
         var unchanged = 0;
+        var stale = 0;
         var mediaRowsWritten = 0;
+        var scoringQueued = 0;
+        var scoringCompleted = 0;
+        var scoringFailed = 0;
         var pages = 0;
         var requests = 0;
         var page = startPage;
@@ -192,12 +200,29 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                         created += result.Created;
                         updated += result.Updated;
                         unchanged += result.Unchanged;
+                        stale += result.Stale;
                         mediaRowsWritten += result.MediaRowsWritten;
+                        scoringQueued += result.ScoringQueued;
                     });
 
                 await snapshotStore.UpdateSyncRunProgressAsync(
                     runId,
-                    new InventorySyncRunProgress(observed, requests, eligible, created, updated, unchanged, 0, discarded, quarantined, failures.Count, pages),
+                    new InventorySyncRunProgress(
+                        observed,
+                        requests,
+                        persist ? created + updated + unchanged : eligible,
+                        created,
+                        updated,
+                        unchanged,
+                        0,
+                        discarded,
+                        quarantined,
+                        failures.Count,
+                        pages,
+                        Stale: stale,
+                        ScoringQueued: scoringQueued,
+                        ScoringCompleted: scoringCompleted,
+                        ScoringFailed: scoringFailed),
                     cancellationToken);
 
                 if (observed >= maximumLots || response.NextPage is null || response.NextPage <= page)
@@ -212,7 +237,9 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     created += result.Created;
                     updated += result.Updated;
                     unchanged += result.Unchanged;
+                    stale += result.Stale;
                     mediaRowsWritten += result.MediaRowsWritten;
+                    scoringQueued += result.ScoringQueued;
                 });
 
                 if (_scoring.ProcessIngestionRunImmediately)
@@ -220,6 +247,8 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                     try
                     {
                         var scoring = await scoringProcessor.ProcessRunAsync(runId, maximumLots, cancellationToken, "v2-initial-post-ingestion");
+                        scoringCompleted = scoring.Completed;
+                        scoringFailed = scoring.Failed;
                         logger.LogInformation(
                             "Immediate scoring completed for V2 initial run {RunId}: claimed={Claimed} completed={Completed} failed={Failed} skipped={Skipped} remaining={Remaining}.",
                             runId, scoring.Claimed, scoring.Completed, scoring.Failed, scoring.Skipped, scoring.Remaining);
@@ -240,26 +269,53 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
                 runId,
                 new InventorySyncRunCompletion(
                     DateTimeOffset.UtcNow,
-                    observed,
-                    requests,
-                    failures,
-                    eligible,
-                    0,
-                    created,
-                    updated,
-                    discarded + quarantined,
-                    pages,
-                    false),
+                    VehiclesObserved: observed,
+                    RequestsIssued: requests,
+                    Failures: failures,
+                    Loaded: persist ? created + updated + unchanged : eligible,
+                    Marked: 0,
+                    Discarded: discarded,
+                    Quarantined: quarantined,
+                    Errors: failures.Count,
+                    PagesProcessed: pages,
+                    CycleCompleted: false,
+                    Created: created,
+                    Updated: updated,
+                    Unchanged: unchanged,
+                    Stale: stale,
+                    ArchivedObserved: 0,
+                    ScoringQueued: scoringQueued,
+                    ScoringCompleted: scoringCompleted,
+                    ScoringFailed: scoringFailed),
                 CancellationToken.None);
 
-            return new(runId, normalizedPlatform, persist, maximumLots, sourceRowsMapped, observed, eligible, discarded, quarantined, created, updated, unchanged, mediaRowsWritten, pages, requests, stopwatch.ElapsedMilliseconds, failures, ToBreakdown(discardReasons), ToBreakdown(quarantineReasons), ToDateBreakdown(missingSaleDateCandidates));
+            return new(runId, normalizedPlatform, persist, maximumLots, sourceRowsMapped, observed, eligible, discarded, quarantined, created, updated, unchanged, mediaRowsWritten, pages, requests, stopwatch.ElapsedMilliseconds, failures, ToBreakdown(discardReasons), ToBreakdown(quarantineReasons), ToDateBreakdown(missingSaleDateCandidates), stale, scoringQueued, scoringCompleted, scoringFailed);
         }
         catch (OperationCanceledException)
         {
             failures.Add("v2-initial-load:cancelled");
             await snapshotStore.CompleteSyncRunAsync(
                 runId,
-                new InventorySyncRunCompletion(DateTimeOffset.UtcNow, observed, requests, failures, eligible, 0, created, updated, discarded + quarantined, pages, false, null, true),
+                new InventorySyncRunCompletion(
+                    DateTimeOffset.UtcNow,
+                    VehiclesObserved: observed,
+                    RequestsIssued: requests,
+                    Failures: failures,
+                    Loaded: persist ? created + updated + unchanged : eligible,
+                    Marked: 0,
+                    Discarded: discarded,
+                    Quarantined: quarantined,
+                    Errors: failures.Count,
+                    PagesProcessed: pages,
+                    CycleCompleted: false,
+                    Cancelled: true,
+                    Created: created,
+                    Updated: updated,
+                    Unchanged: unchanged,
+                    Stale: stale,
+                    ScoringQueued: scoringQueued,
+                    ScoringCompleted: scoringCompleted,
+                    ScoringFailed: scoringFailed),
                 CancellationToken.None);
             throw;
         }
@@ -269,7 +325,25 @@ public sealed class AuctionsApiV2InitialLoadProcessor(
             logger.LogError(exception, "AuctionsAPI V2 initial block {RunId} failed for {Platform} after {Observed} lots.", runId, normalizedPlatform, observed);
             await snapshotStore.CompleteSyncRunAsync(
                 runId,
-                new InventorySyncRunCompletion(DateTimeOffset.UtcNow, observed, requests, failures, eligible, 0, created, updated, discarded + quarantined, pages, false),
+                new InventorySyncRunCompletion(
+                    DateTimeOffset.UtcNow,
+                    VehiclesObserved: observed,
+                    RequestsIssued: requests,
+                    Failures: failures,
+                    Loaded: persist ? created + updated + unchanged : eligible,
+                    Marked: 0,
+                    Discarded: discarded,
+                    Quarantined: quarantined,
+                    Errors: failures.Count,
+                    PagesProcessed: pages,
+                    CycleCompleted: false,
+                    Created: created,
+                    Updated: updated,
+                    Unchanged: unchanged,
+                    Stale: stale,
+                    ScoringQueued: scoringQueued,
+                    ScoringCompleted: scoringCompleted,
+                    ScoringFailed: scoringFailed),
                 CancellationToken.None);
             throw;
         }

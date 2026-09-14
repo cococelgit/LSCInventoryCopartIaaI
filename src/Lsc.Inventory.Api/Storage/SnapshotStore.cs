@@ -78,7 +78,15 @@ public sealed record InventorySyncRunCompletion(
     int? PagesProcessed = null,
     bool? CycleCompleted = null,
     InventoryReconciliationResult? Reconciliation = null,
-    bool Cancelled = false);
+    bool Cancelled = false,
+    int? Created = null,
+    int? Updated = null,
+    int? Unchanged = null,
+    int? Stale = null,
+    int? ArchivedObserved = null,
+    int? ScoringQueued = null,
+    int? ScoringCompleted = null,
+    int? ScoringFailed = null);
 
 public sealed record InventoryLotPersistenceResult(string LotKey, string Action, IReadOnlyList<string> ChangedFields);
 
@@ -93,7 +101,12 @@ public sealed record InventorySyncRunProgress(
     int Discarded,
     int Quarantined,
     int Errors,
-    int PagesProcessed);
+    int PagesProcessed,
+    int Stale = 0,
+    int ArchivedObserved = 0,
+    int ScoringQueued = 0,
+    int ScoringCompleted = 0,
+    int ScoringFailed = 0);
 
 public sealed record InventorySyncRunEvent(
     Guid RunId,
@@ -131,7 +144,12 @@ public sealed record InventoryExecutionSummary(
     int? Deactivated,
     int? PagesProcessed,
     bool? CycleCompleted,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures,
+    int? Stale = null,
+    int? ArchivedObserved = null,
+    int? ScoringQueued = null,
+    int? ScoringCompleted = null,
+    int? ScoringFailed = null);
 
 public sealed record InventoryExecutionHistoryPage(int Page, int PageSize, long Total, int TotalPages, IReadOnlyList<InventoryExecutionSummary> Items);
 
@@ -892,14 +910,18 @@ public sealed class InMemorySnapshotStore : IInventorySnapshotStore
     {
         var runEvents = events.Where(item => item.RunId == runId).ToArray();
         int Count(string action) => runEvents.Count(item => string.Equals(item.Action, action, StringComparison.OrdinalIgnoreCase));
+        int? DirectOrEventCount(int? direct, string action) => direct ?? (completion is not null ? Count(action) : null);
         var status = completion is null ? "running" : completion.Cancelled ? "cancelled" : completion.Failures.Count == 0 ? "succeeded" : "completed_with_errors";
         return new InventoryExecutionSummary(
             runId, start.Provider, start.Platform, start.State, status, start.StartedAt, completion?.FinishedAt,
             completion?.VehiclesObserved ?? 0, completion?.RequestsIssued ?? 0, completion?.Loaded,
-            Count("created"), Count("updated"), Count("unchanged"), completion?.Marked, completion?.Discarded,
+            DirectOrEventCount(completion?.Created, "created"), DirectOrEventCount(completion?.Updated, "updated"),
+            DirectOrEventCount(completion?.Unchanged, "unchanged"), completion?.Marked, completion?.Discarded,
             completion?.Quarantined, completion?.Errors, completion?.Reconciliation?.Reactivated,
             completion?.Reconciliation?.MissesIncremented, completion?.Reconciliation?.Deactivated,
-            completion?.PagesProcessed, completion?.CycleCompleted, completion?.Failures ?? []);
+            completion?.PagesProcessed, completion?.CycleCompleted, completion?.Failures ?? [],
+            completion?.Stale, completion?.ArchivedObserved, completion?.ScoringQueued,
+            completion?.ScoringCompleted, completion?.ScoringFailed);
     }
 
     public Task<IReadOnlyList<StoredVehicleSnapshot>> GetIaaIConditionBackfillCandidatesAsync(int maximum, DateTimeOffset cutoff, CancellationToken cancellationToken)
