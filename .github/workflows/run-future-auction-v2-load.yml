@@ -199,20 +199,26 @@ jobs:
           else
             echo "No replica/container metadata available for failed execution $execution" | tee "$RUNNER_TEMP/future-auction-v2-load.log"
           fi
-          if [ "$status" != "Succeeded" ]; then
-            echo "LOAD_FAILURE_STATUS=$status"
-            exit 1
-          fi
           result_line="$(grep -E 'stdout F \{"RunId"' "$RUNNER_TEMP/future-auction-v2-load.log" | tail -1 | sed -E 's/^.*stdout F //')"
           test -n "$result_line"
           printf '%s' "$result_line" | jq -e '.Persisted == true' >/dev/null
           printf '%s' "$result_line" | jq -e '(.Created >= 0 and .Updated >= 0 and .Unchanged >= 0)' >/dev/null
           failure_count="$(printf '%s' "$result_line" | jq '.Failures | length')"
+          source_exhausted=false
           if [ "$failure_count" -gt 0 ]; then
             printf '%s' "$result_line" | jq -e '.Failures | all(. == "v2-initial-load:source-ended-before-block-limit")' >/dev/null
+            source_exhausted=true
             echo "SOURCE_EXHAUSTED=true"
           else
             echo "SOURCE_EXHAUSTED=false"
+          fi
+          if [ "$status" != "Succeeded" ]; then
+            if [ "$status" = "Failed" ] && [ "$source_exhausted" = true ]; then
+              echo "LOAD_NATURAL_END=true"
+            else
+              echo "LOAD_FAILURE_STATUS=$status"
+              exit 1
+            fi
           fi
 
       - name: Verify production ingestion jobs remain paused and idle
