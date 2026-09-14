@@ -28,7 +28,7 @@ env:
   RESOURCE_GROUP: rg-lsc-inventory-prod
   API_APP: ca-lsc-inventory-api-prod
   SCORING_JOB: job-lsc-inventory-scoring-prod
-  SCORING_IMAGE: acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-v2-backfill-46f698cd50ebaf1ec07470bda79d7d45d2bf3da3
+  SCORING_IMAGE: acrlscinvprodeus2.azurecr.io/lsc-inventory-engine:inventory-v2-backfill-69a1db6e9b7e378c228e47245c62353b91f05c47
 
 jobs:
   backfill:
@@ -100,8 +100,8 @@ jobs:
           test "$(echo "$after" | jq -r '.properties.template.containers[0].env[]? | select(.name=="Persistence__DatabaseUser") | .value // empty')" = "id-lsc-inventory-db-runtime-prod"
           test "$(echo "$after" | jq -r '.properties.template.containers[0].image')" = "$SCORING_IMAGE"
           test "$(echo "$after" | jq -c '.properties.template.containers[0].args // []')" = '["--scoring-backfill"]'
-          test "$(echo "$after" | jq -r '.properties.configuration.triggerType')" = Schedule
-          test -n "$(echo "$after" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
+          test "$(echo "$after" | jq -r '.properties.configuration.triggerType')" = Manual
+          test -z "$(echo "$after" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression // ""')"
           echo "SCORING_WORKER_IMAGE_UPDATED=true"
           echo "PREVIOUS_SCORING_IMAGE=$before_image"
 
