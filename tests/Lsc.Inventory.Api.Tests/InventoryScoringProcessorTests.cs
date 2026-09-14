@@ -79,6 +79,8 @@ public sealed class InventoryScoringProcessorTests
 
         Assert.Contains("InputHash = item.InputHash", source, StringComparison.Ordinal);
         Assert.Contains("inventory.score_input_hash = @input_hash", source, StringComparison.Ordinal);
+        Assert.Contains("var publishedRows = await current.ExecuteNonQueryAsync(cancellationToken);", source, StringComparison.Ordinal);
+        Assert.Contains("if (publishedRows != 1)", source, StringComparison.Ordinal);
         Assert.DoesNotContain("input-superseded", source, StringComparison.Ordinal);
     }
 

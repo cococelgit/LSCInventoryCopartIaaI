@@ -649,7 +649,12 @@ public sealed partial class PostgresSnapshotStore
                     scored_at = excluded.scored_at, updated_at = now();
                 """;
             AddScoringParameters(current, outcome, sourceObservedAt);
-            await current.ExecuteNonQueryAsync(cancellationToken);
+            var publishedRows = await current.ExecuteNonQueryAsync(cancellationToken);
+            if (publishedRows != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Scoring result was not published for active lot {outcome.LotKey}; input hash no longer matches the current inventory row.");
+            }
         }
         await transaction.CommitAsync(cancellationToken);
     }
