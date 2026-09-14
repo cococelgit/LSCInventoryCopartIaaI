@@ -154,7 +154,7 @@ jobs:
                 | .env=((.env // [])
                     | map(select((.secretRef // "") == ""
                         and (.name | test("Blob|Storage|AzureWebJobsStorage"; "i") | not)
-                        and (.name | IN("AuctionsApi__ApiKey","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalMapperEnabled","InventoryV2__ShadowWriteEnabled","InventoryV2__BatchSize","Scoring__ProcessIngestionRunImmediately","Scoring__ImmediateMaximumLots","Scoring__RequireCurrentForPublication") | not)))
+                        and (.name | IN("AuctionsApi__ApiKey","AuctionsApi__Enabled","AuctionsApi__AllowWrites","AuctionsApi__CanonicalMapperEnabled","InventoryV2__ShadowWriteEnabled","InventoryV2__BatchSize","Scoring__ProcessIngestionRunImmediately","Scoring__ImmediateMaximumLots","Scoring__RequireCurrentForPublication","Persistence__DatabaseUser") | not)))
                     + [
                         {name:"AuctionsApi__ApiKey",value:$key},
                         {name:"AuctionsApi__Enabled",value:"true"},
@@ -164,7 +164,8 @@ jobs:
                         {name:"InventoryV2__BatchSize",value:"1000"},
                         {name:"Scoring__ProcessIngestionRunImmediately",value:$immediate},
                         {name:"Scoring__ImmediateMaximumLots",value:env.MAXIMUM},
-                        {name:"Scoring__RequireCurrentForPublication",value:"false"}
+                        {name:"Scoring__RequireCurrentForPublication",value:"false"},
+                        {name:"Persistence__DatabaseUser",value:"id-lsc-inventory-loader-prod"}
                       ])) as $container
             | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
                 | del(.identitySettings,.secrets,.scheduleTriggerConfig)
