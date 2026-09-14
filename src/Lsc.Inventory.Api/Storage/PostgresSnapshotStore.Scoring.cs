@@ -530,7 +530,7 @@ public sealed partial class PostgresSnapshotStore
                 from inventory_vehicle_scoring_queue
                 where status = 'queued'
                   and priority >= @high_priority
-                  and (@source_run_id is null or source_run_id = @source_run_id)
+                  and (cast(@source_run_id as uuid) is null or source_run_id = cast(@source_run_id as uuid))
                 order by priority desc, requested_at asc, lot_key asc
                 limit @limit
             ), remaining as (
@@ -544,7 +544,7 @@ public sealed partial class PostgresSnapshotStore
                 from inventory_vehicle_scoring_queue
                 where status = 'queued'
                   and priority < @high_priority
-                  and (@source_run_id is null or source_run_id = @source_run_id)
+                  and (cast(@source_run_id as uuid) is null or source_run_id = cast(@source_run_id as uuid))
             ), low_priority as (
                 select low.lot_key, low.platform, low.priority, low.requested_at
                 from low_ranked low
