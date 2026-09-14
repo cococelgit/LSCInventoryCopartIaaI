@@ -147,12 +147,17 @@ jobs:
               case "$status" in Succeeded|Failed|Canceled|Cancelled|Stopped) break ;; esac
               sleep 15
             done
-            test "$status" = Succeeded
             replicas="$(az containerapp job replica list --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --execution "$execution_name" -o json 2>/dev/null || echo '[]')"
             replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
             container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
             if [ -n "$replica" ] && [ -n "$container" ]; then
               az containerapp job logs show --resource-group "$RESOURCE_GROUP" --name "$SCORING_JOB" --execution "$execution_name" --replica "$replica" --container "$container" --tail 80 --format text || true
+            else
+              echo "No replica/container metadata available for scoring execution $execution_name"
+            fi
+            if [ "$status" != "Succeeded" ]; then
+              echo "SCORING_FAILURE_STATUS=$status"
+              exit 1
             fi
             response="$(curl --silent --show-error --fail --max-time 90 --header "Authorization: Bearer $inventory_token" "$base/internal/scoring/status")"
             active_total="$(echo "$response" | jq '[.platforms[]?.active] | add // 0')"
