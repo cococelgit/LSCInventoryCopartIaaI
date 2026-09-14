@@ -14,7 +14,7 @@ env:
   RESOURCE_GROUP: rg-lsc-inventory-prod
   POSTGRES_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
   POSTGRES_DATABASE: lsc_inventory
-  POSTGRES_USER: id-lsc-inventory-db-runtime-prod
+  POSTGRES_USER: id-lsc-inventory-loader-prod
 
 jobs:
   diagnose:
