@@ -165,7 +165,7 @@ jobs:
                         {name:"Scoring__ProcessIngestionRunImmediately",value:$immediate},
                         {name:"Scoring__ImmediateMaximumLots",value:env.MAXIMUM},
                         {name:"Scoring__RequireCurrentForPublication",value:"false"},
-                        {name:"Persistence__DatabaseUser",value:"id-lsc-inventory-loader-prod"}
+                        {name:"Persistence__DatabaseUser",value:"id-lsc-inventory-db-runtime-prod"}
                       ])) as $container
             | {location:$location, identity:$identity, properties:{environmentId:$environmentId, configuration:(($sourceConfiguration
                 | del(.identitySettings,.secrets,.scheduleTriggerConfig)
