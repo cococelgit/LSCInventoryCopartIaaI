@@ -60,7 +60,7 @@ jobs:
             if psql "$conn" -v ON_ERROR_STOP=1 -c 'select 1' >/dev/null 2>&1; then break; fi
             sleep 5
           done
-          psql "$conn" -v ON_ERROR_STOP=1 -P pager=off -v run_id="$RUN_ID" -c "
+          psql "$conn" -v ON_ERROR_STOP=1 -P pager=off -c "
             select r.run_id, r.provider, r.platform_scope, r.state_scope, r.status,
                    r.vehicles_observed, r.requests_issued,
                    m.loaded_count, m.created_count, m.updated_count, m.unchanged_count, m.stale_count,
@@ -72,5 +72,5 @@ jobs:
                     + coalesce(m.stale_count,0) + coalesce(m.discarded_count,0) + coalesce(m.quarantined_count,0)) as observed_reconciled
             from public.inventory_sync_runs r
             left join public.inventory_execution_run_metrics m on m.run_id = r.run_id
-            where r.run_id = :'run_id'::uuid;
+            where r.run_id = '$RUN_ID'::uuid;
           "
