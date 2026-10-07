@@ -59,6 +59,7 @@ env:
   ACR_SERVER: acrlscinvprodeus2.azurecr.io
   IMAGE_NAME: lsc-inventory-engine
   TEMP_JOB: job-lsc-future-v2-load-prod
+  API_APP: ca-lsc-inventory-api-prod
 
 jobs:
   load:
@@ -99,17 +100,27 @@ jobs:
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --only-show-errors
 
-      - name: Verify production ingestion jobs are paused and idle
+      - name: Verify paused jobs and healthy V2 persistence source
         shell: bash
         run: |
           set -euo pipefail
-          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+          api_json="$(az containerapp show --name "$API_APP" --resource-group "$RESOURCE_GROUP" -o json)"
+          api_host="$(echo "$api_json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="Persistence__PostgreSqlHost")][0].value // empty')"
+          test -n "$api_host"
+          echo "API_PERSISTENCE_HOST=$api_host"
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod job-lsc-iaai-inc-v2-prod job-lsc-copart-inc-v2-prod; do
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
             trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
             echo "PRODUCTION_JOB=$job TRIGGER=$trigger ACTIVE=$active"
             test "$trigger" = Manual
             test "$active" = 0
+          done
+          for job in job-lsc-iaai-inc-v2-prod job-lsc-copart-inc-v2-prod; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            host="$(echo "$json" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="Persistence__PostgreSqlHost")][0].value // empty')"
+            test "$host" = "$api_host"
+            echo "V2_PERSISTENCE_SOURCE=$job HOST=$host"
           done
 
       - name: Build immutable load image
@@ -137,7 +148,7 @@ jobs:
           cleanup() { az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true; }
           trap cleanup EXIT
           az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
-          if [ "$PLATFORM" = copart ]; then source_job=job-lsc-copart-auto-prod; else source_job=job-lsc-iaai-pilot-prod; fi
+          if [ "$PLATFORM" = copart ]; then source_job=job-lsc-copart-inc-v2-prod; else source_job=job-lsc-iaai-inc-v2-prod; fi
           source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$source_job?api-version=2024-03-01" -o json)"
           body="$(echo "$source_json" | jq --arg name "$TEMP_JOB" --arg image "$LOAD_IMAGE" --arg key "$AUCTIONS_API_KEY" --arg platform "$PLATFORM" --arg immediate "$IMMEDIATE_SCORING"  '
             .location as $location
@@ -221,12 +232,12 @@ jobs:
             fi
           fi
 
-      - name: Verify production ingestion jobs remain paused and idle
+      - name: Verify all ingestion jobs remain paused and idle
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod; do
+          for job in job-lsc-iaai-pilot-prod job-lsc-copart-auto-prod job-lsc-iaai-inc-v2-prod job-lsc-copart-inc-v2-prod; do
             json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
             test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Manual
             active="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
