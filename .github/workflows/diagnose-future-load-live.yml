@@ -1,0 +1,51 @@
+name: Diagnose Future Auction V2 Load Live
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  TEMP_JOB: job-lsc-future-v2-load-prod
+  API_APP: ca-lsc-inventory-api-prod
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Read active execution, recent container logs and database progress
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== EXECUTIONS ==='
+          executions="$(az containerapp job execution list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          echo "$executions" | jq '[.[] | {name,status:.properties.status,start:.properties.startTime,end:.properties.endTime}]'
+          execution="$(echo "$executions" | jq -r '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | sort_by(.properties.startTime) | last | .name // empty')"
+          if [ -n "$execution" ]; then
+            replicas="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json)"
+            echo '=== REPLICA STATUS ==='
+            echo "$replicas" | jq '[.[] | {name,status:.properties.status,containers:[.properties.containers[]? | {name,ready,state,lastState}]}]'
+            replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+            container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+            if [ -n "$replica" ] && [ -n "$container" ]; then
+              echo '=== LAST 60 LIVE LOG LINES ==='
+              timeout 30 az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 60 --format text || true
+            fi
+          fi
+          fqdn="$(az containerapp show --name "$API_APP" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+          token_ref="$(az containerapp show --name "$API_APP" --resource-group "$RESOURCE_GROUP" --query "properties.template.containers[0].env[?name=='InventoryApi__Token'].secretRef | [0]" -o tsv)"
+          token="$(az containerapp secret list --name "$API_APP" --resource-group "$RESOURCE_GROUP" --show-values --query "[?name=='$token_ref'].value | [0]" -o tsv)"
+          test -n "$token" && test -n "$fqdn"
+          echo '=== COPART V2 DATABASE EXECUTIONS ==='
+          curl --fail --silent --show-error --max-time 45 --header "Authorization: Bearer $token" "https://${fqdn}/internal/executions?platform=copart&page=1&pageSize=10" \
+            | jq '{total,items:[.items[] | select(.scope=="v2-initial-block" or .source=="auctions_api" or .provider=="auctions_api") | {runId,startedAt,finishedAt,status,scope,source,provider,vehiclesObserved,requestsIssued,loaded,created,updated,unchanged,pagesProcessed,failures}]}'
+          unset token
