@@ -1,0 +1,81 @@
+name: Pause Incremental V2 Schedules
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type PAUSE_INCREMENTAL_V2_SCHEDULES"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: pause-incremental-v2-schedules
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+
+jobs:
+  pause:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Verify explicit authorization
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = PAUSE_INCREMENTAL_V2_SCHEDULES
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Convert both V2 schedules to Manual without changing runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-copart-inc-v2-prod job-lsc-iaai-inc-v2-prod; do
+            current="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$current" | jq -r '.properties.configuration.triggerType')" = Schedule
+            echo "BEFORE=$job CRON=$(echo "$current" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')"
+            job_id="$(echo "$current" | jq -r '.id')"
+            body="$(echo "$current" | jq '
+              .properties.configuration |= (
+                del(.identitySettings,.secrets,.scheduleTriggerConfig)
+                | .triggerType="Manual"
+                | .manualTriggerConfig={parallelism:1,replicaCompletionCount:1}
+              )
+              | {properties:{configuration:.properties.configuration}}')"
+            az rest --method patch --uri "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --output none
+          done
+
+      - name: Wait only for already-started V2 executions to finish
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 180); do
+            active=0
+            for job in job-lsc-copart-inc-v2-prod job-lsc-iaai-inc-v2-prod; do
+              trigger="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query properties.configuration.triggerType -o tsv)"
+              test "$trigger" = Manual
+              running="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+              echo "PAUSE_WAIT attempt=$attempt job=$job trigger=$trigger active=$running"
+              active=$((active + running))
+            done
+            [ "$active" -eq 0 ] && break
+            sleep 15
+          done
+          test "$active" -eq 0
+          echo "INCREMENTAL_V2_SCHEDULES_PAUSED_AND_IDLE=true"
