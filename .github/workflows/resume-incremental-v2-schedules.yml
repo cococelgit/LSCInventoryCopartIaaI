@@ -1,0 +1,82 @@
+name: Resume Incremental V2 Schedules
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type RESUME_INCREMENTAL_V2_SCHEDULES"
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: resume-incremental-v2-schedules
+  cancel-in-progress: false
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verify explicit authorization
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = RESUME_INCREMENTAL_V2_SCHEDULES
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Verify all ingestion jobs idle and capture V2 runtime fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-copart-auto-prod job-lsc-iaai-pilot-prod job-lsc-copart-inc-v2-prod job-lsc-iaai-inc-v2-prod; do
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            trigger="$(echo "$json" | jq -r '.properties.configuration.triggerType')"
+            running="$(az containerapp job execution list --name "$job" --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.properties.status == "Running" or .properties.status == "Pending")] | length')"
+            echo "BASELINE_JOB=$job TRIGGER=$trigger ACTIVE=$running"
+            test "$trigger" = Manual && test "$running" = 0
+            if [[ "$job" == *-inc-v2-prod ]]; then
+              echo "$json" | jq -S '.properties.template' | sha256sum | cut -d' ' -f1 > "$RUNNER_TEMP/$job.template.sha"
+              echo "$json" | jq -S '.properties.configuration | del(.triggerType,.manualTriggerConfig,.scheduleTriggerConfig,.identitySettings,.secrets)' | sha256sum | cut -d' ' -f1 > "$RUNNER_TEMP/$job.config.sha"
+            fi
+          done
+          transient="$(az containerapp job list --resource-group "$RESOURCE_GROUP" -o json | jq '[.[] | select(.name=="job-lsc-future-v2-load-prod")] | length')"
+          echo "ACTIVE_TEMP_LOADER_PRESENT=$transient"
+          test "$transient" = 0
+      - name: Restore only original V2 schedule triggers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-copart-inc-v2-prod job-lsc-iaai-inc-v2-prod; do
+            if [ "$job" = job-lsc-copart-inc-v2-prod ]; then cron='*/10 * * * *'; else cron='5-59/10 * * * *'; fi
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            job_id="$(echo "$json" | jq -r '.id')"
+            body="$(echo "$json" | jq --arg cron "$cron" '{properties:{configuration:(.properties.configuration | del(.identitySettings,.secrets,.manualTriggerConfig) | .triggerType="Schedule" | .scheduleTriggerConfig={cronExpression:$cron,parallelism:1,replicaCompletionCount:1})}}')"
+            az rest --method patch --uri "https://management.azure.com${job_id}?api-version=2024-03-01" --body "$body" --output none
+            echo "RESUMED_JOB=$job CRON=$cron"
+          done
+      - name: Verify schedules and unchanged images, environment and execution settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          for job in job-lsc-copart-inc-v2-prod job-lsc-iaai-inc-v2-prod; do
+            if [ "$job" = job-lsc-copart-inc-v2-prod ]; then cron='*/10 * * * *'; else cron='5-59/10 * * * *'; fi
+            json="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" -o json)"
+            test "$(echo "$json" | jq -r '.properties.configuration.triggerType')" = Schedule
+            test "$(echo "$json" | jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression')" = "$cron"
+            test "$(echo "$json" | jq -S '.properties.template' | sha256sum | cut -d' ' -f1)" = "$(cat "$RUNNER_TEMP/$job.template.sha")"
+            test "$(echo "$json" | jq -S '.properties.configuration | del(.triggerType,.manualTriggerConfig,.scheduleTriggerConfig,.identitySettings,.secrets)' | sha256sum | cut -d' ' -f1)" = "$(cat "$RUNNER_TEMP/$job.config.sha")"
+            echo "VERIFIED_JOB=$job TRIGGER=Schedule CRON=$cron RUNTIME_UNCHANGED=true"
+          done
+          for job in job-lsc-copart-auto-prod job-lsc-iaai-pilot-prod; do
+            trigger="$(az containerapp job show --name "$job" --resource-group "$RESOURCE_GROUP" --query properties.configuration.triggerType -o tsv)"
+            echo "LEGACY_JOB=$job TRIGGER=$trigger"
+            test "$trigger" = Manual
+          done
