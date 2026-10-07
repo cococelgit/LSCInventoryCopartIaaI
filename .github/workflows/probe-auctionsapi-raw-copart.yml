@@ -1,0 +1,60 @@
+name: Probe AuctionsAPI Raw Copart Response
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  SOURCE_JOB: job-lsc-copart-inc-v2-prod
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Call AuctionsAPI directly once and display its HTTP response
+        shell: bash
+        env:
+          AUCTIONS_API_KEY: ${{ secrets.AUCTIONS_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$AUCTIONS_API_KEY"
+          job="$(az containerapp job show --name "$SOURCE_JOB" --resource-group "$RESOURCE_GROUP" -o json)"
+          base="$(echo "$job" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__BaseUrl")][0].value // "https://auctionsapi.com/api/"')"
+          per_page="$(echo "$job" | jq -r '[.properties.template.containers[0].env[]? | select(.name=="AuctionsApi__PageSize")][0].value // "1000"')"
+          [[ "$base" == https://* ]]
+          [[ "$per_page" =~ ^[0-9]+$ ]]
+          test "$per_page" -ge 1 && test "$per_page" -le 1000
+          endpoint="${base%/}/cars"
+          echo "REQUEST_METHOD=GET"
+          echo "REQUEST_URL=$endpoint?domain_id=3&page=1&per_page=$per_page&sale_date_from=2026-10-07T04%3A00%3A00Z"
+          echo 'REQUEST_HEADER=x-api-key: [REDACTED]'
+          echo 'REQUEST_HEADER=Accept: application/json'
+          code="$(curl --silent --show-error --max-time 45 --get \
+            --header "x-api-key: $AUCTIONS_API_KEY" \
+            --header 'Accept: application/json' \
+            --data-urlencode 'domain_id=3' \
+            --data-urlencode 'page=1' \
+            --data-urlencode "per_page=$per_page" \
+            --data-urlencode 'sale_date_from=2026-10-07T04:00:00Z' \
+            --dump-header "$RUNNER_TEMP/provider-response.headers" \
+            --output "$RUNNER_TEMP/provider-response.body" \
+            --write-out '%{http_code}' \
+            "$endpoint")"
+          echo "RESPONSE_HTTP_STATUS=$code"
+          echo '=== PROVIDER_RESPONSE_HEADERS ==='
+          sed -E '/^(set-cookie|authorization|x-api-key):/I s/:.*$/: [REDACTED]/' "$RUNNER_TEMP/provider-response.headers"
+          echo '=== PROVIDER_RESPONSE_BODY_EXACT ==='
+          head -c 16000 "$RUNNER_TEMP/provider-response.body"
+          echo
+          echo '=== END_PROVIDER_RESPONSE_BODY ==='
+          echo "PROVIDER_BODY_BYTES=$(wc -c < "$RUNNER_TEMP/provider-response.body")"
