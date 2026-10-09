@@ -1,0 +1,141 @@
+name: Retire Authorized Unused Service Bus
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: inventory-servicebus-retirement
+  cancel-in-progress: false
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RG: rg-lsc-inventory-prod
+      SUB: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+      NS: sb-lsc-inventory-secure
+      PE: pe-sb-lsc-inv-secure
+      API: ca-lsc-inventory-api-prod
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+          tenant-id: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+          subscription-id: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+      - name: Validate exact targets and save reference configuration
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = DELETE_ONLY_UNUSED_SERVICEBUS_AND_ITS_ENDPOINT
+          test "$(az account show --query id -o tsv)" = "$SUB"
+          az extension add --name containerapp --upgrade --only-show-errors
+          mkdir -p reference
+          SBID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ServiceBus/namespaces/$NS"
+          PEID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/privateEndpoints/$PE"
+          az servicebus namespace show -g "$RG" -n "$NS" -o json > reference/namespace.json
+          az network private-endpoint show -g "$RG" -n "$PE" -o json > reference/private-endpoint.json
+          jq -e --arg id "$SBID" '.id == $id and .sku.name == "Premium"' reference/namespace.json > /dev/null
+          jq -e --arg id "$PEID" --arg sb "$SBID" '.id == $id and ([.privateLinkServiceConnections[]?.privateLinkServiceId,.manualPrivateLinkServiceConnections[]?.privateLinkServiceId] | length == 1 and all(. == $sb))' reference/private-endpoint.json > /dev/null
+          az servicebus queue list -g "$RG" --namespace-name "$NS" -o json > reference/queues.json
+          az servicebus topic list -g "$RG" --namespace-name "$NS" -o json > reference/topics.json
+          jq -e 'length == 3 and (map(.name) | sort) == ["inventory-analysis","inventory-ingestion","inventory-notifications"] and all(.messageCount == 0 and .sizeInBytes == 0 and ([.countDetails.activeMessageCount // 0,.countDetails.deadLetterMessageCount // 0,.countDetails.scheduledMessageCount // 0,.countDetails.transferMessageCount // 0,.countDetails.transferDeadLetterMessageCount // 0] | all(. == 0)))' reference/queues.json > /dev/null
+          jq -e 'length == 0' reference/topics.json > /dev/null
+          az network private-endpoint dns-zone-group list -g "$RG" --endpoint-name "$PE" -o json > reference/endpoint-dns-zone-groups.json
+          az servicebus namespace authorization-rule list -g "$RG" --namespace-name "$NS" --query '[].{name:name,rights:rights}' -o json > reference/authorization-rule-metadata.json
+          az role assignment list --scope "$SBID" --query '[].{principalId:principalId,principalType:principalType,role:roleDefinitionName,scope:scope}' -o json > reference/role-metadata.json
+          az containerapp show -g "$RG" -n "$API" -o json > "$RUNNER_TEMP/api-before.json"
+          az containerapp job list -g "$RG" -o json > "$RUNNER_TEMP/jobs-before.json"
+          jq -S '{identity,configuration:.properties.configuration,template:.properties.template}' "$RUNNER_TEMP/api-before.json" | sha256sum | cut -d' ' -f1 > "$RUNNER_TEMP/api-hash"
+          jq -S '[.[] | {name,identity,configuration:.properties.configuration,template:.properties.template}] | sort_by(.name)' "$RUNNER_TEMP/jobs-before.json" | sha256sum | cut -d' ' -f1 > "$RUNNER_TEMP/jobs-hash"
+          jq '{name,image:.properties.template.containers[0].image,revision:.properties.latestReadyRevisionName,provisioningState:.properties.provisioningState}' "$RUNNER_TEMP/api-before.json" > reference/api-before-safe.json
+          jq '[.[] | {name,trigger:.properties.configuration.triggerType,cron:.properties.configuration.scheduleTriggerConfig.cronExpression,image:.properties.template.containers[0].image}] | sort_by(.name)' "$RUNNER_TEMP/jobs-before.json" > reference/jobs-before-safe.json
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          pattern=re.compile(r'sb-lsc-inventory-secure|servicebus',re.I)
+          for f in ['api-before.json','jobs-before.json']:
+              data=json.load(open(Path(os.environ['RUNNER_TEMP'])/f))
+              for app in data if isinstance(data,list) else [data]:
+                  props=app.get('properties',{})
+                  for c in props.get('template',{}).get('containers',[]):
+                      for entry in c.get('env') or []:
+                          if pattern.search(json.dumps(entry)):
+                              raise SystemExit('Preflight stopped: runtime reference in '+app['name']+' variable '+entry['name'])
+                  for entry in props.get('configuration',{}).get('secrets') or []:
+                      if pattern.search(json.dumps(entry)):
+                          raise SystemExit('Preflight stopped: runtime secret reference in '+app['name'])
+          PY
+          FQDN=$(jq -r '.properties.configuration.ingress.fqdn' "$RUNNER_TEMP/api-before.json")
+          for path in /healthz /readyz; do
+            code=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' "https://$FQDN$path")
+            echo "BASELINE_PATH=$path STATUS=$code"
+            test "$code" = 200
+          done
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > reference/preflight-time-utc.txt
+          echo 'Preflight passed. Snapshot contains metadata only, no keys or application secrets.'
+      - name: Preserve reference before deletion
+        uses: actions/upload-artifact@v4
+        with:
+          name: servicebus-reference-${{ github.run_id }}
+          path: reference/
+          retention-days: 90
+          if-no-files-found: error
+      - name: Delete only the approved endpoint and namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          date -u +'%Y-%m-%dT%H:%M:%SZ'
+          echo "DELETING_PRIVATE_ENDPOINT=$PE"
+          az network private-endpoint delete -g "$RG" -n "$PE" --only-show-errors
+          echo "DELETING_NAMESPACE=$NS"
+          az servicebus namespace delete -g "$RG" -n "$NS" --only-show-errors
+          echo 'Both deletion commands completed.'
+      - name: Verify absence and unchanged runtime
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verification
+          az resource list -g "$RG" --query '[].{id:id,name:name,type:type}' -o json > verification/resources-after.json
+          jq -e --arg ns "$NS" --arg pe "$PE" 'all((.name == $ns and .type == "Microsoft.ServiceBus/namespaces") or (.name == $pe and .type == "Microsoft.Network/privateEndpoints") | not)' verification/resources-after.json > /dev/null
+          az containerapp show -g "$RG" -n "$API" -o json > "$RUNNER_TEMP/api-after.json"
+          az containerapp job list -g "$RG" -o json > "$RUNNER_TEMP/jobs-after.json"
+          api_hash=$(jq -S '{identity,configuration:.properties.configuration,template:.properties.template}' "$RUNNER_TEMP/api-after.json" | sha256sum | cut -d' ' -f1)
+          jobs_hash=$(jq -S '[.[] | {name,identity,configuration:.properties.configuration,template:.properties.template}] | sort_by(.name)' "$RUNNER_TEMP/jobs-after.json" | sha256sum | cut -d' ' -f1)
+          test "$api_hash" = "$(cat "$RUNNER_TEMP/api-hash")"
+          test "$jobs_hash" = "$(cat "$RUNNER_TEMP/jobs-hash")"
+          echo 'API_CONFIGURATION_UNCHANGED=true JOBS_CONFIGURATION_UNCHANGED=true' | tee verification/invariants.txt
+          FQDN=$(jq -r '.properties.configuration.ingress.fqdn' "$RUNNER_TEMP/api-after.json")
+          ref=$(jq -r '.properties.template.containers[0].env[] | select(.name == "InventoryApi__Token") | .secretRef // empty' "$RUNNER_TEMP/api-after.json")
+          test -n "$ref"
+          token=$(az containerapp secret list -g "$RG" -n "$API" --show-values --query "[?name=='$ref'].value | [0]" -o tsv)
+          test -n "$token"
+          echo "::add-mask::$token"
+          for path in /healthz /readyz /api/v1/inventory/summary /api/v1/inventory/search; do
+            code=$(curl -sS --max-time 45 -H "Authorization: Bearer $token" -o "$RUNNER_TEMP/smoke.json" -w '%{http_code}' "https://$FQDN$path")
+            echo "SMOKE_PATH=$path STATUS=$code" | tee -a verification/smoke.txt
+            test "$code" = 200
+          done
+          for platform in copart iaai; do
+            curl --fail --silent --show-error --max-time 45 -H "Authorization: Bearer $token" "https://$FQDN/internal/executions?platform=$platform&page=1&pageSize=5" | jq '{total,items:[.items[] | {runId,startedAt,finishedAt,status,scope,provider,vehiclesObserved,loaded,created,updated,unchanged,failures}]}' > "verification/database-executions-$platform.json"
+          done
+          unset token
+          for job in job-lsc-copart-inc-v2-prod job-lsc-iaai-inc-v2-prod job-lsc-inventory-scoring-prod; do
+            az containerapp job execution list -g "$RG" -n "$job" --query '[].{name:name,status:properties.status,start:properties.startTime,end:properties.endTime}' -o json | jq 'sort_by(.start) | reverse | .[:5]' > "verification/$job-executions.json"
+          done
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > verification/completed-at-utc.txt
+          echo 'Verified deletion of two approved resources; API healthy; runtime configuration unchanged.'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: servicebus-removal-verification-${{ github.run_id }}
+          path: verification/
+          retention-days: 90
+          if-no-files-found: warn
