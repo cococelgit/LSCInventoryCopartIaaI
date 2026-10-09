@@ -1,0 +1,49 @@
+name: Audit Runtime Cost Drivers
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: audit-runtime-cost-drivers
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+          tenant-id: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+          subscription-id: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+      - name: Read aggregated runtime evidence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG=rg-lsc-inventory-prod
+          SUB=99edf3d1-a651-4d2d-af8e-d44a3360f584
+          mkdir -p audit
+          capture() {
+            local file="$1"; shift
+            if "$@" > "audit/$file.json" 2> "audit/$file.error"; then rm "audit/$file.error"; else echo "$file unavailable"; fi
+          }
+          az extension add --name containerapp --upgrade --only-show-errors
+          capture revisions az containerapp revision list -g "$RG" -n ca-lsc-inventory-api-prod --query '[].{name:name,active:properties.active,created:properties.createdTime,replicas:properties.replicas,traffic:properties.trafficWeight,cpu:properties.template.containers[0].resources.cpu,memory:properties.template.containers[0].resources.memory}' -o json
+          capture diagnostic-destinations az containerapp env list -g "$RG" --query '[].{name:name,logs:properties.appLogsConfiguration.destination,workspace:properties.appLogsConfiguration.logAnalyticsConfiguration.customerId}' -o json
+          WORKSPACE=$(az monitor log-analytics workspace show -g "$RG" -n log-lsc-inventory-prod-eus2 --query customerId -o tsv)
+          PREFIX='ContainerAppConsoleLogs_CL | where TimeGenerated >= datetime(2026-09-20T00:00:00Z)'
+          capture logs-by-container az monitor log-analytics query -w "$WORKSPACE" --analytics-query "$PREFIX | summarize Records=count(), BillableGB=sum(_BilledSize)/1e9 by ContainerAppName_s, ContainerName_s | order by BillableGB desc" -o json
+          capture logs-by-shape az monitor log-analytics query -w "$WORKSPACE" --analytics-query "$PREFIX | extend Category=extract(@'^(?:info|warn|fail|dbug|trce):\s+([^\s\[]+)',1,Log_s) | extend Shape=case(isnotempty(Category),Category,Log_s has 'Request starting','http-request-start',Log_s has 'Request finished','http-request-end',Log_s has 'Executing endpoint','endpoint-start',Log_s has 'Executed endpoint','endpoint-end',Log_s has 'Command execution completed','sql-command',Log_s has 'SELECT' or Log_s has 'INSERT' or Log_s has 'UPDATE','sql-text',Log_s has 'Npgsql','npgsql-other',Log_s has 'Exception','exception',Log_s startswith '   at ','stack-frame',Log_s startswith '{','json-result','other') | summarize Records=count(),BillableGB=sum(_BilledSize)/1e9 by ContainerAppName_s,Shape | order by BillableGB desc | take 40" -o json
+          capture logs-by-day az monitor log-analytics query -w "$WORKSPACE" --analytics-query "$PREFIX | summarize Records=count(),BillableGB=sum(_BilledSize)/1e9 by bin(TimeGenerated,1d),ContainerAppName_s | order by TimeGenerated asc" -o json
+          SB="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ServiceBus/namespaces/sb-lsc-inventory-secure"
+          capture servicebus-traffic az monitor metrics list --resource "$SB" --metric IncomingMessages OutgoingMessages --interval P1D --aggregation Total --offset 30d -o json
+          capture servicebus-queues az servicebus queue list -g "$RG" --namespace-name sb-lsc-inventory-secure --query '[].{name:name,status:status,messageCount:messageCount,sizeInBytes:sizeInBytes}' -o json
+          capture servicebus-topics az servicebus topic list -g "$RG" --namespace-name sb-lsc-inventory-secure --query '[].{name:name,status:status,sizeInBytes:sizeInBytes,subscriptions:subscriptionCount}' -o json
+          capture api-cpu az monitor metrics list --resource "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/containerApps/ca-lsc-inventory-api-prod" --metric UsageNanoCores WorkingSetBytes --interval PT1H --aggregation Average Maximum --offset 7d -o json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-cost-drivers-${{ github.run_id }}
+          path: audit/
+          retention-days: 14
