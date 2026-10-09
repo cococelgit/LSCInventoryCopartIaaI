@@ -61,10 +61,10 @@ jobs:
           for f in ['apps.json','jobs.json']:
               for a in json.load(open(Path(os.environ['RUNNER_TEMP'])/f)):
                   for c in a.get('properties',{}).get('template',{}).get('containers',[]):
-                      for e in c.get('env',[]):
+                      for e in (c.get('env') or []):
                           if pattern.search(json.dumps(e)):
                               references.append({'resource':a['name'],'variableName':e['name'],'usesSecretRef':'secretRef' in e})
-                  for secret in a.get('properties',{}).get('configuration',{}).get('secrets',[]):
+                  for secret in (a.get('properties',{}).get('configuration',{}).get('secrets') or []):
                       if pattern.search(json.dumps(secret)):
                           references.append({'resource':a['name'],'secretName':secret.get('name'),'type':'secret-metadata-reference'})
           Path('audit/servicebus-runtime-references.json').write_text(json.dumps(references,indent=2))
@@ -72,6 +72,7 @@ jobs:
           capture servicebus-endpoints az network private-endpoint list -g "$RG" --query '[].{id:id,name:name,targets:privateLinkServiceConnections[].privateLinkServiceId,manualTargets:manualPrivateLinkServiceConnections[].privateLinkServiceId}' -o json
           capture api-cpu az monitor metrics list --resource "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/containerApps/ca-lsc-inventory-api-prod" --metric UsageNanoCores WorkingSetBytes --interval PT1H --aggregation Average Maximum --offset 7d -o json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: runtime-cost-drivers-${{ github.run_id }}
           path: audit/
