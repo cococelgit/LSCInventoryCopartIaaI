@@ -1,0 +1,272 @@
+name: Reconcile Obsolete Scoring Tasks
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: reconcile-scoring-queue-staleness
+  cancel-in-progress: false
+
+env:
+  AZURE_CLIENT_ID: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+  AZURE_TENANT_ID: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+  AZURE_SUBSCRIPTION_ID: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+  RESOURCE_GROUP: rg-lsc-inventory-prod
+  SOURCE_JOB: job-lsc-iaai-inc-v2-prod
+  TEMP_JOB: job-lsc-scoring-queue-repair
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check authorized operation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: test "$CONFIRMATION" = RECONCILE_ONLY_OBSOLETE_SCORING_TASKS
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --only-show-errors
+
+      - name: Reconcile only obsolete tasks with before-row backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          uri="https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$TEMP_JOB?api-version=2024-03-01"
+
+          cleanup() {
+            az containerapp job delete --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --yes --only-show-errors || true
+          }
+          trap cleanup EXIT
+          source_json="$(az rest --method get --uri "https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.App/jobs/$SOURCE_JOB?api-version=2024-03-01" -o json)"
+          source_secrets="$(az containerapp job secret list --name "$SOURCE_JOB" --resource-group "$RESOURCE_GROUP" --show-values -o json)"
+
+          source_env_value() {
+            local name="$1" literal ref
+            literal="$(echo "$source_json" | jq -r --arg name "$name" '.properties.template.containers[0].env[]? | select(.name == $name) | .value // empty' | head -n1)"
+            ref="$(echo "$source_json" | jq -r --arg name "$name" '.properties.template.containers[0].env[]? | select(.name == $name) | .secretRef // empty' | head -n1)"
+            if [ -n "$literal" ]; then
+              printf '%s' "$literal"
+            elif [ -n "$ref" ]; then
+              echo "$source_secrets" | jq -r --arg ref "$ref" '.[] | select(.name == $ref) | .value // empty' | head -n1
+            fi
+          }
+
+          db_host="$(source_env_value Persistence__PostgreSqlHost)"
+          db_name="$(source_env_value Persistence__Database)"
+          db_user="$(source_env_value Persistence__DatabaseUser)"
+          db_client_id="$(source_env_value Persistence__ManagedIdentityClientId)"
+          test -n "$db_host"
+          test -n "$db_name"
+          test -n "$db_user"
+          test -n "$db_client_id"
+
+          read -r -d '' script <<'SCRIPT' || true
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq curl jq ca-certificates >/dev/null
+          token_response="$(curl --fail --silent --show-error --max-time 30 \
+            --header "X-IDENTITY-HEADER: ${IDENTITY_HEADER}" \
+            "${IDENTITY_ENDPOINT}?resource=https%3A%2F%2Fossrdbms-aad.database.windows.net&api-version=2019-08-01&client_id=${AZURE_CLIENT_ID}")"
+          export PGPASSWORD="$(printf '%s' "$token_response" | jq -r '.access_token')"
+          test -n "$PGPASSWORD"
+          psql --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            "host=$PGHOST port=5432 dbname=$PGDATABASE user=$PGUSER sslmode=require" <<'SQL'
+          begin;
+          set local statement_timeout = '45s';
+          set local lock_timeout = '5s';
+          create table if not exists inventory_scoring_queue_repair_audit (
+           repair_id text not null,
+           lot_key text not null,
+           before_row jsonb not null,
+           reason text not null,
+           captured_at timestamptz not null default now(),
+           primary key (repair_id, lot_key)
+          );
+          create temporary table scoring_repair_candidates on commit drop as
+          select q.lot_key, to_jsonb(q) as before_row,
+           case when c.lot_key is null or not c.is_active then 'obsolete-inactive-inventory'
+           when s.input_hash=c.score_input_hash and s.policy_version=q.policy_version then 'obsolete-already-scored-current-input'
+           when q.input_hash is distinct from c.score_input_hash then 'refresh-current-inventory-input'
+           else null end as reason,
+           c.score_input_hash as current_hash, c.last_seen_at as current_observed_at
+          from inventory_vehicle_scoring_queue q
+          left join inventory_current_v2 c on c.lot_key=q.lot_key
+          left join inventory_vehicle_score_current s on s.lot_key=q.lot_key
+          where q.status in ('queued','failed') and (
+           c.lot_key is null or not c.is_active or
+           (s.input_hash=c.score_input_hash and s.policy_version=q.policy_version) or
+           q.input_hash is distinct from c.score_input_hash
+          )
+          for update of q skip locked;
+          insert into inventory_scoring_queue_repair_audit(repair_id,lot_key,before_row,reason)
+          select '2026-10-09-scoring-host-repair',lot_key,before_row,reason from scoring_repair_candidates
+          on conflict do nothing;
+          with changed as (
+           update inventory_vehicle_scoring_queue q
+           set status=case when r.reason='refresh-current-inventory-input' then 'queued' else 'skipped' end,
+           input_hash=case when r.reason='refresh-current-inventory-input' then r.current_hash else q.input_hash end,
+           source_observed_at=case when r.reason='refresh-current-inventory-input' then r.current_observed_at else q.source_observed_at end,
+           source_run_id=case when r.reason='refresh-current-inventory-input' then null else q.source_run_id end,
+           attempts=case when r.reason='refresh-current-inventory-input' then 0 else q.attempts end,
+           last_error=case when r.reason='refresh-current-inventory-input' then null else r.reason end,
+           claimed_at=null,
+           completed_at=case when r.reason='refresh-current-inventory-input' then null else now() end,
+           updated_at=now()
+           from scoring_repair_candidates r where r.lot_key=q.lot_key
+           returning r.reason
+          )
+          select json_build_object('section','reconciled','reason',reason,'rows',count(*))::text from changed group by reason;
+          select json_build_object('section','queue_after','status',status,'rows',count(*))::text from inventory_vehicle_scoring_queue where status in ('queued','processing','failed') group by status;
+          commit;
+          SQL
+          SCRIPT
+
+          body="$(echo "$source_json" | jq \
+            --arg name "$TEMP_JOB" \
+            --arg host "$db_host" \
+            --arg database "$db_name" \
+            --arg user "$db_user" \
+            --arg clientId "$db_client_id" \
+            --arg script "$script" '
+              .location as $location
+              | .properties.environmentId as $environmentId
+              | {type:(.identity.type // "UserAssigned"), userAssignedIdentities:((.identity.userAssignedIdentities // {}) | with_entries(.value={}))} as $identity
+              | {
+                  location:$location,
+                  identity:$identity,
+                  properties:{
+                    environmentId:$environmentId,
+                    configuration:{
+                      triggerType:"Manual",
+                      replicaTimeout:600,
+                      replicaRetryLimit:0,
+                      manualTriggerConfig:{parallelism:1,replicaCompletionCount:1}
+                    },
+                    template:{
+                      containers:[{
+                        name:$name,
+                        image:"postgres:16-bookworm",
+                        command:["/bin/bash","-lc"],
+                        args:[$script],
+                        resources:{cpu:0.5,memory:"1Gi"},
+                        env:[
+                          {name:"PGHOST",value:$host},
+                          {name:"PGDATABASE",value:$database},
+                          {name:"PGUSER",value:$user},
+                          {name:"PGSSLMODE",value:"require"},
+                          {name:"AZURE_CLIENT_ID",value:$clientId}
+                        ]
+                      }]
+                    }
+                  }
+                }
+            ')"
+
+          az rest --method put --uri "$uri" --body "$body" --output none
+          state=Unknown
+          for _ in $(seq 1 60); do
+            state="$(az rest --method get --uri "$uri" --query 'properties.provisioningState' -o tsv 2>/dev/null || true)"
+            case "$state" in Succeeded) break ;; Failed|Canceled) exit 1 ;; esac
+            sleep 5
+          done
+          test "$state" = Succeeded
+
+          execution="$(az containerapp job start --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" -o json | jq -r '.name // .properties.name // empty')"
+          test -n "$execution"
+          status=Unknown
+          for _ in $(seq 1 120); do
+            status="$(az containerapp job execution show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --job-execution-name "$execution" -o json | jq -r '.properties.status // "Unknown"')"
+            case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+            sleep 5
+          done
+
+          replicas="$(az containerapp job replica list --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" -o json || true)"
+          replica="$(echo "$replicas" | jq -r '.[0].name // empty')"
+          container="$(echo "$replicas" | jq -r '.[0].properties.containers[0].name // empty')"
+          test -n "$replica"
+          test -n "$container"
+          mkdir -p evidence
+          az containerapp job logs show --name "$TEMP_JOB" --resource-group "$RESOURCE_GROUP" --execution "$execution" --replica "$replica" --container "$container" --tail 100 --format text | tee evidence/queue-audit.txt
+          test "$status" = Succeeded
+
+          cleanup
+          trap - EXIT
+
+      - name: Run existing scoring and verify current data
+        shell: bash
+        run: |
+          set -euo pipefail
+          JOB=job-lsc-inventory-scoring-prod
+          for attempt in $(seq 1 60); do
+            active=$(az containerapp job execution list -g "$RESOURCE_GROUP" -n "$JOB" -o json | jq '[.[] | select(.properties.status=="Running" or .properties.status=="Pending")] | length')
+            echo "WAIT_EXISTING_SCORING=$active"
+            [ "$active" = 0 ] && break
+            sleep 5
+          done
+          test "$active" = 0
+          az containerapp job show -g "$RESOURCE_GROUP" -n "$JOB" --query '{trigger:properties.configuration.triggerType,cron:properties.configuration.scheduleTriggerConfig.cronExpression,image:properties.template.containers[0].image,host:properties.template.containers[0].env[?name==`Persistence__PostgreSqlHost`].value}' -o json > evidence/scoring-runtime.json
+          test "$(jq -r '.host[0]' evidence/scoring-runtime.json)" = psql-lsc-inventory-cu-dr-20260920.postgres.database.azure.com
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > evidence/test-start-at.txt
+          exec=$(az containerapp job start -g "$RESOURCE_GROUP" -n "$JOB" -o json | jq -r '.name')
+          echo "SCORING_EXECUTION=$exec"
+          for attempt in $(seq 1 90); do
+            az containerapp job execution show -g "$RESOURCE_GROUP" -n "$JOB" --job-execution-name "$exec" -o json > evidence/test-execution.json
+            status=$(jq -r '.properties.status' evidence/test-execution.json)
+            echo "SCORING_STATUS=$status attempt=$attempt"
+            case "$status" in Succeeded|Failed|Canceled|Stopped) break ;; esac
+            sleep 10
+          done
+          API=ca-lsc-inventory-api-prod
+          az containerapp show -g "$RESOURCE_GROUP" -n "$API" -o json > "$RUNNER_TEMP/api.json"
+          fqdn=$(jq -r '.properties.configuration.ingress.fqdn' "$RUNNER_TEMP/api.json")
+          ref=$(jq -r '.properties.template.containers[0].env[] | select(.name=="InventoryApi__Token") | .secretRef' "$RUNNER_TEMP/api.json")
+          token=$(az containerapp secret list -g "$RESOURCE_GROUP" -n "$API" --show-values --query "[?name=='$ref'].value | [0]" -o tsv)
+          echo "::add-mask::$token"
+          curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $token" "https://$fqdn/internal/scoring/status" > evidence/status-after.json
+          curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $token" "https://$fqdn/internal/scoring/runs?take=20" > evidence/runs-after.json
+          for platform in copart iaai; do
+            curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $token" "https://$fqdn/internal/executions?platform=$platform&page=1&pageSize=2" | jq '{total,items:[.items[] | {runId,startedAt,finishedAt,status,scope,loaded,created,updated,failures}]}' > "evidence/ingestion-$platform.json"
+          done
+          unset token
+          test "$status" = Succeeded
+          python3 - <<'PYVERIFY'
+          import json
+          from pathlib import Path
+          from datetime import datetime
+          r=Path('evidence');start=datetime.fromisoformat((r/'test-start-at.txt').read_text().strip().replace('Z','+00:00'))
+          runs=json.load(open(r/'runs-after.json'))
+          items=runs if isinstance(runs,list) else runs.get('items',[])
+          matching=[x for x in items if x.get('trigger')=='scheduled-azure-job' and datetime.fromisoformat(x['startedAt'].replace('Z','+00:00'))>=start]
+          assert matching,'Scheduled scoring did not persist a run'
+          assert all(x.get('status')=='completed' and x.get('failed',0)==0 for x in matching),'Scoring still has failures'
+          status=json.load(open(r/'status-after.json'));assert status['failed']==0,'Queue still has failed tasks'
+          (r/'verified-scoring-runs.json').write_text(json.dumps(matching,indent=2))
+          print(json.dumps({'runs':matching,'status':{k:v for k,v in status.items() if k!='recentRuns'}},indent=2))
+          PYVERIFY
+          for path in /healthz /readyz; do curl --fail --silent --show-error --max-time 30 "https://$fqdn$path" -o /dev/null; done
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > evidence/verified-at.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scoring-queue-repair-${{ github.run_id }}
+          path: evidence/
+          retention-days: 14
