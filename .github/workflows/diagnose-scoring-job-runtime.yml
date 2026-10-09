@@ -1,0 +1,49 @@
+name: Diagnose Scoring Job Runtime Readonly
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+          tenant-id: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+          subscription-id: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+      - name: Read current job, logs and source host
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG=rg-lsc-inventory-prod
+          JOB=job-lsc-inventory-scoring-prod
+          API=ca-lsc-inventory-api-prod
+          mkdir -p audit
+          az extension add --name containerapp --upgrade --only-show-errors
+          az containerapp job show -g "$RG" -n "$JOB" --query '{name:name,identity:identity,configuration:properties.configuration,containers:properties.template.containers[].{name:name,image:image,command:command,args:args,resources:resources,env:env}}' -o json > "$RUNNER_TEMP/scoring.json"
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          a=json.load(open(Path(os.environ['RUNNER_TEMP'])/'scoring.json'))
+          a['configuration'].pop('secrets',None)
+          for c in a['containers']:
+              for e in c.get('env') or []:
+                  if re.search('password|token|key|connectionstring',e['name'],re.I):e.pop('value',None)
+          Path('audit/scoring-config-safe.json').write_text(json.dumps(a,indent=2))
+          PY
+          az containerapp job execution list -g "$RG" -n "$JOB" --query 'sort_by(@,&properties.startTime) | reverse(@)[:8].{name:name,status:properties.status,start:properties.startTime,end:properties.endTime}' -o json > audit/executions.json
+          az containerapp show -g "$RG" -n "$API" --query '{image:properties.template.containers[0].image,host:properties.template.containers[0].env[?name==`Persistence__PostgreSqlHost`].value,db:properties.template.containers[0].env[?name==`Persistence__Database`].value}' -o json > audit/api-source-safe.json
+          WORKSPACE=$(az monitor log-analytics workspace show -g "$RG" -n log-lsc-inventory-prod-eus2 --query customerId -o tsv)
+          az monitor log-analytics query -w "$WORKSPACE" --analytics-query 'ContainerAppConsoleLogs_CL | where TimeGenerated > ago(24h) | where ContainerName_s == "lsc-inventory-scoring" | project TimeGenerated, ContainerName_s, Log_s | order by TimeGenerated desc | take 100' -o json > audit/scoring-console.json
+          az monitor log-analytics query -w "$WORKSPACE" --analytics-query 'ContainerAppSystemLogs_CL | where TimeGenerated > ago(24h) | where tostring(pack_all()) has "job-lsc-inventory-scoring-prod" | order by TimeGenerated desc | take 40' -o json > audit/scoring-system.json
+          cat audit/api-source-safe.json
+          cat audit/executions.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scoring-runtime-readonly-${{ github.run_id }}
+          path: audit/
+          retention-days: 14
