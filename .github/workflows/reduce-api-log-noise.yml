@@ -1,0 +1,87 @@
+name: Reduce API Log Noise
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: inventory-api-runtime-changes
+  cancel-in-progress: false
+jobs:
+  reduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+          tenant-id: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+          subscription-id: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+      - name: Apply category-only logging filters and verify
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = REDUCE_API_LOG_NOISE_ONLY
+          RG=rg-lsc-inventory-prod
+          APP=ca-lsc-inventory-api-prod
+          az extension add --name containerapp --upgrade --only-show-errors
+          FILTERS='["Logging__LogLevel__Npgsql","Logging__LogLevel__Performance","Logging__LogLevel__Lsc.Inventory.Api.Workers.TrimEnrichmentWorker"]'
+          before=$(az containerapp show -g "$RG" -n "$APP" -o json)
+          image=$(jq -r '.properties.template.containers[0].image' <<< "$before")
+          old=$(az containerapp revision list -g "$RG" -n "$APP" -o json | jq -r '.[] | select(.properties.active == true and .properties.trafficWeight > 0) | .name')
+          test -n "$old"
+          test $(wc -l <<< "$old") = 1
+          echo "ROLLBACK_REVISION=$old IMAGE=$image"
+          echo "Baseline logging values:"
+          jq --argjson keys "$FILTERS" '[.properties.template.containers[0].env[] | select(.name as $n | $keys | index($n))]' <<< "$before"
+          fingerprint() {
+            jq -S --argjson keys "$FILTERS" '{identity:.identity,configuration:.properties.configuration,template:(.properties.template | del(.revisionSuffix) | .containers[0].env |= map(select(.name as $n | $keys | index($n) | not)))}' | sha256sum | cut -d' ' -f1
+          }
+          baseline=$(fingerprint <<< "$before")
+          jobs_before=$(az containerapp job list -g "$RG" -o json | jq -S '[.[] | {name,identity,properties:{configuration:.properties.configuration,template:.properties.template}}]' | sha256sum | cut -d' ' -f1)
+          az containerapp update -g "$RG" -n "$APP" --set-env-vars \
+            'Logging__LogLevel__Npgsql=Warning' \
+            'Logging__LogLevel__Performance=Warning' \
+            'Logging__LogLevel__Lsc.Inventory.Api.Workers.TrimEnrichmentWorker=Warning' --only-show-errors > /dev/null
+          after=$(az containerapp show -g "$RG" -n "$APP" -o json)
+          test "$(fingerprint <<< "$after")" = "$baseline"
+          test "$(jq -r '.properties.template.containers[0].image' <<< "$after")" = "$image"
+          rev=$(jq -r '.properties.latestRevisionName' <<< "$after")
+          echo "NEW_REVISION=$rev IMAGE_UNCHANGED=true"
+          fqdn=$(jq -r '.properties.configuration.ingress.fqdn' <<< "$after")
+          ready=false
+          for i in $(seq 1 30); do
+            health=$(az containerapp revision show -g "$RG" -n "$APP" --revision "$rev" --query 'properties.healthState' -o tsv)
+            echo "READINESS=$health ATTEMPT=$i"
+            if [ "$health" = Healthy ]; then ready=true; break; fi
+            sleep 10
+          done
+          if [ "$ready" != true ]; then
+            az containerapp revision activate -g "$RG" -n "$APP" --revision "$old" --only-show-errors
+            az containerapp ingress traffic set -g "$RG" -n "$APP" --revision-weight "$old=100" --only-show-errors
+            echo 'New revision did not become healthy; traffic restored.' >&2
+            exit 1
+          fi
+          az containerapp ingress traffic set -g "$RG" -n "$APP" --revision-weight "$rev=100" --only-show-errors > /dev/null
+          for path in /healthz /readyz /api/v1/inventory/summary /api/v1/inventory/search; do
+            code=$(curl -sS --max-time 30 -o /tmp/smoke.json -w '%{http_code}' "https://$fqdn$path")
+            echo "SMOKE_PATH=$path STATUS=$code"
+            if [ "$code" != 200 ]; then
+              az containerapp revision activate -g "$RG" -n "$APP" --revision "$old" --only-show-errors
+              az containerapp ingress traffic set -g "$RG" -n "$APP" --revision-weight "$old=100" --only-show-errors
+              echo 'Smoke failed; traffic restored.' >&2
+              exit 1
+            fi
+          done
+          if [ "$old" != "$rev" ]; then
+            az containerapp revision deactivate -g "$RG" -n "$APP" --revision "$old" --only-show-errors
+          fi
+          jobs_after=$(az containerapp job list -g "$RG" -o json | jq -S '[.[] | {name,identity,properties:{configuration:.properties.configuration,template:.properties.template}}]' | sha256sum | cut -d' ' -f1)
+          test "$jobs_before" = "$jobs_after"
+          echo 'VERIFIED: only three logging filters changed. Jobs, image, resources, ingress configuration, identities and secrets preserved.'
