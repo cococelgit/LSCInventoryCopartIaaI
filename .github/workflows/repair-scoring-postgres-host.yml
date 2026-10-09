@@ -1,0 +1,144 @@
+name: Repair Scoring PostgreSQL Host Only
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        required: true
+        type: string
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: repair-scoring-postgres-host
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RG: rg-lsc-inventory-prod
+      JOB: job-lsc-inventory-scoring-prod
+      API: ca-lsc-inventory-api-prod
+      NEW_HOST: psql-lsc-inventory-cu-dr-20260920.postgres.database.azure.com
+      OLD_HOST: psql-lsc-inventory-cu.postgres.database.azure.com
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: e54f22e9-0a3a-42d8-b3d2-538e60872feb
+          tenant-id: ccfdc482-7c38-458c-b7b7-b7967a122f1d
+          subscription-id: 99edf3d1-a651-4d2d-af8e-d44a3360f584
+      - name: Validate host mismatch and healthy API
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = REPAIR_ONLY_SCORING_POSTGRES_HOST
+          az extension add --name containerapp --upgrade --only-show-errors
+          mkdir -p evidence
+          az containerapp job show -g "$RG" -n "$JOB" -o json > "$RUNNER_TEMP/scoring-before.json"
+          az containerapp show -g "$RG" -n "$API" -o json > "$RUNNER_TEMP/api-before.json"
+          az containerapp job list -g "$RG" -o json > "$RUNNER_TEMP/jobs-before.json"
+          test "$(jq -r '.properties.template.containers[0].env[] | select(.name=="Persistence__PostgreSqlHost") | .value' "$RUNNER_TEMP/scoring-before.json")" = "$OLD_HOST"
+          test "$(jq -r '.properties.template.containers[0].env[] | select(.name=="Persistence__PostgreSqlHost") | .value' "$RUNNER_TEMP/api-before.json")" = "$NEW_HOST"
+          test "$(jq -r '.properties.configuration.triggerType' "$RUNNER_TEMP/scoring-before.json")" = Schedule
+          test "$(jq -r '.properties.configuration.scheduleTriggerConfig.cronExpression' "$RUNNER_TEMP/scoring-before.json")" = '7,22,37,52 * * * *'
+          jq '{name,identity,configuration:(.properties.configuration | del(.secrets)),image:.properties.template.containers[0].image,command:.properties.template.containers[0].command,args:.properties.template.containers[0].args,resources:.properties.template.containers[0].resources,oldHost:(.properties.template.containers[0].env[] | select(.name=="Persistence__PostgreSqlHost") | .value)}' "$RUNNER_TEMP/scoring-before.json" > evidence/scoring-before-safe.json
+          FQDN=$(jq -r '.properties.configuration.ingress.fqdn' "$RUNNER_TEMP/api-before.json")
+          for path in /healthz /readyz; do curl --fail --silent --show-error --max-time 30 "https://$FQDN$path" -o /dev/null; done
+          ref=$(jq -r '.properties.template.containers[0].env[] | select(.name=="InventoryApi__Token") | .secretRef' "$RUNNER_TEMP/api-before.json")
+          token=$(az containerapp secret list -g "$RG" -n "$API" --show-values --query "[?name=='$ref'].value | [0]" -o tsv)
+          test -n "$token"
+          echo "::add-mask::$token"
+          curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $token" "https://$FQDN/internal/scoring/status" > evidence/status-before.json
+          unset token
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > evidence/baseline-at.txt
+      - name: Update only scoring host and validate invariant
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp job update -g "$RG" -n "$JOB" --set-env-vars "Persistence__PostgreSqlHost=$NEW_HOST" --only-show-errors > /dev/null
+          az containerapp job show -g "$RG" -n "$JOB" -o json > "$RUNNER_TEMP/scoring-after.json"
+          az containerapp show -g "$RG" -n "$API" -o json > "$RUNNER_TEMP/api-after.json"
+          az containerapp job list -g "$RG" -o json > "$RUNNER_TEMP/jobs-after.json"
+          python3 - <<'PY'
+          import json,os,copy
+          from pathlib import Path
+          r=Path(os.environ['RUNNER_TEMP'])
+          load=lambda name:json.load(open(r/name))
+          a=load('scoring-before.json');b=load('scoring-after.json')
+          expected=copy.deepcopy(a)
+          for e in expected['properties']['template']['containers'][0]['env']:
+              if e['name']=='Persistence__PostgreSqlHost':e['value']=os.environ['NEW_HOST']
+          def stable(x):
+              p=x['properties']
+              return {'identity':x.get('identity'),'configuration':p['configuration'],'template':p['template']}
+          def canonical(x):
+              y=stable(x)
+              for c in y['template']['containers']:c['env']=sorted(c.get('env') or [],key=lambda e:e['name'])
+              return y
+          assert canonical(expected)==canonical(b),'Unexpected scoring configuration change'
+          assert canonical(load('api-before.json'))==canonical(load('api-after.json')),'API changed'
+          before={x['name']:canonical(x) for x in load('jobs-before.json') if x['name']!=os.environ['JOB']}
+          after={x['name']:canonical(x) for x in load('jobs-after.json') if x['name']!=os.environ['JOB']}
+          assert before==after,'Unrelated jobs changed'
+          Path('evidence/configuration-invariants.txt').write_text('ONLY_CHANGE=Scoring.Persistence__PostgreSqlHost\nSCORING_IMAGE_CRON_IDENTITY_LIMITS_UNCHANGED=true\nAPI_AND_OTHER_JOBS_UNCHANGED=true\n')
+          PY
+          echo "HOST_REPAIRED=$NEW_HOST"
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > evidence/host-repaired-at.txt
+      - name: Run scoring once and verify persisted results
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            active=$(az containerapp job execution list -g "$RG" -n "$JOB" -o json | jq '[.[] | select(.properties.status=="Running" or .properties.status=="Pending")] | length')
+            echo "WAIT_PREVIOUS_SCORING attempt=$attempt active=$active"
+            [ "$active" = 0 ] && break
+            sleep 10
+          done
+          test "$active" = 0
+          az containerapp job start -g "$RG" -n "$JOB" -o json > evidence/manual-start.json
+          exec=$(jq -r '.name // .properties.name // empty' evidence/manual-start.json)
+          test -n "$exec"
+          echo "SCORING_EXECUTION=$exec"
+          status=Unknown
+          for attempt in $(seq 1 90); do
+            az containerapp job execution show -g "$RG" -n "$JOB" --job-execution-name "$exec" -o json > evidence/manual-execution.json
+            status=$(jq -r '.properties.status' evidence/manual-execution.json)
+            echo "SCORING_STATUS attempt=$attempt status=$status"
+            case "$status" in Succeeded|Failed|Canceled|Cancelled|Stopped) break ;; esac
+            sleep 10
+          done
+          FQDN=$(jq -r '.properties.configuration.ingress.fqdn' "$RUNNER_TEMP/api-before.json")
+          ref=$(jq -r '.properties.template.containers[0].env[] | select(.name=="InventoryApi__Token") | .secretRef' "$RUNNER_TEMP/api-before.json")
+          token=$(az containerapp secret list -g "$RG" -n "$API" --show-values --query "[?name=='$ref'].value | [0]" -o tsv)
+          echo "::add-mask::$token"
+          curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $token" "https://$FQDN/internal/scoring/status" > evidence/status-after.json
+          curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $token" "https://$FQDN/internal/scoring/runs?take=50" > evidence/runs-after.json
+          for platform in copart iaai; do
+            curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $token" "https://$FQDN/internal/executions?platform=$platform&page=1&pageSize=2" | jq '{total,items:[.items[] | {runId,startedAt,finishedAt,status,scope,loaded,created,updated,failures}]}' > "evidence/ingestion-$platform-after.json"
+          done
+          unset token
+          test "$status" = Succeeded
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from datetime import datetime
+          root=Path('evidence');start=datetime.fromisoformat((root/'host-repaired-at.txt').read_text().strip().replace('Z','+00:00'))
+          runs=json.load(open(root/'runs-after.json'))
+          items=runs if isinstance(runs,list) else runs.get('items',runs.get('recentRuns',runs.get('runs',[])))
+          scheduled=[x for x in items if x.get('trigger')=='scheduled-azure-job' and datetime.fromisoformat(x['startedAt'].replace('Z','+00:00'))>=start]
+          assert scheduled,'No persisted scheduled scoring run after host repair'
+          assert all(x.get('status')=='completed' and x.get('failed',0)==0 and not x.get('error') for x in scheduled),'Scoring returned errors'
+          assert any(x.get('completed',0)>0 for x in scheduled),'Execution succeeded but no scored lots verified'
+          (root/'verified-scoring-runs.json').write_text(json.dumps(scheduled,indent=2))
+          print(json.dumps(scheduled,indent=2))
+          PY
+          for path in /healthz /readyz; do curl --fail --silent --show-error --max-time 30 "https://$FQDN$path" -o /dev/null; done
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > evidence/completed-at.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scoring-host-repair-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
